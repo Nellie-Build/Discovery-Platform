@@ -21,11 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    # Job-level env (unlike a top-level workflow env:) can read the `inputs` context — that's
-    # the whole reason these live here instead of at the workflow root.
+    # github.event.inputs.* (not the newer inputs.* context) — the traditional, universally
+    # supported way to read workflow_dispatch inputs, valid in job-level env unlike a top-level
+    # workflow env:. The `|| '...'` fallback mirrors each input's own `default:` above.
     env:
-      PROJECT_ID: ${{ inputs.gcp_project_id }}
-      REGION: ${{ inputs.gcp_region }}
+      PROJECT_ID: ${{ github.event.inputs.gcp_project_id || 'discovery-platform-test' }}
+      REGION: ${{ github.event.inputs.gcp_region || 'europe-west1' }}
       AR_REPO: discovery-platform
       SQL_INSTANCE: discovery-platform-db
       DB_NAME: discovery_platform

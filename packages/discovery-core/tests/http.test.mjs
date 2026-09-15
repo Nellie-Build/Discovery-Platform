@@ -67,8 +67,12 @@ test('isPublicAddress rejects garbage input rather than throwing', () => {
 });
 
 test('fetchPublicUrl refuses a literal loopback URL before making any request', async () => {
+  // IPv4 loopback only here — some CI runners (GitHub-hosted Ubuntu included) have no IPv6
+  // route at all, so resolving the literal "::1" fails with a raw ENOTFOUND before
+  // isPublicAddress ever runs, rather than through our own rejection. That's still a safe
+  // outcome (no request is ever made either way) but not a portable thing to assert on; ::1's
+  // rejection is already exercised, DNS-free, by isPublicAddress('::1') above.
   await assert.rejects(() => fetchPublicUrl('http://127.0.0.1/', 'test-agent'), /publiek netwerkadres/i);
-  await assert.rejects(() => fetchPublicUrl('http://[::1]/', 'test-agent'), /publiek netwerkadres/i);
 });
 
 test('fetchPublicUrl refuses a literal private RFC1918 URL before making any request', async () => {
