@@ -1,0 +1,7 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/discovery-core" },
+    { "path": "domains/vacancies" }
+  ]
+}

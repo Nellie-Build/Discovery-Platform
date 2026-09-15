@@ -1,0 +1,29 @@
+{
+  "name": "@discovery-platform/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Domain-neutral discovery engine primitives (crawling, contact extraction, scoring, deduplication, Gemini Vision) with zero knowledge of any specific product domain. See docs/architecture.md at the repository root for the wider architecture.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "fast-xml-parser": "^5.11.1",
+    "ipaddr.js": "^2.5.0",
+    "robots-parser": "^3.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.4",
+    "typescript": "^7.0.2"
+  }
+}

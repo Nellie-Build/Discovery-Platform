@@ -1,0 +1,26 @@
+{
+  "name": "discovery-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Discovery Platform — an extensible discovery and lead-intelligence engine. Root workspace: install once, then build/test/typecheck every package from here.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "packages/*",
+    "domains/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w packages/discovery-core && npm run build -w domains/vacancies",
+    "typecheck": "npm run build -w packages/discovery-core && tsc --noEmit -p packages/discovery-core/tsconfig.json && tsc --noEmit -p domains/vacancies/tsconfig.json",
+    "test": "npm run test -w packages/discovery-core && npm run test -w domains/vacancies && npm run test -w examples/basic-discovery && npm run test -w examples/vacancy-discovery",
+    "test:core": "npm run test -w packages/discovery-core",
+    "test:vacancies": "npm run test -w domains/vacancies",
+    "test:examples": "npm run test -w examples/basic-discovery && npm run test -w examples/vacancy-discovery"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

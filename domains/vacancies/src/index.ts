@@ -1,0 +1,37 @@
+// Public API of @discovery-platform/domain-vacancies. This package may import from
+// @discovery-platform/core; it must never import any other domain module, React, Firebase or
+// Firestore (see tests/dependency-boundary.test.mjs).
+import type { DomainConfig } from '@discovery-platform/core';
+import { VACANCY_LINK_TIER, vacanciesCrawlerConfig } from './config.js';
+import { extractVacancy, extractVacancyText, normalizeVacancyFacts, extractJobPostingJsonLd, type VacancyFacts } from './extract-vacancy.js';
+
+export { VACANCY_LINK_TIER, vacanciesCrawlerConfig };
+export { extractVacancy, extractVacancyText, normalizeVacancyFacts, extractJobPostingJsonLd, type VacancyFacts };
+export { vacancyCompletenessScore, type VacancyCompletenessResult } from './scoring/completeness.js';
+export {
+  findVacancyDuplicates,
+  type VacancyDuplicateDecision, type VacancyDuplicateCandidate,
+} from './dedupe/matching.js';
+export { VACANCY_DEDUPLICATION_CONFIG } from './dedupe/config.js';
+export type { VacancyPosterFacts, VacancyVisionProvider } from './vision/poster-facts.js';
+export { VACANCY_POSTER_RESPONSE_SCHEMA, VACANCY_POSTER_PROMPT, parseVacancyPosterFacts } from './vision/config.js';
+export { vacancyVisionConfig, createVacancyVisionProvider } from './vision/provider.js';
+
+/**
+ * A real implementation of @discovery-platform/core's DomainConfig<TFacts>. Vacancies'
+ * plain-text label extraction and whitespace normalization genuinely fit DomainConfig's
+ * existing `(text) => Partial<TFacts>` / `(facts) => Partial<TFacts>` shapes as-is — no change
+ * to that interface was needed (see domains/vacancies/README.md for what this did and did not
+ * reveal about DomainConfig).
+ */
+export interface VacanciesDomain extends DomainConfig<VacancyFacts> {
+  id: 'vacancies';
+  crawler: typeof vacanciesCrawlerConfig;
+}
+
+export const vacanciesDomain: VacanciesDomain = {
+  id: 'vacancies',
+  extractText: extractVacancyText,
+  normalize: normalizeVacancyFacts,
+  crawler: vacanciesCrawlerConfig,
+};
