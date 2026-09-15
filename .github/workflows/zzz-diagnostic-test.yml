@@ -1,12 +1,31 @@
-name: Minimal dispatch test
+name: Minimal dispatch test v2
 on:
   workflow_dispatch:
     inputs:
-      foo:
+      gcp_project_id:
+        description: 'GCP project ID'
         required: true
-        default: 'bar'
+        default: 'discovery-platform-test'
+      gcp_region:
+        description: 'GCP region'
+        required: true
+        default: 'europe-west1'
+
 jobs:
-  hello:
+  deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      PROJECT_ID: ${{ github.event.inputs.gcp_project_id || 'discovery-platform-test' }}
+      REGION: ${{ github.event.inputs.gcp_region || 'europe-west1' }}
     steps:
-      - run: echo "hello ${{ github.event.inputs.foo }}"
+      - uses: actions/checkout@v4
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+      - run: echo "hi $PROJECT_ID $REGION"
