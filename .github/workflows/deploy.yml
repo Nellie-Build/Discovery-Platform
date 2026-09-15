@@ -111,24 +111,33 @@ jobs:
           fi
 
       - name: Store/refresh the GEMINI_API_KEY secret (optional — skipped entirely if not provided)
-        if: ${{ secrets.GEMINI_API_KEY != '' }}
+        # A step's `if:` cannot reference the `secrets` context at all (GitHub Actions rejects
+        # the whole workflow file with "Unrecognized named-value: 'secrets'" if it does) — the
+        # presence check has to happen inside the script instead, against an env-injected value.
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          if gcloud secrets describe discovery-platform-gemini-api-key --project="$PROJECT_ID" >/dev/null 2>&1; then
-            printf '%s' "${{ secrets.GEMINI_API_KEY }}" | gcloud secrets versions add discovery-platform-gemini-api-key \
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "GEMINI_API_KEY not set — skipping (Vision isn't used by the current Discovery run anyway; see docs/deployment.md)."
+          elif gcloud secrets describe discovery-platform-gemini-api-key --project="$PROJECT_ID" >/dev/null 2>&1; then
+            printf '%s' "$GEMINI_API_KEY" | gcloud secrets versions add discovery-platform-gemini-api-key \
               --project="$PROJECT_ID" --data-file=-
           else
-            printf '%s' "${{ secrets.GEMINI_API_KEY }}" | gcloud secrets create discovery-platform-gemini-api-key \
+            printf '%s' "$GEMINI_API_KEY" | gcloud secrets create discovery-platform-gemini-api-key \
               --project="$PROJECT_ID" --replication-policy=automatic --data-file=-
           fi
 
       - name: Store/refresh the optional GEMINI_VISION_MODEL secret
-        if: ${{ secrets.GEMINI_VISION_MODEL != '' }}
+        env:
+          GEMINI_VISION_MODEL: ${{ secrets.GEMINI_VISION_MODEL }}
         run: |
-          if gcloud secrets describe discovery-platform-gemini-vision-model --project="$PROJECT_ID" >/dev/null 2>&1; then
-            printf '%s' "${{ secrets.GEMINI_VISION_MODEL }}" | gcloud secrets versions add discovery-platform-gemini-vision-model \
+          if [ -z "$GEMINI_VISION_MODEL" ]; then
+            echo "GEMINI_VISION_MODEL not set — skipping."
+          elif gcloud secrets describe discovery-platform-gemini-vision-model --project="$PROJECT_ID" >/dev/null 2>&1; then
+            printf '%s' "$GEMINI_VISION_MODEL" | gcloud secrets versions add discovery-platform-gemini-vision-model \
               --project="$PROJECT_ID" --data-file=-
           else
-            printf '%s' "${{ secrets.GEMINI_VISION_MODEL }}" | gcloud secrets create discovery-platform-gemini-vision-model \
+            printf '%s' "$GEMINI_VISION_MODEL" | gcloud secrets create discovery-platform-gemini-vision-model \
               --project="$PROJECT_ID" --replication-policy=automatic --data-file=-
           fi
 
