@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { startTestApp } from './helpers/test-app.mjs';
 
 test('POST /workspaces creates a workspace, GET /workspaces/:id reads it back', async () => {
-  const { request, close } = await startTestApp();
+  const { request, close } = await startTestApp({ apiKey: 'test-key' });
   try {
     const create = await request('POST', '/workspaces', { body: { name: 'Acme Recruiting' } });
     assert.equal(create.status, 201);
@@ -17,7 +17,7 @@ test('POST /workspaces creates a workspace, GET /workspaces/:id reads it back', 
 });
 
 test('POST /workspaces rejects a missing name', async () => {
-  const { request, close } = await startTestApp();
+  const { request, close } = await startTestApp({ apiKey: 'test-key' });
   try {
     const res = await request('POST', '/workspaces', { body: {} });
     assert.equal(res.status, 400);
@@ -26,7 +26,7 @@ test('POST /workspaces rejects a missing name', async () => {
 });
 
 test('GET /workspaces/:id returns 404 for an unknown (but well-formed) id', async () => {
-  const { request, close } = await startTestApp();
+  const { request, close } = await startTestApp({ apiKey: 'test-key' });
   try {
     const res = await request('GET', '/workspaces/00000000-0000-4000-8000-000000000000');
     assert.equal(res.status, 404);
@@ -34,7 +34,7 @@ test('GET /workspaces/:id returns 404 for an unknown (but well-formed) id', asyn
 });
 
 test('GET /workspaces/:id returns 400 for a malformed id, never a raw database error', async () => {
-  const { request, close } = await startTestApp();
+  const { request, close } = await startTestApp({ apiKey: 'test-key' });
   try {
     const res = await request('GET', '/workspaces/not-a-uuid');
     assert.equal(res.status, 400);
@@ -43,7 +43,7 @@ test('GET /workspaces/:id returns 400 for a malformed id, never a raw database e
 });
 
 test('POST /projects creates a project scoped to its workspace, with a validated domain', async () => {
-  const { request, close } = await startTestApp();
+  const { request, close } = await startTestApp({ apiKey: 'test-key' });
   try {
     const workspace = (await request('POST', '/workspaces', { body: { name: 'W' } })).body;
     const create = await request('POST', '/projects', { body: { workspaceId: workspace.id, name: 'Vacancy scan', domain: 'vacancies' } });
@@ -59,7 +59,7 @@ test('POST /projects creates a project scoped to its workspace, with a validated
 });
 
 test('POST /projects rejects an unknown domain, an unknown workspace, and a missing name', async () => {
-  const { request, close } = await startTestApp();
+  const { request, close } = await startTestApp({ apiKey: 'test-key' });
   try {
     const workspace = (await request('POST', '/workspaces', { body: { name: 'W' } })).body;
 
@@ -76,7 +76,7 @@ test('POST /projects rejects an unknown domain, an unknown workspace, and a miss
 });
 
 test('project isolation: GET /projects?workspaceId=... never returns another workspace\'s projects', async () => {
-  const { request, close } = await startTestApp();
+  const { request, close } = await startTestApp({ apiKey: 'test-key' });
   try {
     const workspaceA = (await request('POST', '/workspaces', { body: { name: 'Workspace A' } })).body;
     const workspaceB = (await request('POST', '/workspaces', { body: { name: 'Workspace B' } })).body;
@@ -91,7 +91,7 @@ test('project isolation: GET /projects?workspaceId=... never returns another wor
 });
 
 test('GET /projects requires a workspaceId query parameter — there is no "list every project" endpoint', async () => {
-  const { request, close } = await startTestApp();
+  const { request, close } = await startTestApp({ apiKey: 'test-key' });
   try {
     const res = await request('GET', '/projects');
     assert.equal(res.status, 400);
@@ -100,7 +100,8 @@ test('GET /projects requires a workspaceId query parameter — there is no "list
 });
 
 test('the dev API key protects every route except /health when configured', async () => {
-  const { request, close } = await startTestApp({ apiKey: 'secret-dev-key' });
+  const { close, createClient } = await startTestApp({ apiKey: 'secret-dev-key' });
+  const { request } = createClient(); // deliberately no default x-api-key header, unlike startTestApp's own client
   try {
     const noKey = await request('POST', '/workspaces', { body: { name: 'W' } });
     assert.equal(noKey.status, 401);

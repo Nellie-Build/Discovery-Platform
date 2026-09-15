@@ -11,3 +11,5 @@ export {
   DiscoveryRecordsRepository,
   type DiscoveryRecord, type RecordSource, type RecordContact, type RecordWithDetails, type NewRecordInput,
 } from './repositories/records.js';
+export { UsersRepository, toPublicUser, type User, type PublicUser } from './repositories/users.js';
+export { WorkspaceMembersRepository, type WorkspaceMember } from './repositories/workspace-members.js';

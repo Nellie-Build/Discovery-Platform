@@ -1,0 +1,23 @@
+{
+  "name": "@discovery-platform/client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A small typed HTTP client for Discovery Platform's /api/v1 — used by apps/web so it never contains a raw fetch() call or a hand-written response type of its own.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.4",
+    "typescript": "^7.0.2"
+  }
+}

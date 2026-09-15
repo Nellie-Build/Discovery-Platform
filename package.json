@@ -14,21 +14,26 @@
     "examples/*"
   ],
   "scripts": {
-    "build": "npm run build -w packages/discovery-core && npm run build -w packages/discovery-db && npm run build -w domains/vacancies && npm run build -w apps/api",
-    "typecheck": "npm run build && tsc --noEmit -p packages/discovery-core/tsconfig.json && tsc --noEmit -p packages/discovery-db/tsconfig.json && tsc --noEmit -p domains/vacancies/tsconfig.json && tsc --noEmit -p apps/api/tsconfig.json",
-    "test": "npm run test -w packages/discovery-core && npm run test -w packages/discovery-db && npm run test -w domains/vacancies && npm run test -w apps/api && npm run test -w examples/basic-discovery && npm run test -w examples/vacancy-discovery",
+    "build": "npm run build -w packages/discovery-core && npm run build -w packages/discovery-db && npm run build -w packages/discovery-client && npm run build -w domains/vacancies && npm run build -w apps/api && npm run build -w apps/web",
+    "typecheck": "npm run build -w packages/discovery-core && npm run build -w packages/discovery-db && npm run build -w packages/discovery-client && npm run build -w domains/vacancies && npm run build -w apps/api && tsc --noEmit -p packages/discovery-core/tsconfig.json && tsc --noEmit -p packages/discovery-db/tsconfig.json && tsc --noEmit -p packages/discovery-client/tsconfig.json && tsc --noEmit -p domains/vacancies/tsconfig.json && tsc --noEmit -p apps/api/tsconfig.json && npm run typecheck -w apps/web",
+    "test": "npm run test -w packages/discovery-core && npm run test -w packages/discovery-db && npm run test -w packages/discovery-client && npm run test -w domains/vacancies && npm run test -w apps/api && npm run test -w examples/basic-discovery && npm run test -w examples/vacancy-discovery && npm run test -w apps/web",
     "test:core": "npm run test -w packages/discovery-core",
     "test:db": "npm run test -w packages/discovery-db",
+    "test:client": "npm run test -w packages/discovery-client",
     "test:vacancies": "npm run test -w domains/vacancies",
     "test:api": "npm run test -w apps/api",
+    "test:web": "npm run test -w apps/web",
     "test:examples": "npm run test -w examples/basic-discovery && npm run test -w examples/vacancy-discovery",
     "db:migrate": "npm run build -w packages/discovery-db && node --env-file-if-exists=.env packages/discovery-db/dist/migrate.js",
     "db:local:up": "node --env-file-if-exists=.env scripts/local-postgres.mjs up",
     "db:local:down": "node --env-file-if-exists=.env scripts/local-postgres.mjs down",
     "db:local:status": "node scripts/local-postgres.mjs status",
-    "dev:api": "npm run build -w apps/api && node --env-file-if-exists=.env apps/api/dist/server.js"
+    "dev:api": "npm run build -w packages/discovery-core -w packages/discovery-db -w domains/vacancies && npm run build -w apps/api && node --env-file-if-exists=.env apps/api/dist/server.js",
+    "dev:web": "npm run build -w packages/discovery-client && npm run dev -w apps/web",
+    "dev": "concurrently -n api,web -c blue,green \"npm run dev:api\" \"npm run dev:web\""
   },
   "devDependencies": {
+    "concurrently": "^9.1.2",
     "pg": "^8.16.3",
     "typescript": "^7.0.2"
   },

@@ -5,6 +5,8 @@ import { WorkspacesRepository } from '../dist/repositories/workspaces.js';
 import { ProjectsRepository } from '../dist/repositories/projects.js';
 import { DiscoveryRunsRepository } from '../dist/repositories/runs.js';
 import { DiscoveryRecordsRepository } from '../dist/repositories/records.js';
+import { UsersRepository, toPublicUser } from '../dist/repositories/users.js';
+import { WorkspaceMembersRepository } from '../dist/repositories/workspace-members.js';
 import { withTransaction } from '../dist/connection.js';
 
 test('WorkspacesRepository creates and reads back a workspace', async () => {
@@ -148,4 +150,42 @@ test('transaction rollback: a failing insert mid-transaction leaves zero rows fr
   const records = new DiscoveryRecordsRepository(db);
   const remaining = await records.listRecordsByProject(project.id);
   assert.deepEqual(remaining, [], 'the first insert in the failed transaction must not have survived the rollback');
+});
+
+test('UsersRepository creates a user, normalizes email to lowercase, and never exposes the password hash via toPublicUser', async () => {
+  const db = await freshDb();
+  const users = new UsersRepository(db);
+  const user = await users.createUser('Person@Example.com', 'a-bcrypt-hash');
+  assert.equal(user.email, 'person@example.com');
+
+  const byEmail = await users.getUserByEmail('PERSON@EXAMPLE.COM');
+  assert.equal(byEmail.id, user.id);
+
+  const publicUser = toPublicUser(user);
+  assert.ok(!('password_hash' in publicUser));
+  assert.equal(publicUser.email, user.email);
+  await db.close();
+});
+
+test('WorkspaceMembersRepository.isMember reflects membership exactly, and listWorkspacesForUser scopes to one user', async () => {
+  const db = await freshDb();
+  const workspaces = new WorkspacesRepository(db);
+  const users = new UsersRepository(db);
+  const members = new WorkspaceMembersRepository(db);
+
+  const workspaceA = await workspaces.createWorkspace('A');
+  const workspaceB = await workspaces.createWorkspace('B');
+  const userA = await users.createUser('a@example.com', 'hash');
+  const userB = await users.createUser('b@example.com', 'hash');
+  await members.addMember(workspaceA.id, userA.id, 'owner');
+  await members.addMember(workspaceB.id, userB.id, 'owner');
+
+  assert.equal(await members.isMember(workspaceA.id, userA.id), true);
+  assert.equal(await members.isMember(workspaceA.id, userB.id), false);
+  assert.equal(await members.isMember(workspaceB.id, userB.id), true);
+
+  const listA = await members.listWorkspacesForUser(userA.id);
+  assert.deepEqual(listA.map(w => w.id), [workspaceA.id]);
+  assert.equal(listA[0].role, 'owner');
+  await db.close();
 });

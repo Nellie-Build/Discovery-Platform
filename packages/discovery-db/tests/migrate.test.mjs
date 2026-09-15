@@ -3,17 +3,53 @@ import { test } from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import { runMigrations } from '../dist/migrate.js';
 
-test('runMigrations applies 001_init on a clean database and creates every table', async () => {
+test('runMigrations applies every migration on a clean database and creates every table', async () => {
   const db = new PGlite();
   const { applied } = await runMigrations(db);
-  assert.deepEqual(applied, ['001_init']);
+  assert.deepEqual(applied, ['001_init', '002_auth']);
 
   const { rows } = await db.query(
     "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
   );
   assert.deepEqual(rows.map(r => r.table_name), [
-    'discovery_records', 'discovery_runs', 'projects', 'record_contacts', 'record_sources', 'schema_migrations', 'workspaces',
+    'discovery_records', 'discovery_runs', 'projects', 'record_contacts', 'record_sources',
+    'schema_migrations', 'session', 'users', 'workspace_members', 'workspaces',
   ]);
+  await db.close();
+});
+
+test('workspace_members enforces one row per (workspace, user) and a valid role, and cascades on delete', async () => {
+  const db = new PGlite();
+  await runMigrations(db);
+  const { rows: [workspace] } = await db.query('INSERT INTO workspaces (name) VALUES ($1) RETURNING *', ['W']);
+  const { rows: [user] } = await db.query(
+    "INSERT INTO users (email, password_hash) VALUES ('a@example.com', 'hash') RETURNING *",
+  );
+  await db.query('INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, $3)', [workspace.id, user.id, 'owner']);
+
+  await assert.rejects(
+    db.query('INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, $3)', [workspace.id, user.id, 'owner']),
+    /duplicate key|unique/i,
+  );
+  await assert.rejects(
+    db.query('INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, $3)', [workspace.id, user.id, 'superadmin']),
+    /check/i,
+  );
+
+  await db.query('DELETE FROM users WHERE id = $1', [user.id]);
+  const { rows: remaining } = await db.query('SELECT * FROM workspace_members WHERE workspace_id = $1', [workspace.id]);
+  assert.deepEqual(remaining, []);
+  await db.close();
+});
+
+test('users.email is unique (case-sensitively at the SQL level — the application layer lowercases it, see UsersRepository)', async () => {
+  const db = new PGlite();
+  await runMigrations(db);
+  await db.query("INSERT INTO users (email, password_hash) VALUES ('a@example.com', 'hash')");
+  await assert.rejects(
+    db.query("INSERT INTO users (email, password_hash) VALUES ('a@example.com', 'hash2')"),
+    /duplicate key|unique/i,
+  );
   await db.close();
 });
 

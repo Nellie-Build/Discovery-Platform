@@ -58,14 +58,23 @@ housing, candidates) is expected to look structurally identical — its own fold
 Discovery Run → Record → Sources/Contacts`, and no table ever gets a domain-specific column.
 
 ```
+users               (id, email, password_hash, ...)
 workspaces          (id, name, ...)
+  └─ workspace_members (workspace_id, user_id, role: 'owner' | 'member')
   └─ projects        (id, workspace_id, name, domain, status, config JSONB, ...)
        └─ discovery_runs   (id, project_id, status, stats JSONB, error, ...)
        └─ discovery_records (id, project_id, domain, display_name, domain_data JSONB,
                               classification JSONB, score, ...)
             └─ record_sources  (id, record_id, source_type, source_url, source_data JSONB, ...)
             └─ record_contacts (id, record_id, type, value, normalized_value, confirmed, ...)
+session             (sid, sess JSON, expire) — connect-pg-simple's session store, unrelated to
+                     the domain-neutral chain above
 ```
+
+`users` and `workspace_members` (added in `packages/discovery-db/migrations/002_auth.sql`) are
+the one deliberate exception to "no domain-specific column ever" — they are not a domain concept
+at all, they are the generic multi-tenancy seam every domain shares. `role` only distinguishes
+`'owner'` (created the workspace) from `'member'` (added to it) — there is no broader RBAC yet.
 
 A project declares its `domain` (`"vacancies"` today) once, up front. Every fact specific to
 that domain — a salary, a bedroom count, a skill list — lives inside `domain_data` (and
@@ -90,14 +99,47 @@ Adding `companies`/`housing`/`candidates` later means: write a new domain module
 `apps/api/src/domains/vacancies-adapter.ts`, and add one line to the registry. No route changes,
 no database migration.
 
-## Preparing for multiple tenants, without building one yet
+## Authentication and workspace isolation
 
-Every `project` belongs to exactly one `workspace` from the very first migration — not because
-multi-tenancy is built (it isn't: no auth, no billing, no teams/roles, no invitations, no
-white-labeling exist), but so that building it later is a product decision, not a migration
-touching every existing row. The API's dev-key middleware (`apps/api/src/auth.ts`) is
-deliberately the *only* place a real auth scheme would need to plug in later: it already sits
-centrally, in front of every route, doing nothing but a header check today.
+Every `project` belongs to exactly one `workspace`, and every `workspace` a user can see is one
+they have a `workspace_members` row for — this is deliberately *not* full RBAC (no invitations,
+no billing, no teams beyond "owner"/"member"), but it is real: a logged-in user's session cookie
+is the only thing the API trusts to decide which workspaces, projects, runs and records they may
+reach.
+
+**Auth stack:** `passport` + `passport-local` (credential verification) + `express-session` +
+`connect-pg-simple` (sessions live in the `session` table above, not in memory — surviving an API
+restart) + `bcryptjs` (password hashing, pure JS so it needs no native build step). No hand-rolled
+cryptography anywhere. The session cookie (`discovery_platform_sid`) is `httpOnly`, `sameSite:
+'lax'`, and `secure` once `NODE_ENV=production` — the Web App never sees or stores a token; every
+`packages/discovery-client` request sends `credentials: 'include'` and nothing else. `cors()` is
+configured with `credentials: true` and locked to exactly `WEB_ORIGIN`, so no other origin can
+even attempt a credentialed request.
+
+**`apps/api/src/workspace-access.ts`** is the one place this is enforced, in front of every
+resource route:
+
+- `authenticate(apiKey)` sets `req.auth` to either `{ type: 'user', userId }` (from
+  `req.user`, once Passport's session middleware has deserialized it) or `{ type: 'dev-key' }`
+  (only when `API_DEV_KEY` is set *and* the caller sent a matching `x-api-key` header — local
+  scripts/tests only; it is never accepted from the Web App and never bypasses the check below by
+  design, it bypasses it by an explicit, documented exception for non-browser tooling).
+- `assertWorkspaceAccess(pool, req, workspaceId)` — for a `'user'` request, looks up the
+  `workspace_members` row for that user and workspace; if it is missing, the route responds
+  **404**, not 403, so a non-member probing another workspace's id cannot even confirm the id
+  exists. A `'dev-key'` request skips this check entirely (the trade-off the task explicitly
+  asked for: the dev key remains usable for local/technical testing, never for normal Web App
+  auth).
+- Every route resolves *up* to the owning `workspace_id` before calling this — a project route
+  checks its own `workspace_id`; a run route resolves `run → project → workspace_id`; a record
+  route resolves `record → project → workspace_id`. **The frontend's own `workspaceId` is never
+  trusted by itself** — it only ever selects *which* workspace to query; access is re-derived from
+  the database on every request.
+
+Registering (`POST /auth/register`) creates the user, a first personal workspace, and an `'owner'`
+`workspace_members` row for it in one transaction, then logs the new user in immediately (a
+session is created) — this is the "automatically receive a workspace" flow the Web App's
+onboarding relies on.
 
 ## A domain with different rules: candidates
 
@@ -131,8 +173,9 @@ domain is *allowed* to define.
 
 ## What this repository does not do yet
 
-No web app/UI, no real user authentication (only an optional shared development API key), no
-multi-tenancy, no billing, and no `companies`/`housing`/`candidates` domain modules exist yet.
-This repository is, deliberately, the engine, its persistence layer, its HTTP API, and one
-reference domain — see the root `README.md` for what is proven to work today and what is
+No billing, no team invitations beyond adding a `workspace_members` row directly, no
+white-labeling, no admin portal, no marketing site, and no `companies`/`housing`/`candidates`
+domain modules exist yet. `apps/web` covers registration/login/logout, workspaces, projects,
+starting and following a Discovery run, and browsing/inspecting records — see the root
+`README.md` for what is proven to work today and what is
 expected to come next.

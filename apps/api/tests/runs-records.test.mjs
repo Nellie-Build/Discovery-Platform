@@ -29,7 +29,7 @@ test('a full discovery run: HTTP request -> crawler -> vacancies domain -> Postg
     '/': { body: html([['/vacatures/frontend-developer', 'Vacatures']]) },
     '/vacatures/frontend-developer': { body: jobPostingPage('Frontend Developer', 'Acme Software', 'Utrecht') },
   };
-  const { request, close } = await startTestApp({ pages });
+  const { request, close } = await startTestApp({ pages, apiKey: 'test-key' });
   try {
     const { project } = await createWorkspaceAndProject(request);
 
@@ -74,7 +74,7 @@ test('dedupe voorkomt dubbele records: running the exact same crawl twice create
     '/': { body: html([['/vacatures/frontend-developer', 'Vacatures']]) },
     '/vacatures/frontend-developer': { body: jobPostingPage('Frontend Developer', 'Acme Software', 'Utrecht') },
   };
-  const { request, close } = await startTestApp({ pages });
+  const { request, close } = await startTestApp({ pages, apiKey: 'test-key' });
   try {
     const { project } = await createWorkspaceAndProject(request);
     const firstRun = await request('POST', `/projects/${project.id}/runs`, { body: { sourceUrl: 'https://acme-software.example' } });
@@ -97,7 +97,7 @@ test('dedupe within one crawl: two pages describing the exact same vacancy colla
     '/vacatures/frontend-developer': { body: jobPostingPage('Frontend Developer', 'Acme Software', 'Utrecht') },
     '/careers/frontend-developer-role': { body: jobPostingPage('Frontend Developer', 'Acme Software', 'Utrecht') },
   };
-  const { request, close } = await startTestApp({ pages });
+  const { request, close } = await startTestApp({ pages, apiKey: 'test-key' });
   try {
     const { project } = await createWorkspaceAndProject(request);
     const run = await request('POST', `/projects/${project.id}/runs`, { body: { sourceUrl: 'https://acme-software.example' } });
@@ -117,7 +117,7 @@ test('two genuinely different vacancies on the same site both get their own reco
     '/vacatures/frontend-developer': { body: jobPostingPage('Frontend Developer', 'Acme Software', 'Utrecht') },
     '/vacatures/backend-developer': { body: jobPostingPage('Backend Developer', 'Acme Software', 'Utrecht') },
   };
-  const { request, close } = await startTestApp({ pages });
+  const { request, close } = await startTestApp({ pages, apiKey: 'test-key' });
   try {
     const { project } = await createWorkspaceAndProject(request);
     const run = await request('POST', `/projects/${project.id}/runs`, { body: { sourceUrl: 'https://acme-software.example' } });
@@ -128,7 +128,7 @@ test('two genuinely different vacancies on the same site both get their own reco
 });
 
 test('POST /projects/:id/runs validates its input before touching the crawler', async () => {
-  const { request, close } = await startTestApp({ pages: basePages });
+  const { request, close } = await startTestApp({ pages: basePages, apiKey: 'test-key' });
   try {
     const { project } = await createWorkspaceAndProject(request);
     const missingUrl = await request('POST', `/projects/${project.id}/runs`, { body: {} });
@@ -140,7 +140,7 @@ test('POST /projects/:id/runs validates its input before touching the crawler', 
 });
 
 test('GET /records/:id returns 404 for an unknown record', async () => {
-  const { request, close } = await startTestApp();
+  const { request, close } = await startTestApp({ apiKey: 'test-key' });
   try {
     const res = await request('GET', '/records/00000000-0000-4000-8000-000000000000');
     assert.equal(res.status, 404);
@@ -148,7 +148,7 @@ test('GET /records/:id returns 404 for an unknown record', async () => {
 });
 
 test('the same architecture, without any database change, could support a different domain: an unregistered domain fails cleanly at run time, not with a crash', async () => {
-  const { request, close } = await startTestApp();
+  const { request, close } = await startTestApp({ apiKey: 'test-key' });
   try {
     const workspace = (await request('POST', '/workspaces', { body: { name: 'W' } })).body;
     // A project cannot even be created for an unregistered domain today (validated at creation)

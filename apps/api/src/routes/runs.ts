@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { ProjectsRepository, DiscoveryRunsRepository, DiscoveryRecordsRepository, withTransaction, type TransactionCapable } from '@discovery-platform/db';
 import { asyncHandler, badRequest, notFound } from '../http-errors.js';
+import { assertWorkspaceAccess } from '../workspace-access.js';
 import { defaultDomainRegistry, type DomainRegistry } from '../domain-registry.js';
 
 /**
@@ -19,6 +20,7 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
   router.post('/projects/:id/runs', asyncHandler(async (req, res) => {
     const project = await projects.getProjectById(req.params.id);
     if (!project) throw notFound('Project not found.');
+    await assertWorkspaceAccess(pool, req, project.workspace_id);
     const { sourceUrl } = req.body ?? {};
     if (typeof sourceUrl !== 'string' || !sourceUrl.trim()) throw badRequest('invalid_source_url', 'sourceUrl is required.');
     const adapter = domainRegistry[project.domain];
@@ -67,12 +69,18 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
   router.get('/projects/:id/runs', asyncHandler(async (req, res) => {
     const project = await projects.getProjectById(req.params.id);
     if (!project) throw notFound('Project not found.');
+    await assertWorkspaceAccess(pool, req, project.workspace_id);
     res.json(await runs.listRunsByProject(project.id));
   }));
 
+  // A run id alone is never enough — resolve its project, then that project's workspace, before
+  // ever returning the run (same reasoning as GET /projects/:id).
   router.get('/runs/:id', asyncHandler(async (req, res) => {
     const run = await runs.getRunById(req.params.id);
     if (!run) throw notFound('Run not found.');
+    const project = await projects.getProjectById(run.project_id);
+    if (!project) throw notFound('Run not found.');
+    await assertWorkspaceAccess(pool, req, project.workspace_id);
     res.json(run);
   }));
 
