@@ -1,0 +1,28 @@
+{
+  "name": "@discovery-platform/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Discovery Platform's HTTP API — composes @discovery-platform/core, a domain registry (currently just vacancies) and @discovery-platform/db. Contains no domain-specific parsing of its own; every domain field lives in a domain module.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "main": "./dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "node --env-file-if-exists=../../.env dist/server.js",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@discovery-platform/core": "^0.1.0",
+    "@discovery-platform/db": "^0.1.0",
+    "@discovery-platform/domain-vacancies": "^0.1.0",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@types/express": "^4.17.21",
+    "@types/node": "^24.13.4",
+    "typescript": "^7.0.2"
+  }
+}

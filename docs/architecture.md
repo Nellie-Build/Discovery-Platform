@@ -17,9 +17,15 @@ Domain Module              (turns raw facts into the domain's own record shape, 
   ↓
 Structured Record          (the domain's own typed data, with source/provenance kept alongside it)
   ↓
-Workflow / application     (whatever the domain hands the finished record to next — not part of
-                            this repository yet; see "What this repository does not do yet")
+Workflow / application     (apps/api persists the record and serves it over HTTP today; a web
+                            app/UI is the next consumer in this chain — see "What this
+                            repository does not do yet")
 ```
+
+`apps/api` is itself a thin composition layer, not a fifth architectural box: it never parses a
+domain-specific field (see "The domain registry" below) and never adds business logic of its
+own — it only wires a domain module's `runDiscovery()` output into `packages/discovery-db`'s
+generic tables.
 
 `packages/discovery-core` is where the arrows above cross from generic to specific — everything
 left of it has no business logic; everything right of it is a domain module's own decision.
@@ -45,6 +51,53 @@ with its own extraction, scoring, deduplication and Vision configuration, built 
 core's public API (never a deep import into the core's internals). A future domain (companies,
 housing, candidates) is expected to look structurally identical — its own folder under
 `domains/`, its own rules, the same four core engines underneath.
+
+## The persistence schema stays domain-neutral too
+
+`packages/discovery-db` (PostgreSQL) mirrors the same rule as the engine: `Workspace → Project →
+Discovery Run → Record → Sources/Contacts`, and no table ever gets a domain-specific column.
+
+```
+workspaces          (id, name, ...)
+  └─ projects        (id, workspace_id, name, domain, status, config JSONB, ...)
+       └─ discovery_runs   (id, project_id, status, stats JSONB, error, ...)
+       └─ discovery_records (id, project_id, domain, display_name, domain_data JSONB,
+                              classification JSONB, score, ...)
+            └─ record_sources  (id, record_id, source_type, source_url, source_data JSONB, ...)
+            └─ record_contacts (id, record_id, type, value, normalized_value, confirmed, ...)
+```
+
+A project declares its `domain` (`"vacancies"` today) once, up front. Every fact specific to
+that domain — a salary, a bedroom count, a skill list — lives inside `domain_data` (and
+`classification`) as opaque JSONB; the schema itself never interprets it, the same way
+`packages/discovery-core` never interprets a `ScoringRule`'s reason string. Adding a `companies`
+domain later needs zero migration to these tables — only a new domain module and one new line in
+the domain registry (see below).
+
+## The domain registry: how `apps/api` stays domain-neutral
+
+`apps/api/src/domain-registry.ts` is the *only* place the API is allowed to know a domain
+module's name (`{ vacancies: vacanciesAdapter }` today). Every route (`apps/api/src/routes/*.ts`)
+looks up `registry[project.domain]` and calls its `runDiscovery(sourceUrl, existingRecords)` —
+it never imports `@discovery-platform/domain-vacancies`, or any domain module, directly (checked
+automatically by `apps/api/tests/dependency-boundary.test.mjs`, the same "scan the actual
+source" style as the core's own boundary test). A `DomainAdapter` is responsible for its own
+crawl → extract → score → dedupe pipeline, using `@discovery-platform/core`'s engines and its own
+domain module's rules; `apps/api` only persists whatever records the adapter returns.
+
+Adding `companies`/`housing`/`candidates` later means: write a new domain module (like
+`domains/vacancies`), write a new adapter file next to
+`apps/api/src/domains/vacancies-adapter.ts`, and add one line to the registry. No route changes,
+no database migration.
+
+## Preparing for multiple tenants, without building one yet
+
+Every `project` belongs to exactly one `workspace` from the very first migration — not because
+multi-tenancy is built (it isn't: no auth, no billing, no teams/roles, no invitations, no
+white-labeling exist), but so that building it later is a product decision, not a migration
+touching every existing row. The API's dev-key middleware (`apps/api/src/auth.ts`) is
+deliberately the *only* place a real auth scheme would need to plug in later: it already sits
+centrally, in front of every route, doing nothing but a header check today.
 
 ## A domain with different rules: candidates
 
@@ -78,7 +131,8 @@ domain is *allowed* to define.
 
 ## What this repository does not do yet
 
-No web app, no API server, no database, no login, no multi-tenancy, no billing, and no
-`companies`/`housing`/`candidates` domain modules exist yet. This repository is, deliberately,
-just the engine and its first reference domain — see the root `README.md` for what is proven to
-work today and what is expected to come next.
+No web app/UI, no real user authentication (only an optional shared development API key), no
+multi-tenancy, no billing, and no `companies`/`housing`/`candidates` domain modules exist yet.
+This repository is, deliberately, the engine, its persistence layer, its HTTP API, and one
+reference domain — see the root `README.md` for what is proven to work today and what is
+expected to come next.

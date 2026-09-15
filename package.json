@@ -10,17 +10,29 @@
   "workspaces": [
     "packages/*",
     "domains/*",
+    "apps/*",
     "examples/*"
   ],
   "scripts": {
-    "build": "npm run build -w packages/discovery-core && npm run build -w domains/vacancies",
-    "typecheck": "npm run build -w packages/discovery-core && tsc --noEmit -p packages/discovery-core/tsconfig.json && tsc --noEmit -p domains/vacancies/tsconfig.json",
-    "test": "npm run test -w packages/discovery-core && npm run test -w domains/vacancies && npm run test -w examples/basic-discovery && npm run test -w examples/vacancy-discovery",
+    "build": "npm run build -w packages/discovery-core && npm run build -w packages/discovery-db && npm run build -w domains/vacancies && npm run build -w apps/api",
+    "typecheck": "npm run build && tsc --noEmit -p packages/discovery-core/tsconfig.json && tsc --noEmit -p packages/discovery-db/tsconfig.json && tsc --noEmit -p domains/vacancies/tsconfig.json && tsc --noEmit -p apps/api/tsconfig.json",
+    "test": "npm run test -w packages/discovery-core && npm run test -w packages/discovery-db && npm run test -w domains/vacancies && npm run test -w apps/api && npm run test -w examples/basic-discovery && npm run test -w examples/vacancy-discovery",
     "test:core": "npm run test -w packages/discovery-core",
+    "test:db": "npm run test -w packages/discovery-db",
     "test:vacancies": "npm run test -w domains/vacancies",
-    "test:examples": "npm run test -w examples/basic-discovery && npm run test -w examples/vacancy-discovery"
+    "test:api": "npm run test -w apps/api",
+    "test:examples": "npm run test -w examples/basic-discovery && npm run test -w examples/vacancy-discovery",
+    "db:migrate": "npm run build -w packages/discovery-db && node --env-file-if-exists=.env packages/discovery-db/dist/migrate.js",
+    "db:local:up": "node --env-file-if-exists=.env scripts/local-postgres.mjs up",
+    "db:local:down": "node --env-file-if-exists=.env scripts/local-postgres.mjs down",
+    "db:local:status": "node scripts/local-postgres.mjs status",
+    "dev:api": "npm run build -w apps/api && node --env-file-if-exists=.env apps/api/dist/server.js"
   },
   "devDependencies": {
+    "pg": "^8.16.3",
     "typescript": "^7.0.2"
+  },
+  "optionalDependencies": {
+    "@embedded-postgres/windows-x64": "17.10.0-beta.17"
   }
 }

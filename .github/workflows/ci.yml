@@ -8,6 +8,35 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+
+    # A real PostgreSQL service container — the routine test suite itself runs against PGlite
+    # (an embedded, in-process Postgres-compatible engine; see packages/discovery-db/tests), so
+    # no test in `npm test` needs this container. It exists so this job can also prove the real
+    # production migration path (packages/discovery-db/src/migrate.ts's CLI, via `npm run
+    # db:migrate`) actually works against a genuine Postgres server, not only against PGlite.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: discovery
+          POSTGRES_PASSWORD: discovery_ci
+          POSTGRES_DB: discovery_platform
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U discovery"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: discovery
+      POSTGRES_PASSWORD: discovery_ci
+      POSTGRES_DB: discovery_platform
+      POSTGRES_SSL: 'false'
+
     steps:
       - uses: actions/checkout@v4
 
@@ -22,8 +51,11 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test
+      - name: Test (discovery-core, discovery-db, domains, api, examples — PGlite, no live server needed)
         run: npm test
+
+      - name: Migrate the real PostgreSQL service container (proves the production migration path, not just PGlite)
+        run: npm run db:migrate
 
       - name: Build
         run: npm run build

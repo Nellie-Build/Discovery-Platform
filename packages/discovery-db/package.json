@@ -1,0 +1,29 @@
+{
+  "name": "@discovery-platform/db",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PostgreSQL persistence for Discovery Platform — a domain-neutral Workspace -> Project -> Discovery Run -> Record -> Sources/Contacts schema. Domain-specific fields live only inside each record's own domain_data JSONB column; this package never adds a domain-shaped SQL column.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "migrate": "node dist/migrate.js",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@types/node": "^24.13.4",
+    "@types/pg": "^8.11.10",
+    "typescript": "^7.0.2"
+  }
+}

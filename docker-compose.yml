@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-discovery}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-discovery_local_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-discovery_platform}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - discovery_platform_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-discovery}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  discovery_platform_postgres_data:
