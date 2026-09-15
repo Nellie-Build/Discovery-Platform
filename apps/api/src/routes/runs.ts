@@ -21,12 +21,14 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
     const project = await projects.getProjectById(req.params.id);
     if (!project) throw notFound('Project not found.');
     await assertWorkspaceAccess(pool, req, project.workspace_id);
+    res.locals.projectId = project.id;
     const { sourceUrl } = req.body ?? {};
     if (typeof sourceUrl !== 'string' || !sourceUrl.trim()) throw badRequest('invalid_source_url', 'sourceUrl is required.');
     const adapter = domainRegistry[project.domain];
     if (!adapter) throw badRequest('unknown_domain', `No domain adapter registered for "${project.domain}".`);
 
     const run = await runs.createRun(project.id);
+    res.locals.runId = run.id;
 
     let outcome;
     try {
@@ -78,8 +80,10 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
   router.get('/runs/:id', asyncHandler(async (req, res) => {
     const run = await runs.getRunById(req.params.id);
     if (!run) throw notFound('Run not found.');
+    res.locals.runId = run.id;
     const project = await projects.getProjectById(run.project_id);
     if (!project) throw notFound('Run not found.');
+    res.locals.projectId = project.id;
     await assertWorkspaceAccess(pool, req, project.workspace_id);
     res.json(run);
   }));

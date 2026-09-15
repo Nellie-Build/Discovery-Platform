@@ -49,16 +49,30 @@ function WorkspaceSelector() {
   );
 }
 
+/** A small, deliberately subtle badge (never a big banner) so this environment is never mistaken
+ * for a later production deployment — only rendered when the build sets VITE_ENV_LABEL (the
+ * Dockerfile does; local dev doesn't). */
+function EnvironmentBadge() {
+  const label = import.meta.env.VITE_ENV_LABEL;
+  if (!label) return null;
+  return (
+    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-amber-700">
+      {label}
+    </span>
+  );
+}
+
 export function AppLayout() {
   const { user, logout } = useAuth();
 
   return (
     <div className="flex min-h-screen bg-slate-50">
       <aside className="hidden w-64 flex-col border-r border-slate-200 bg-white px-4 py-6 md:flex">
-        <div className="mb-6 px-2">
+        <div className="mb-6 flex items-center gap-2 px-2">
           {/* DISCOVERY_PLATFORM_BRAND: swap this span (and the favicon/title in index.html) for a
               final product name/logo later — nothing else in the app hardcodes "Discovery Platform". */}
           <span className="text-lg font-semibold tracking-tight text-slate-900">Discovery Platform</span>
+          <EnvironmentBadge />
         </div>
         <div className="mb-6">
           <WorkspaceSelector />
@@ -82,7 +96,10 @@ export function AppLayout() {
 
       <div className="flex flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 md:hidden">
-          <span className="text-base font-semibold text-slate-900">Discovery Platform</span>
+          <span className="flex items-center gap-2 text-base font-semibold text-slate-900">
+            Discovery Platform
+            <EnvironmentBadge />
+          </span>
           <button
             type="button"
             onClick={() => { void logout(); }}

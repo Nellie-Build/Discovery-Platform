@@ -1,0 +1,265 @@
+name: Deploy (online test environment)
+
+# Manually triggered ONLY — a normal push to main must never silently replace the running test
+# environment (fase 2.3's brief is explicit about this). See docs/deployment.md for the full
+# one-time setup this workflow assumes (a GCP project, a deploy service account, and its key
+# stored as the GCP_SA_KEY repository secret) and for what every step below does and why.
+on:
+  workflow_dispatch:
+    inputs:
+      gcp_project_id:
+        description: 'GCP project ID'
+        required: true
+        default: 'discovery-platform-test'
+      gcp_region:
+        description: 'GCP region'
+        required: true
+        default: 'europe-west1'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Job-level env (unlike a top-level workflow env:) can read the `inputs` context — that's
+    # the whole reason these live here instead of at the workflow root.
+    env:
+      PROJECT_ID: ${{ inputs.gcp_project_id }}
+      REGION: ${{ inputs.gcp_region }}
+      AR_REPO: discovery-platform
+      SQL_INSTANCE: discovery-platform-db
+      DB_NAME: discovery_platform
+      DB_USER: discovery_app
+      RUN_SERVICE: discovery-platform-web
+      MIGRATE_JOB: discovery-platform-migrate
+      RUN_SA: discovery-platform-run-sa
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Derive shared resource names
+        run: |
+          echo "IMAGE=${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/web" >> "$GITHUB_ENV"
+          echo "CONNECTION_NAME=${PROJECT_ID}:${REGION}:${SQL_INSTANCE}" >> "$GITHUB_ENV"
+          echo "RUN_SA_EMAIL=${RUN_SA}@${PROJECT_ID}.iam.gserviceaccount.com" >> "$GITHUB_ENV"
+
+      # ---- one-time-idempotent GCP resource provisioning ----------------------------------
+      # Every step in this section is written to be safe to re-run: it checks whether the
+      # resource already exists and only creates it if not. Re-running this whole workflow
+      # after the first successful run should never recreate, rename, or reset anything.
+
+      - name: Enable required APIs
+        run: |
+          gcloud services enable run.googleapis.com sqladmin.googleapis.com \
+            secretmanager.googleapis.com artifactregistry.googleapis.com iam.googleapis.com \
+            --project="$PROJECT_ID"
+
+      - name: Create the Artifact Registry Docker repository (discovery-platform-*, if missing)
+        run: |
+          if ! gcloud artifacts repositories describe "$AR_REPO" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+            gcloud artifacts repositories create "$AR_REPO" --repository-format=docker --location="$REGION" \
+              --project="$PROJECT_ID" --description="Discovery Platform's own images — never shared with Maroc2Stay."
+          fi
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Create the Cloud SQL for PostgreSQL instance (discovery-platform-db, if missing)
+        run: |
+          if ! gcloud sql instances describe "$SQL_INSTANCE" --project="$PROJECT_ID" >/dev/null 2>&1; then
+            gcloud sql instances create "$SQL_INSTANCE" \
+              --database-version=POSTGRES_16 --tier=db-f1-micro --region="$REGION" \
+              --project="$PROJECT_ID" --storage-auto-increase --backup-start-time=03:00
+          fi
+
+      - name: Create the discovery_platform database (if missing) — its own database, never shared with Maroc2Stay
+        run: |
+          if ! gcloud sql databases describe "$DB_NAME" --instance="$SQL_INSTANCE" --project="$PROJECT_ID" >/dev/null 2>&1; then
+            gcloud sql databases create "$DB_NAME" --instance="$SQL_INSTANCE" --project="$PROJECT_ID"
+          fi
+
+      - name: Create the DB user and its DATABASE_URL secret (only on first run — never rotates a live DB password)
+        run: |
+          if gcloud secrets describe discovery-platform-database-url --project="$PROJECT_ID" >/dev/null 2>&1; then
+            echo "discovery-platform-database-url already exists — keeping the existing DB user/password."
+          else
+            DB_PASSWORD="$(openssl rand -hex 24)"
+            gcloud sql users create "$DB_USER" --instance="$SQL_INSTANCE" --password="$DB_PASSWORD" --project="$PROJECT_ID"
+            # Cloud Run's Cloud SQL connector mounts the instance as a Unix socket at
+            # /cloudsql/<connection name> — this is node-postgres's documented way to use it via
+            # a single connection string, so packages/discovery-db's existing
+            # `if (process.env.DATABASE_URL)` path needs no code change at all.
+            printf 'postgresql://%s:%s@/%s?host=/cloudsql/%s' "$DB_USER" "$DB_PASSWORD" "$DB_NAME" "$CONNECTION_NAME" \
+              | gcloud secrets create discovery-platform-database-url --project="$PROJECT_ID" \
+                --replication-policy=automatic --data-file=-
+          fi
+
+      - name: Generate the SESSION_SECRET secret (only on first run — rotating it would log out every session)
+        run: |
+          if gcloud secrets describe discovery-platform-session-secret --project="$PROJECT_ID" >/dev/null 2>&1; then
+            echo "discovery-platform-session-secret already exists — keeping it."
+          else
+            openssl rand -hex 32 | gcloud secrets create discovery-platform-session-secret --project="$PROJECT_ID" \
+              --replication-policy=automatic --data-file=-
+          fi
+
+      - name: Store/refresh the GEMINI_API_KEY secret (optional — skipped entirely if not provided)
+        if: ${{ secrets.GEMINI_API_KEY != '' }}
+        run: |
+          if gcloud secrets describe discovery-platform-gemini-api-key --project="$PROJECT_ID" >/dev/null 2>&1; then
+            printf '%s' "${{ secrets.GEMINI_API_KEY }}" | gcloud secrets versions add discovery-platform-gemini-api-key \
+              --project="$PROJECT_ID" --data-file=-
+          else
+            printf '%s' "${{ secrets.GEMINI_API_KEY }}" | gcloud secrets create discovery-platform-gemini-api-key \
+              --project="$PROJECT_ID" --replication-policy=automatic --data-file=-
+          fi
+
+      - name: Store/refresh the optional GEMINI_VISION_MODEL secret
+        if: ${{ secrets.GEMINI_VISION_MODEL != '' }}
+        run: |
+          if gcloud secrets describe discovery-platform-gemini-vision-model --project="$PROJECT_ID" >/dev/null 2>&1; then
+            printf '%s' "${{ secrets.GEMINI_VISION_MODEL }}" | gcloud secrets versions add discovery-platform-gemini-vision-model \
+              --project="$PROJECT_ID" --data-file=-
+          else
+            printf '%s' "${{ secrets.GEMINI_VISION_MODEL }}" | gcloud secrets create discovery-platform-gemini-vision-model \
+              --project="$PROJECT_ID" --replication-policy=automatic --data-file=-
+          fi
+
+      - name: Create the Cloud Run runtime service account (discovery-platform-run-sa, if missing)
+        run: |
+          if ! gcloud iam service-accounts describe "$RUN_SA_EMAIL" --project="$PROJECT_ID" >/dev/null 2>&1; then
+            gcloud iam service-accounts create "$RUN_SA" --project="$PROJECT_ID" \
+              --display-name="Discovery Platform Cloud Run runtime (web + migrate)"
+          fi
+
+      - name: Grant the runtime service account access to its own secrets and Cloud SQL only
+        run: |
+          for secret in discovery-platform-database-url discovery-platform-session-secret; do
+            gcloud secrets add-iam-policy-binding "$secret" --project="$PROJECT_ID" \
+              --member="serviceAccount:${RUN_SA_EMAIL}" --role="roles/secretmanager.secretAccessor" --quiet
+          done
+          for secret in discovery-platform-gemini-api-key discovery-platform-gemini-vision-model; do
+            gcloud secrets describe "$secret" --project="$PROJECT_ID" >/dev/null 2>&1 && \
+              gcloud secrets add-iam-policy-binding "$secret" --project="$PROJECT_ID" \
+                --member="serviceAccount:${RUN_SA_EMAIL}" --role="roles/secretmanager.secretAccessor" --quiet || true
+          done
+          gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+            --member="serviceAccount:${RUN_SA_EMAIL}" --role="roles/cloudsql.client" --condition=None --quiet
+
+      # ---- build & push -----------------------------------------------------------------------
+
+      - name: Build and push the production image
+        run: |
+          docker build \
+            --build-arg VITE_API_URL=/api/v1 \
+            --build-arg VITE_ENV_LABEL=Testomgeving \
+            -t "${IMAGE}:${GITHUB_SHA}" -t "${IMAGE}:latest" .
+          docker push "${IMAGE}:${GITHUB_SHA}"
+          docker push "${IMAGE}:latest"
+
+      # ---- migrate (a separate step/resource — never runs automatically on web container start) ---
+
+      - name: Determine optional Gemini secret refs for the migration/web env (may be none)
+        run: |
+          SECRET_REFS="DATABASE_URL=discovery-platform-database-url:latest,SESSION_SECRET=discovery-platform-session-secret:latest"
+          if gcloud secrets describe discovery-platform-gemini-api-key --project="$PROJECT_ID" >/dev/null 2>&1; then
+            SECRET_REFS="${SECRET_REFS},GEMINI_API_KEY=discovery-platform-gemini-api-key:latest"
+          fi
+          if gcloud secrets describe discovery-platform-gemini-vision-model --project="$PROJECT_ID" >/dev/null 2>&1; then
+            SECRET_REFS="${SECRET_REFS},GEMINI_VISION_MODEL=discovery-platform-gemini-vision-model:latest"
+          fi
+          echo "SECRET_REFS=${SECRET_REFS}" >> "$GITHUB_ENV"
+
+      - name: Create/update the discovery-platform-migrate Cloud Run Job
+        run: |
+          if gcloud run jobs describe "$MIGRATE_JOB" --region="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+            ACTION=update
+          else
+            ACTION=create
+          fi
+          gcloud run jobs "$ACTION" "$MIGRATE_JOB" \
+            --image="${IMAGE}:${GITHUB_SHA}" --region="$REGION" --project="$PROJECT_ID" \
+            --command=node --args=packages/discovery-db/dist/migrate.js \
+            --set-cloudsql-instances="$CONNECTION_NAME" \
+            --service-account="$RUN_SA_EMAIL" \
+            --set-secrets="$SECRET_REFS" \
+            --max-retries=0 --task-timeout=300s
+
+      - name: Run the migration job and wait for it to finish (idempotent — see packages/discovery-db's own migration runner)
+        run: gcloud run jobs execute "$MIGRATE_JOB" --region="$REGION" --project="$PROJECT_ID" --wait
+
+      # ---- deploy the web service ---------------------------------------------------------------
+
+      - name: Deploy discovery-platform-web
+        run: |
+          gcloud run deploy "$RUN_SERVICE" \
+            --image="${IMAGE}:${GITHUB_SHA}" --region="$REGION" --project="$PROJECT_ID" \
+            --platform=managed --allow-unauthenticated --port=8080 \
+            --add-cloudsql-instances="$CONNECTION_NAME" \
+            --service-account="$RUN_SA_EMAIL" \
+            --set-env-vars="NODE_ENV=production" \
+            --set-secrets="$SECRET_REFS" \
+            --min-instances=0 --max-instances=2
+
+      - name: Point WEB_ORIGIN at the service's own URL (single-origin — mostly a no-op safety net, see server.ts)
+        run: |
+          SERVICE_URL="$(gcloud run services describe "$RUN_SERVICE" --region="$REGION" --project="$PROJECT_ID" --format='value(status.url)')"
+          gcloud run services update "$RUN_SERVICE" --region="$REGION" --project="$PROJECT_ID" \
+            --update-env-vars="WEB_ORIGIN=${SERVICE_URL}"
+          echo "SERVICE_URL=${SERVICE_URL}" >> "$GITHUB_ENV"
+
+      # ---- smoke test -----------------------------------------------------------------------
+
+      - name: Smoke test the deployed environment
+        run: |
+          set -euo pipefail
+          COOKIES="$(mktemp)"
+          EMAIL="deploy-smoke-$(date +%s)@example.com"
+
+          echo "== register =="
+          curl -sf -c "$COOKIES" -X POST "${SERVICE_URL}/api/v1/auth/register" -H 'content-type: application/json' \
+            -d "{\"email\":\"${EMAIL}\",\"password\":\"a-secure-password-123\"}" -o /tmp/register.json
+          WORKSPACE_ID="$(node -e "console.log(JSON.parse(require('fs').readFileSync('/tmp/register.json','utf8')).workspace.id)")"
+
+          echo "== logout, then login again (session persists a fresh login) =="
+          curl -sf -b "$COOKIES" -c "$COOKIES" -X POST "${SERVICE_URL}/api/v1/auth/logout" -o /dev/null
+          curl -sf -c "$COOKIES" -X POST "${SERVICE_URL}/api/v1/auth/login" -H 'content-type: application/json' \
+            -d "{\"email\":\"${EMAIL}\",\"password\":\"a-secure-password-123\"}" -o /dev/null
+
+          echo "== create a Vacatures project =="
+          curl -sf -b "$COOKIES" -X POST "${SERVICE_URL}/api/v1/projects" -H 'content-type: application/json' \
+            -d "{\"workspaceId\":\"${WORKSPACE_ID}\",\"name\":\"Deploy smoke test\",\"domain\":\"vacancies\"}" -o /tmp/project.json
+          PROJECT_ID_RESULT="$(node -e "console.log(JSON.parse(require('fs').readFileSync('/tmp/project.json','utf8')).id)")"
+
+          echo "== start a Discovery run (https://example.com — a stable, safe public fixture; see docs/deployment.md for why this isn't a real vacancy page) =="
+          curl -sf -b "$COOKIES" -X POST "${SERVICE_URL}/api/v1/projects/${PROJECT_ID_RESULT}/runs" -H 'content-type: application/json' \
+            -d '{"sourceUrl":"https://example.com"}' -o /tmp/run.json
+          RUN_STATUS="$(node -e "console.log(JSON.parse(require('fs').readFileSync('/tmp/run.json','utf8')).status)")"
+          echo "Run finished with status: ${RUN_STATUS}"
+          if [ "$RUN_STATUS" = "failed" ]; then
+            echo "Discovery run failed — see run.json:"; cat /tmp/run.json; exit 1
+          fi
+
+          echo "== records endpoint is reachable (an empty list is expected for example.com) =="
+          curl -sf -b "$COOKIES" "${SERVICE_URL}/api/v1/projects/${PROJECT_ID_RESULT}/records" -o /dev/null
+
+          echo "== health =="
+          curl -sf "${SERVICE_URL}/api/v1/health" -o /dev/null
+
+          echo "Smoke test passed against ${SERVICE_URL}"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Discovery Platform — online test environment deployed"
+            echo ""
+            echo "- Service URL: ${SERVICE_URL}"
+            echo "- Image: ${IMAGE}:${GITHUB_SHA}"
+            echo "- Cloud SQL instance: ${CONNECTION_NAME}"
+          } >> "$GITHUB_STEP_SUMMARY"

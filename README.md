@@ -154,6 +154,15 @@ do; see `apps/api/tests/auth.test.mjs` for the exact request sequence). If `API_
 `apps/api/src/workspace-access.ts`) — a single shared development key for local/technical use
 only, never real authentication.
 
+## Online test environment
+
+Fase 2.3 adds a production Docker image (single Node/Express process serving both the API and
+the built Web App on one origin — see the root `Dockerfile`) and a manually-triggered GitHub
+Actions workflow (`.github/workflows/deploy.yml`) that provisions a Cloud SQL database and
+deploys it to Cloud Run. See `docs/deployment.md` for the one-time GCP setup, resource names,
+secret rotation, log inspection and teardown — a normal `git push` to `main` never deploys
+anything by itself.
+
 ## What's next
 
 Billing, team invitations beyond adding a `workspace_members` row directly, white-labeling, an

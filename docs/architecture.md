@@ -141,6 +141,25 @@ Registering (`POST /auth/register`) creates the user, a first personal workspace
 session is created) — this is the "automatically receive a workspace" flow the Web App's
 onboarding relies on.
 
+## Crawler security: a logged-in user supplies an arbitrary URL
+
+Starting a Discovery run means a logged-in user hands the crawler a URL of their own choosing —
+once the system is reachable from the public internet (fase 2.3), that is an SSRF vector by
+construction, not an edge case. `packages/discovery-core/src/crawler/http.ts`'s `fetchPublicUrl`
+is the *only* place this package makes an outbound request, and it refuses to open a socket
+unless every DNS-resolved address for the target hostname is a genuine public unicast address
+(`isPublicAddress`, built on `ipaddr.js`'s address-range classification) — rejecting loopback
+(`127.0.0.1`, `::1`), every RFC1918/unique-local private range, link-local addresses (including
+`169.254.169.254`, the cloud metadata endpoint on GCP/AWS/Azure alike), and an IPv4-mapped IPv6
+address whose embedded IPv4 is itself private. The exact address that passed the check is then
+*pinned* for the actual connection (a custom `lookup` option on the request), closing the
+DNS-rebinding window between validating an address and connecting to it. `url-policy.ts`'s
+`websiteScope` adds an earlier, cheaper rejection for obviously-invalid hostnames (bare
+`localhost`, anything without a dot) — but the address-level check in `http.ts` is the real,
+complete defense, since a literal IP like `169.254.169.254` passes the hostname-shape check just
+fine and is only ever caught there. See `packages/discovery-core/tests/http.test.mjs` for the
+regression tests covering every case above.
+
 ## A domain with different rules: candidates
 
 Person-matching needs stricter rules than listing-matching does, and this is worth deciding in
@@ -170,6 +189,13 @@ None of this is a technical limitation of the core — `findDuplicateCandidates(
 `VisionProvider.analyzeImage` are signal/schema-agnostic and would run whatever a `candidates`
 domain supplied. The constraint is entirely on what signals and inferences a person-matching
 domain is *allowed* to define.
+
+## Deployment topology
+
+See `docs/deployment.md` for the full picture — in short, one Docker image (root `Dockerfile`)
+runs a single Node/Express process that serves the API and the built Web App on one origin, a
+separate Cloud Run Job runs schema migrations (never automatically on every web container start),
+and a Cloud SQL for PostgreSQL instance is this product's own, never shared with Maroc2Stay.
 
 ## What this repository does not do yet
 

@@ -59,3 +59,17 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Proves the production Dockerfile itself actually builds (see fase 2.3's docs/deployment.md)
+      # — a plain build validation, no registry push and no deployment. Deploying a built image
+      # is a separate, manually-triggered workflow (.github/workflows/deploy.yml); a normal push
+      # to main must never silently replace the running test environment.
+      - name: Build the production image
+        run: docker build --build-arg VITE_API_URL=/api/v1 --build-arg VITE_ENV_LABEL=Testomgeving -t discovery-platform:ci .
