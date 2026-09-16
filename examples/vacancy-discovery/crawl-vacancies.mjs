@@ -10,8 +10,10 @@ import { vacanciesCrawlerConfig, extractVacancy } from '@discovery-platform/doma
 const contactNormalizers = {
   normalizePhone(raw) {
     const digits = raw.replace(/^tel:/i, '').replace(/[^\d+]/g, '');
+    // A leading `+` is kept as an explicit international number; a local number with no `+`
+    // stays local — never guess a country code.
     if (/^\+\d{8,15}$/.test(digits)) return digits;
-    if (/^\d{8,15}$/.test(digits)) return '+' + digits;
+    if (/^\d{8,15}$/.test(digits)) return digits;
     return null;
   },
   normalizeEmail(raw) {

@@ -19,7 +19,9 @@ function fakeClock(startAt = 0) {
   return { now: () => now, sleep: async ms => { now += ms; } };
 }
 const normalizers = {
-  normalizePhone(raw) { const d = raw.replace(/^tel:/i, '').replace(/[^\d+]/g, ''); return /^\+?\d{8,15}$/.test(d) ? (d.startsWith('+') ? d : '+' + d) : null; },
+  // A leading `+` is kept as an explicit international number; a local number with no `+` stays
+  // local — never guess a country code.
+  normalizePhone(raw) { const d = raw.replace(/^tel:/i, '').replace(/[^\d+]/g, ''); return /^\+?\d{8,15}$/.test(d) ? d : null; },
   normalizeEmail(raw) { const e = raw.replace(/^mailto:/i, '').split('?')[0].trim().toLowerCase(); return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e) ? e : null; },
 };
 const pageUrls = result => result.records.filter(r => r.kind === 'page').map(r => new URL(r.url).pathname);

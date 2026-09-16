@@ -27,15 +27,25 @@ interface VacancyFacts {
 ```
 
 - **Structured data** (`extractJobPostingJsonLd`, `src/extract-vacancy.ts`) — schema.org
-  `JobPosting` JSON-LD: `title`, `hiringOrganization.name` → `company`,
-  `jobLocation.address.addressLocality`/`addressRegion` → `location`, `baseSalary` →
-  `salary` (as a plain descriptive string, currency+amount+unit — never parsed into a number),
-  `employmentType` → `contractType`, `description` (HTML-stripped).
+  `JobPosting` JSON-LD, tolerant of the shapes real sites actually emit: `@type` as a string or
+  array, `JobPosting` nested inside `@graph`, `title`, `hiringOrganization` (object or array) →
+  `company`, `jobLocation` (object or array of them, each with its own `address`) →
+  `location` (multiple locations combined, deduplicated), `baseSalary` (`value` or
+  `minValue`/`maxValue`) → `salary` (a plain descriptive string, currency+amount+unit — never
+  parsed into a number), `employmentType` (string or array) → `contractType`, `description`
+  (HTML-stripped).
 - **Plain-text label extraction** (`extractVacancyText`) — `"Location: Amsterdam"`,
   `"Salary: €2,800 - €3,400 per month"`, `"Hours: 32-40h"`, `"Contract type: permanent"`,
-  `"Contact: ..."` — every pattern requires an explicit label immediately before the value,
-  never a bare number/word from unrelated text.
-- **`<title>`/`<h1>`** as the title fallback when there is no JSON-LD.
+  `"Contact: ..."`, `"Employer: ..."` — every pattern requires an explicit label immediately
+  before the value, never a bare number/word from unrelated text.
+- **Generic DOM label/value extraction** (`extractLabelValueDom`) — the same labels, but paired
+  with their value through structural HTML rather than a single line of text: `<dt>`/`<dd>`,
+  a table `<th>`/`<td>` within one row, or a label element (`strong`/`b`/`span`/`div`/`p`/`li`/
+  `label`) immediately followed by its value in the DOM. Only fires when the label element's own
+  text is *exactly* one of the known label words — never a substring of running copy.
+- **`<h1>`/`<title>`** as the title — the page's first meaningful `<h1>` is preferred (a
+  detail page's own function title), falling back to `<title>` only when there is no `<h1>`, so a
+  site-wide `<title>` suffix (" - Careers | Acme") is never taken as part of the job title.
 - **Contact details** — `phone`/`email` come directly from `@discovery-platform/core`'s own
   `extractContacts()`, reused as-is (see `tests/extract-vacancy.test.mjs`'s test C) — no
   separate contact-parsing code in this package at all.

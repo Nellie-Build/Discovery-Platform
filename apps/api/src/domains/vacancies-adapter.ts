@@ -22,8 +22,11 @@ export type VacanciesCrawlOverrides = Pick<CrawlOptions<VacancyFacts>, 'transpor
 const contactNormalizers = {
   normalizePhone(raw: string): string | null {
     const digits = raw.replace(/^tel:/i, '').replace(/[^\d+]/g, '');
+    // A number that already spells out its own country code (a leading `+`) is normalized as
+    // international. A local number with no `+` stays local — we never invent a country code
+    // (e.g. `0654764363` must never become `+0654764363` or `+31654764363`).
     if (/^\+\d{8,15}$/.test(digits)) return digits;
-    if (/^\d{8,15}$/.test(digits)) return '+' + digits;
+    if (/^\d{8,15}$/.test(digits)) return digits;
     return null;
   },
   normalizeEmail(raw: string): string | null {

@@ -8,11 +8,13 @@ import { extractVacancy } from '../dist/extract-vacancy.js';
 // Deliberately simple and country-agnostic — this domain package owns no phone-numbering-plan
 // knowledge of its own — that logic lives in
 // whichever application wires a domain into a real crawl; see examples/vacancy-discovery).
+// A number that already spells out its own country code (a leading `+`) is normalized as
+// international. A local number with no `+` stays local — never invent a country code.
 const normalizers = {
   normalizePhone(raw) {
     const digits = raw.replace(/^tel:/i, '').replace(/[^\d+]/g, '');
     if (/^\+\d{8,15}$/.test(digits)) return digits;
-    if (/^\d{8,15}$/.test(digits)) return '+' + digits;
+    if (/^\d{8,15}$/.test(digits)) return digits;
     return null;
   },
   normalizeEmail(raw) {
@@ -23,6 +25,12 @@ const normalizers = {
 
 async function loadPage(fixture, url) {
   const html = await readFile(new URL(`./fixtures/${fixture}`, import.meta.url), 'utf8');
+  const $ = load(html);
+  const contacts = extractContacts($, new URL(url).hostname, normalizers);
+  return { $, url, isHomepage: false, priority: 10, contacts };
+}
+
+function pageFromHtml(html, url) {
   const $ = load(html);
   const contacts = extractContacts($, new URL(url).hostname, normalizers);
   return { $, url, isHomepage: false, priority: 10, contacts };
@@ -42,6 +50,21 @@ test('A: a JobPosting JSON-LD page yields title, company, location, salary and e
   assert.ok(facts.description.includes('Frontend Developer'));
   assert.ok(!facts.description.includes('<b>'), 'HTML tags must be stripped from the description');
   assert.equal(facts.sourceUrl, page.url);
+  // The fixture's tel: link already spells out its own country code — kept as-is.
+  assert.equal(facts.phone, '+31201234567');
+});
+
+// ─── A2: JobPosting nested inside @graph, with array-shaped hiringOrganization/jobLocation/employmentType ──
+test('A2: a JobPosting nested in @graph, with hiringOrganization/jobLocation/employmentType all given as arrays, is read in full and multiple locations are combined without duplicates', async () => {
+  const page = await loadPage('job-graph-multi.html', 'https://acme-analytics.example/vacatures/data-analyst');
+  const results = extractVacancy(page);
+  assert.equal(results.length, 1);
+  const [facts] = results;
+  assert.equal(facts.title, 'Data Analyst');
+  assert.equal(facts.company, 'Acme Analytics BV');
+  assert.equal(facts.location, 'Amsterdam, Noord-Holland; Rotterdam, Zuid-Holland');
+  assert.equal(facts.contractType, 'FULL_TIME, PART_TIME');
+  assert.equal(facts.description, 'Data Analyst gezocht bij Acme Analytics.');
 });
 
 // ─── B: a vacancy without JSON-LD ───────────────────────────────────────────────────────────
@@ -50,7 +73,9 @@ test('B: a vacancy without JSON-LD is still recognized from reliable HTML/text l
   const results = extractVacancy(page);
   assert.equal(results.length, 1);
   const [facts] = results;
-  assert.equal(facts.title, 'Vacature: Magazijnmedewerker'); // from <title>, no JSON-LD available
+  // The page's own <h1> ("Magazijnmedewerker") is preferred over the <title> tag, which often
+  // carries an unrelated site-wide suffix on a real site.
+  assert.equal(facts.title, 'Magazijnmedewerker');
   assert.equal(facts.location, 'Rotterdam');
   assert.equal(facts.salary, '€2.600 - €2.900 per maand');
   assert.equal(facts.hours, '32-40 uur');
@@ -58,7 +83,10 @@ test('B: a vacancy without JSON-LD is still recognized from reliable HTML/text l
   assert.equal(facts.contactPerson, 'Sanne de Vries');
   // Nothing in the fixture ever states a company name — never invented.
   assert.equal(facts.company, null);
-  assert.equal(facts.description, null); // description is only ever taken from real JSON-LD
+  assert.equal(facts.description, null); // description is only ever taken from real JSON-LD or an explicit itemprop block
+  // The fixture's tel: link is a local number with no country code — it must stay local, never
+  // gain an invented leading "+".
+  assert.equal(facts.phone, '0201234567');
 });
 
 // ─── C: contact details reuse discovery-core's own extractContacts ─────────────────────────
@@ -73,9 +101,44 @@ test('C: contact details are @discovery-platform/core\'s own extractContacts out
   assert.equal(facts.phone, expectedContacts.phone);
 });
 
+// ─── D: generic DOM label/value fallback — dt/dd, table th/td, and a label element followed by its sibling ──
+test('D: a vacancy with no JSON-LD and no inline "Label: value" text is still recognized from dt/dd, table th/td, and label-element/sibling DOM pairs', async () => {
+  const page = await loadPage('job-dom-labels.html', 'https://voorbeeldbedrijf.example/vacatures/financieel-medewerker');
+  const results = extractVacancy(page);
+  assert.equal(results.length, 1);
+  const [facts] = results;
+  assert.equal(facts.title, 'Financieel Medewerker'); // <h1>, preferred over <title>
+  assert.equal(facts.location, 'Eindhoven'); // <dt>Locatie</dt><dd>Eindhoven</dd>
+  assert.equal(facts.hours, '36 uur per week'); // <dt>Uren</dt><dd>...</dd>
+  assert.equal(facts.salary, '€3.000 - €3.500 per maand'); // <th>Salaris</th><td>...</td>
+  assert.equal(facts.company, 'Acme Analytics BV'); // <strong>Werkgever</strong> <span>...</span>
+  assert.equal(facts.contactPerson, 'Julia de Boer'); // two neighboring <div>s, no colon at all
+  // Nothing in this fixture states a phone, e-mail or description — never guessed.
+  assert.equal(facts.phone, null);
+  assert.equal(facts.email, null);
+  assert.equal(facts.description, null);
+});
+
 test('a page with only a generic title and nothing vacancy-specific is never reported as a vacancy', async () => {
   const $ = load('<html><head><title>Over ons</title></head><body><p>Wij zijn een modern bedrijf.</p></body></html>');
   const page = { $, url: 'https://example-logistics.test/over-ons', isHomepage: false, priority: 10,
     contacts: extractContacts($, 'example-logistics.test', normalizers) };
   assert.equal(extractVacancy(page), undefined);
+});
+
+test('a label element with no adjacent value, and a bare mention of a label word in running prose, never produce a false value', () => {
+  const page = pageFromHtml(
+    '<html><head><title>Vacature: Consultant</title></head><body>\n' +
+    '<h1>Consultant</h1>\n' +
+    '<p>Reizen naar de locatie van de klant behoort tot de functie.</p>\n' + // "locatie" appears, but never as a standalone label
+    '<dl><dt>Locatie</dt></dl>\n' + // a dt with no following dd at all
+    '<p>Salaris: €3.000 per maand</p>\n' + // a genuine, separate signal so this page still qualifies as a vacancy
+    '<p>Contactpersoon: Anna Jansen</p>\n' +
+    '</body></html>',
+    'https://example.test/vacatures/consultant',
+  );
+  const [facts] = extractVacancy(page);
+  assert.equal(facts.location, null);
+  assert.equal(facts.salary, '€3.000 per maand');
+  assert.equal(facts.contactPerson, 'Anna Jansen');
 });
