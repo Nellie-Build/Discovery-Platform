@@ -35,7 +35,10 @@ product's own, never Maroc2Stay's:
   Cloud SQL connector mounts it as a Unix socket; `DATABASE_URL` points at that socket path (see
   `.github/workflows/deploy.yml`'s "Create the DB user" step for the exact connection-string
   shape), so `packages/discovery-db`'s existing `DATABASE_URL`-or-`POSTGRES_*` connection logic
-  needed no code change at all.
+  needed no code change at all. Created with `--edition=ENTERPRISE` (not the newer, pricier
+  Enterprise Plus, which Cloud SQL now defaults `POSTGRES_16` to) specifically so the small,
+  cheap `db-f1-micro` tier — the whole point of this being a small test environment — is even
+  a valid choice; Enterprise Plus rejects that tier outright.
 
 ## One-time setup (you do this — the deploy workflow has no permission to)
 
