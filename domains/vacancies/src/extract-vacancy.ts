@@ -322,9 +322,10 @@ export function extractJobPostingJsonLd($: CheerioAPI): Partial<VacancyFacts>[] 
  * JobPosting data (page-level, needs the DOM — never routed through DomainConfig.extractText,
  * since that seam only ever sees plain text, not the DOM), then schema.org microdata, then the
  * plain-text label fallback, then the generic DOM label/value fallback, then generic contact
- * details discovery-core's own crawler already extracted for this page. A page with only a
- * `<title>` and nothing else specific is never reported — a title alone is too weak a signal that
- * this was really a vacancy page, not just any page on the site.
+ * details discovery-core's own crawler already extracted for this page. Without JobPosting
+ * JSON-LD, a page needs at least two independent vacancy-specific signal groups to be reported at
+ * all — see `isPlausibleVacancyPage` below for why a single group (e.g. just location/salary/
+ * hours/contractType) is not enough on its own.
  */
 export function extractVacancy(page: CrawlPage): VacancyFacts[] | undefined {
   const bodyText = page.$('body').clone().find('script, style, noscript').remove().end().text();
@@ -353,9 +354,28 @@ export function extractVacancy(page: CrawlPage): VacancyFacts[] | undefined {
 
   const hasJsonLd = jsonLdFacts.length > 0;
   const results = (hasJsonLd ? jsonLdFacts : [{}]).map(build);
-  // Structured JobPosting data is definitive on its own; without it, at least one specific
-  // field beyond the ever-present page title must be genuinely present.
-  const meaningful = results.filter(r => hasJsonLd ||
-    [r.company, r.location, r.salary, r.hours, r.contractType, r.description, r.phone, r.email].some(v => v !== null));
-  return meaningful.length ? meaningful : undefined;
+  const plausible = results.filter(r => hasJsonLd || isPlausibleVacancyPage(r));
+  return plausible.length ? plausible : undefined;
+}
+
+/**
+ * Without JobPosting JSON-LD (structured data is definitive on its own), a page is only accepted
+ * as a real vacancy record when at least two *independent* vacancy-specific signal groups are
+ * present — never just one. This is what a vacancy overview or a careers landing page can get
+ * wrong: such a page routinely embeds several *other* vacancies' own teaser/preview widgets (the
+ * same location/salary/hours/contract-type icon group real detail pages use for their own job),
+ * so location/salary/hours/contractType alone is exactly as "rich-looking" on an overview page as
+ * on a real one — it is evidence of *a* job info widget being present on the page, not evidence
+ * that the page's own subject is a specific vacancy. A second, independently-sourced signal
+ * (a named contact person, a direct phone/email, a named employer, or an explicit description
+ * block) is required before the page counts as a genuine vacancy detail page.
+ */
+function isPlausibleVacancyPage(r: VacancyFacts): boolean {
+  let groups = 0;
+  if (r.location || r.salary || r.hours || r.contractType) groups++;
+  if (r.company) groups++;
+  if (r.contactPerson) groups++;
+  if (r.phone || r.email) groups++;
+  if (r.description) groups++;
+  return groups >= 2;
 }

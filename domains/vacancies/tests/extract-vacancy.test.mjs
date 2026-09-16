@@ -194,4 +194,39 @@ test('location, hours, salary and contract type are read from an accessible-name
   assert.equal(facts.hours, '32 - 36 uur');
   assert.equal(facts.salary, '€4.818 - €7.094 (bruto)');
   assert.equal(facts.contractType, 'Arbeidsovereenkomst voor bepaalde tijd');
+  assert.equal(facts.phone, '0654764363');
+});
+
+// ─── False-positive regression: a real production incident on werkenbijdeoverheid.nl, where the
+// vacancy overview page and the site's own careers landing page were both reported as vacancy
+// records. Both pages embed *other* vacancies' own teaser widgets — the same location/salary/
+// hours/contract-type accessible-icon pattern a real detail page uses for its own job — so that
+// pattern alone is exactly as "rich-looking" on an overview page as on a real one. Fixed by
+// requiring at least two independent signal groups (never just one) when there is no JobPosting
+// JSON-LD — see `isPlausibleVacancyPage` in extract-vacancy.ts. ──────────────────────────────────
+
+test('a vacancy overview page (several other vacancies\' own teaser widgets, no single subject of its own) is never reported as a vacancy record', async () => {
+  const page = await loadPage('job-overview-page.html', 'https://careersite.example/vacatures');
+  assert.equal(extractVacancy(page), undefined);
+});
+
+test('a careers landing page (a tagline plus a few teaser widgets for other vacancies) is never reported as a vacancy record', async () => {
+  const page = await loadPage('job-landing-page.html', 'https://careersite.example/');
+  assert.equal(extractVacancy(page), undefined);
+});
+
+test('a real vacancy detail page (job info plus a direct phone number, no JobPosting JSON-LD) still produces a record — the plausibility check does not cost genuine vacancies', async () => {
+  const page = await loadPage('job-without-jsonld.html', 'https://example-logistics.test/vacatures/magazijnmedewerker');
+  assert.notEqual(extractVacancy(page), undefined);
+});
+
+test('a page with only a title and a location — one single signal group — is rejected, never reported as a vacancy on that alone', async () => {
+  const page = await loadPage('job-title-location-only.html', 'https://example.test/vacatures/onderzoeker');
+  assert.equal(extractVacancy(page), undefined);
+});
+
+test('JobPosting JSON-LD alone is still accepted outright, with no other signal on the page at all — structured data never needs a second signal group', async () => {
+  const page = await loadPage('job-jsonld-minimal.html', 'https://example.test/vacatures/minimal');
+  const [facts] = extractVacancy(page);
+  assert.equal(facts.title, 'Minimal Vacancy');
 });

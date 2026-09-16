@@ -36,7 +36,7 @@ export function RunStatusCard({ run }: { run: DiscoveryRun }) {
           <Field label="Duration" value={duration} />
           <Field label="Pages visited" value={typeof stats.pagesVisited === 'number' ? stats.pagesVisited : null} />
           <Field label="Records found" value={typeof stats.factsFound === 'number' ? stats.factsFound : null} />
-          <Field label="New records" value={typeof run.recordsCreated === 'number' ? run.recordsCreated : null} />
+          <Field label="New records" value={typeof stats.recordsCreated === 'number' ? stats.recordsCreated : null} />
           <Field
             label="Duplicates"
             value={
