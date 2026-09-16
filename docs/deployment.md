@@ -42,22 +42,30 @@ product's own, never Maroc2Stay's:
 ### 1. Create the GCP project and enable billing
 
 ```sh
-gcloud projects create discovery-platform-test --name="Discovery Platform (test)"
-gcloud billing projects link discovery-platform-test --billing-account=<YOUR_BILLING_ACCOUNT_ID>
+gcloud projects create discovery-platform-508814 --name="Discovery-Platform"
+gcloud billing projects link discovery-platform-508814 --billing-account=<YOUR_BILLING_ACCOUNT_ID>
 ```
 
 If you're reusing the same GCP account/billing as Maroc2Stay (the brief explicitly allows this
 for the first test), this is still a **separate project** — GCP resources are scoped per project,
 so nothing here can accidentally touch a Maroc2Stay Cloud Run service or database.
 
-### 2. Create the deploy service account and its key
+### 2. Create the deploy service account — no key, ever
 
-This is the identity `.github/workflows/deploy.yml` uses to provision everything below. It needs
-enough IAM to create/manage Cloud Run, Cloud SQL, Artifact Registry, Secret Manager and IAM
-bindings — deliberately scoped to *this* project only:
+There is **no service-account JSON key anywhere in this setup**, and none needs to be created —
+this project's org policy (`iam.disableServiceAccountKeyCreation`) blocks that outright, and
+even without that policy it's the wrong tool here. GitHub Actions authenticates to GCP with
+**Workload Identity Federation**: keyless OIDC. GitHub mints a short-lived, signed identity token
+for the workflow run; Google exchanges it for short-lived GCP credentials that impersonate
+`discovery-platform-deployer`, without any long-lived secret ever existing on either side.
+
+First, the service account itself — same identity as before, just never gets a key:
 
 ```sh
-PROJECT_ID=discovery-platform-test
+PROJECT_ID=discovery-platform-508814
+
+gcloud services enable iam.googleapis.com iamcredentials.googleapis.com sts.googleapis.com \
+  --project="$PROJECT_ID"
 
 gcloud iam service-accounts create discovery-platform-deployer \
   --project="$PROJECT_ID" --display-name="Discovery Platform GitHub Actions deployer"
@@ -70,23 +78,74 @@ for ROLE in roles/run.admin roles/cloudsql.admin roles/artifactregistry.admin \
             roles/serviceusage.serviceUsageAdmin; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:${DEPLOYER}" --role="$ROLE"
 done
-
-gcloud iam service-accounts keys create discovery-platform-deployer-key.json \
-  --iam-account="$DEPLOYER"
 ```
 
-`discovery-platform-deployer-key.json` is a real credential — never commit it. Copy its contents
-into a GitHub Actions secret (see below), then delete the local file.
+(These are the same roles as before — Workload Identity Federation only changes *how* GitHub
+Actions authenticates as this account, never *what* it's allowed to do once authenticated.)
 
-### 3. Add the GitHub Actions repository secrets
+### 3. Create the Workload Identity Pool and provider, restricted to this one repository
 
-Repository → Settings → Secrets and variables → Actions → New repository secret:
+```sh
+PROJECT_ID=discovery-platform-508814
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
 
-| Secret | Required | Value |
-|---|---|---|
-| `GCP_SA_KEY` | yes | The full JSON contents of `discovery-platform-deployer-key.json` |
-| `GEMINI_API_KEY` | no | A real Gemini API key, if you want it stored in Secret Manager for later use |
-| `GEMINI_VISION_MODEL` | no | Only if you want to pin a non-default Gemini model |
+gcloud iam workload-identity-pools create github-actions \
+  --project="$PROJECT_ID" --location=global \
+  --display-name="GitHub Actions"
+
+gcloud iam workload-identity-pools providers create-oidc github \
+  --project="$PROJECT_ID" --location=global \
+  --workload-identity-pool=github-actions \
+  --display-name="GitHub" \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" \
+  --attribute-condition="assertion.repository == 'Nellie-Build/Discovery-Platform'"
+```
+
+The attribute mapping exposes the GitHub OIDC token's `repository` claim to Google as
+`attribute.repository`; the attribute condition is the actual gate — a token whose `repository`
+claim isn't exactly `Nellie-Build/Discovery-Platform` is rejected before it ever reaches the
+"which service account may this impersonate" check below. Forks, other repositories, and any
+other GitHub organization are refused at this layer, independently of the IAM binding.
+
+Then grant that pool — scoped to this repository's attribute, not the whole pool — permission to
+impersonate the deployer service account:
+
+```sh
+gcloud iam service-accounts add-iam-policy-binding \
+  "discovery-platform-deployer@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --project="$PROJECT_ID" \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github-actions/attribute.repository/Nellie-Build/Discovery-Platform"
+```
+
+Finally, get the provider's full resource name — this is the exact value that goes into the
+GitHub repository variable below:
+
+```sh
+gcloud iam workload-identity-pools providers describe github \
+  --project="$PROJECT_ID" --location=global --workload-identity-pool=github-actions \
+  --format='value(name)'
+# -> projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/github-actions/providers/github
+```
+
+(`PROJECT_NUMBER` is not the project *ID* — find it via the command above, or in the Cloud
+Console under this project's Dashboard/IAM & Admin → Settings, next to "Project number".)
+
+### 4. Add the GitHub repository variable and secrets
+
+Repository → Settings → Secrets and variables → Actions:
+
+| Kind | Name | Required | Value |
+|---|---|---|---|
+| **Variable** | `GCP_WORKLOAD_IDENTITY_PROVIDER` | yes | The full provider resource name from step 3 above |
+| Secret | `GEMINI_API_KEY` | no | A real Gemini API key, if you want it stored in Secret Manager for later use |
+| Secret | `GEMINI_VISION_MODEL` | no | Only if you want to pin a non-default Gemini model |
+
+`GCP_WORKLOAD_IDENTITY_PROVIDER` is a **repository variable**, not a secret — it's a resource
+name, not a credential, and `google-github-actions/auth@v2` reads it via
+`vars.GCP_WORKLOAD_IDENTITY_PROVIDER` in `deploy.yml`. There is no `GCP_SA_KEY` secret in this
+setup at all; nothing in this repository ever holds a service-account key.
 
 `GEMINI_API_KEY` is optional here specifically because the current Discovery run (crawl → extract
 → score → dedupe) never calls Gemini Vision at all — `apps/api`'s vacancies adapter doesn't wire
@@ -94,10 +153,10 @@ it in yet (Vision is only used for reading vacancy poster *images*, a capability
 exports but the API doesn't call). It's still stored in Secret Manager, per the brief, so it's
 ready the moment that changes.
 
-### 4. Run the workflow
+### 5. Run the workflow
 
 Actions tab → "Deploy (online test environment)" → Run workflow. Defaults to project id
-`discovery-platform-test`, region `europe-west1` — override either as workflow inputs if you used
+`discovery-platform-508814`, region `europe-west1` — override either as workflow inputs if you used
 different values above.
 
 The workflow provisions every GCP resource idempotently (safe to re-run), builds and pushes the
@@ -120,8 +179,8 @@ choose (see the fase 2.3 report for the specific page used and what it found).
 ```sh
 # from a shell with gcloud auth'd, or just re-run the deploy workflow after updating the
 # GEMINI_API_KEY GitHub secret — it always pushes a new secret version on every run.
-printf '%s' "$NEW_KEY" | gcloud secrets versions add discovery-platform-gemini-api-key --project=discovery-platform-test --data-file=-
-gcloud run services update discovery-platform-web --region=europe-west1 --project=discovery-platform-test \
+printf '%s' "$NEW_KEY" | gcloud secrets versions add discovery-platform-gemini-api-key --project=discovery-platform-508814 --data-file=-
+gcloud run services update discovery-platform-web --region=europe-west1 --project=discovery-platform-508814 \
   --update-secrets=GEMINI_API_KEY=discovery-platform-gemini-api-key:latest
 ```
 
@@ -132,15 +191,15 @@ the Cloud SQL user updated in lockstep. Rotate either by hand if you ever need t
 
 ```sh
 NEW_SECRET="$(openssl rand -hex 32)"
-printf '%s' "$NEW_SECRET" | gcloud secrets versions add discovery-platform-session-secret --project=discovery-platform-test --data-file=-
-gcloud run services update discovery-platform-web --region=europe-west1 --project=discovery-platform-test \
+printf '%s' "$NEW_SECRET" | gcloud secrets versions add discovery-platform-session-secret --project=discovery-platform-508814 --data-file=-
+gcloud run services update discovery-platform-web --region=europe-west1 --project=discovery-platform-508814 \
   --update-secrets=SESSION_SECRET=discovery-platform-session-secret:latest
 ```
 
 ## Checking logs
 
 ```sh
-gcloud run services logs read discovery-platform-web --region=europe-west1 --project=discovery-platform-test --limit=100
+gcloud run services logs read discovery-platform-web --region=europe-west1 --project=discovery-platform-508814 --limit=100
 ```
 
 Every line is one structured JSON object (see `apps/api/src/logging.ts`) — request id, method,
@@ -153,12 +212,12 @@ change tried to.
 ## Tearing it down
 
 ```sh
-gcloud run services delete discovery-platform-web --region=europe-west1 --project=discovery-platform-test --quiet
-gcloud run jobs delete discovery-platform-migrate --region=europe-west1 --project=discovery-platform-test --quiet
-gcloud sql instances delete discovery-platform-db --project=discovery-platform-test --quiet
-gcloud artifacts repositories delete discovery-platform --location=europe-west1 --project=discovery-platform-test --quiet
+gcloud run services delete discovery-platform-web --region=europe-west1 --project=discovery-platform-508814 --quiet
+gcloud run jobs delete discovery-platform-migrate --region=europe-west1 --project=discovery-platform-508814 --quiet
+gcloud sql instances delete discovery-platform-db --project=discovery-platform-508814 --quiet
+gcloud artifacts repositories delete discovery-platform --location=europe-west1 --project=discovery-platform-508814 --quiet
 # Or, to remove everything at once and stop billing entirely:
-gcloud projects delete discovery-platform-test
+gcloud projects delete discovery-platform-508814
 ```
 
 ## What's deliberately not here yet

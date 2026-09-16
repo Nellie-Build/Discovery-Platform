@@ -2,15 +2,16 @@ name: Deploy (online test environment)
 
 # Manually triggered ONLY — a normal push to main must never silently replace the running test
 # environment (fase 2.3's brief is explicit about this). See docs/deployment.md for the full
-# one-time setup this workflow assumes (a GCP project, a deploy service account, and its key
-# stored as the GCP_SA_KEY repository secret) and for what every step below does and why.
+# one-time setup this workflow assumes (Workload Identity Federation — keyless OIDC auth, no
+# service-account JSON key anywhere — plus the discovery-platform-deployer service account) and
+# for what every step below does and why.
 on:
   workflow_dispatch:
     inputs:
       gcp_project_id:
         description: 'GCP project ID'
         required: true
-        default: 'discovery-platform-test'
+        default: 'discovery-platform-508814'
       gcp_region:
         description: 'GCP region'
         required: true
@@ -21,11 +22,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Required for google-github-actions/auth's Workload Identity Federation flow — this is
+      # what lets GitHub mint the short-lived OIDC token the provider exchanges for GCP
+      # credentials, with no service-account key stored anywhere.
+      id-token: write
     # github.event.inputs.* (not the newer inputs.* context) — the traditional, universally
     # supported way to read workflow_dispatch inputs, valid in job-level env unlike a top-level
     # workflow env:. The `|| '...'` fallback mirrors each input's own `default:` above.
     env:
-      PROJECT_ID: ${{ github.event.inputs.gcp_project_id || 'discovery-platform-test' }}
+      PROJECT_ID: ${{ github.event.inputs.gcp_project_id || 'discovery-platform-508814' }}
       REGION: ${{ github.event.inputs.gcp_region || 'europe-west1' }}
       AR_REPO: discovery-platform
       SQL_INSTANCE: discovery-platform-db
@@ -37,10 +42,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Keyless OIDC auth (Workload Identity Federation) — no service-account JSON key exists
+      # anywhere for this. GitHub mints a short-lived OIDC token (needs id-token: write above);
+      # the provider below exchanges it for a short-lived GCP access token impersonating
+      # discovery-platform-deployer, restricted to this exact repository — see
+      # docs/deployment.md for the pool/provider/attribute-condition setup this depends on.
       - id: auth
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: discovery-platform-deployer@discovery-platform-508814.iam.gserviceaccount.com
 
       - uses: google-github-actions/setup-gcloud@v2
         with:
