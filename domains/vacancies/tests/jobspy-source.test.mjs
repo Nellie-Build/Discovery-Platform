@@ -30,16 +30,48 @@ function fakeScrapeJobs(result) {
   return { impl: async options => { calls.push(options); return result; }, calls };
 }
 
-test('sends query/location/resultsWanted/hoursOld/isRemote to scrapeJobs, requesting only Indeed and LinkedIn', async () => {
+test('sends searchTerm/location/resultsWanted/hoursOld/isRemote to scrapeJobs, requesting only Indeed and LinkedIn', async () => {
   const { impl, calls } = fakeScrapeJobs({ jobs: [], meta: { sites: [siteMetaOk('indeed', 0), siteMetaOk('linkedin', 0)], totalDurationMs: 1, jobsPerSecond: 0, failureRate: 0, duplicatesRemoved: 0 } });
   const provider = createTsJobSpySourceProvider({ scrapeJobsImpl: impl });
-  await provider.findCandidates({ query: 'vacature vacatures jobs Security beveiliger security officer Zuid-Holland', location: 'Zuid-Holland', resultsWanted: 10, hoursOld: 72, remote: false });
+  await provider.findCandidates({ query: 'Beveiliging beveiliger security officer', location: 'Zuid-Holland', resultsWanted: 10, hoursOld: 72, remote: false });
   assert.deepEqual(calls[0].sites, ['indeed', 'linkedin']);
-  assert.equal(calls[0].searchTerm, 'vacature vacatures jobs Security beveiliger security officer Zuid-Holland');
-  assert.equal(calls[0].location, 'Zuid-Holland');
+  assert.equal(calls[0].searchTerm, 'Beveiliging beveiliger security officer');
   assert.equal(calls[0].resultsWanted, 10);
   assert.equal(calls[0].hoursOld, 72);
   assert.equal(calls[0].isRemote, false);
+});
+
+// ─── location/country normalization — the live regression this fixes ───────────────────────────
+
+test('Indeed ontvangt country=netherlands wanneer de regio "Nederland" is — never left unset (ts-jobspy itself would otherwise default it to "usa")', async () => {
+  const { impl, calls } = fakeScrapeJobs({ jobs: [], meta: { sites: [siteMetaOk('indeed', 0)], totalDurationMs: 1, jobsPerSecond: 0, failureRate: 0, duplicatesRemoved: 0 } });
+  const provider = createTsJobSpySourceProvider({ scrapeJobsImpl: impl });
+  await provider.findCandidates({ query: 'Beveiliging', location: 'Nederland' });
+  assert.equal(calls[0].country, 'netherlands');
+});
+
+test('LinkedIn ontvangt expliciete location in het Engels ("Netherlands") in plaats van het rauwe Nederlandse woord "Nederland" — LinkedIn negeert `country` volledig en gebruikt uitsluitend `location`', async () => {
+  const { impl, calls } = fakeScrapeJobs({ jobs: [], meta: { sites: [siteMetaOk('linkedin', 0)], totalDurationMs: 1, jobsPerSecond: 0, failureRate: 0, duplicatesRemoved: 0 } });
+  const provider = createTsJobSpySourceProvider({ scrapeJobsImpl: impl });
+  await provider.findCandidates({ query: 'Beveiliging', location: 'Nederland' });
+  assert.equal(calls[0].location, 'Netherlands');
+  assert.notEqual(calls[0].location, 'Nederland');
+});
+
+test('een Amerikaanse of andere default location/country wordt nergens automatisch toegevoegd wanneer de regio niet is opgegeven — location/country blijven undefined, nooit "usa"/"united states"', async () => {
+  const { impl, calls } = fakeScrapeJobs({ jobs: [], meta: { sites: [], totalDurationMs: 1, jobsPerSecond: 0, failureRate: 0, duplicatesRemoved: 0 } });
+  const provider = createTsJobSpySourceProvider({ scrapeJobsImpl: impl });
+  await provider.findCandidates({ query: 'Beveiliging' });
+  assert.equal(calls[0].location, undefined);
+  assert.equal(calls[0].country, undefined);
+});
+
+test('Zuid-Holland (a region, not a country) is passed through as location as-is, with country left unset — never guessed to be the Netherlands', async () => {
+  const { impl, calls } = fakeScrapeJobs({ jobs: [], meta: { sites: [], totalDurationMs: 1, jobsPerSecond: 0, failureRate: 0, duplicatesRemoved: 0 } });
+  const provider = createTsJobSpySourceProvider({ scrapeJobsImpl: impl });
+  await provider.findCandidates({ query: 'Beveiliging', location: 'Zuid-Holland' });
+  assert.equal(calls[0].location, 'Zuid-Holland');
+  assert.equal(calls[0].country, undefined);
 });
 
 test('Indeed result mapping: an Indeed job is mapped to VacancyFacts using exactly the fields the job board gave, nothing invented', async () => {

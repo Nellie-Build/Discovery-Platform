@@ -16,11 +16,12 @@ export { VACANCY_DEDUPLICATION_CONFIG } from './dedupe/config.js';
 export type { VacancyPosterFacts, VacancyVisionProvider } from './vision/poster-facts.js';
 export { VACANCY_POSTER_RESPONSE_SCHEMA, VACANCY_POSTER_PROMPT, parseVacancyPosterFacts } from './vision/config.js';
 export { vacancyVisionConfig, createVacancyVisionProvider } from './vision/provider.js';
-export { buildBranchSearchQuery, BRANCH_SEARCH_HINTS, type BranchSearchInput } from './source-discovery.js';
+export { buildBranchSearchQuery, buildJobBoardSearchTerm, BRANCH_SEARCH_HINTS, type BranchSearchInput } from './source-discovery.js';
 export type {
   VacancySourceProvider, VacancySourceQuery, VacancySourceCandidate, VacancySourceMeta, VacancySourceResult,
 } from './sources/types.js';
 export { createTsJobSpySourceProvider, type TsJobSpySourceProviderOptions } from './sources/jobspy-source.js';
+export { normalizeJobBoardLocation, type NormalizedJobBoardLocation } from './sources/location.js';
 
 /**
  * A real implementation of @discovery-platform/core's DomainConfig<TFacts>. Vacancies'

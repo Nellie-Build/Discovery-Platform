@@ -12,6 +12,7 @@
  */
 import { scrapeJobs, type ScrapeOptions, type Job, type SiteMeta } from 'ts-jobspy';
 import type { VacancyFacts } from '../extract-vacancy.js';
+import { normalizeJobBoardLocation } from './location.js';
 import type { VacancySourceProvider, VacancySourceQuery, VacancySourceCandidate, VacancySourceMeta, VacancySourceResult } from './types.js';
 
 /** Only the sites ts-jobspy's own README currently documents as actually working, without a
@@ -85,10 +86,23 @@ export function createTsJobSpySourceProvider(options: TsJobSpySourceProviderOpti
   return {
     id: 'ts-jobspy',
     async findCandidates(query: VacancySourceQuery): Promise<VacancySourceResult> {
+      // `query.location` here is the user's raw "Regio" text (e.g. "Nederland", "Zuid-Holland",
+      // "Den Haag") — normalized into ts-jobspy's own two distinct parameters. A recognized
+      // country name (e.g. "Nederland" -> "netherlands") sets `country` explicitly, so Indeed
+      // searches the right country domain instead of ts-jobspy's own "usa" default; LinkedIn
+      // ignores `country` entirely and is given the same location as readable English text
+      // instead of the raw Dutch word, since LinkedIn's own search takes `location` as a plain
+      // string with no geo-resolution of its own (see this file's own header comment). A bare
+      // region/city with no recognizable country (e.g. "Den Haag" alone) still leaves `country`
+      // unset — ts-jobspy then falls back to its own "usa" default for Indeed; this is a known,
+      // accepted limit of a single free-text "Regio" field with no separate country input, never
+      // "fixed" by guessing which country a city belongs to.
+      const { location, country } = normalizeJobBoardLocation(query.location);
       const result = await scrape({
         sites: JOB_BOARD_SITES,
         searchTerm: query.query,
-        location: query.location ?? undefined,
+        location: location ?? undefined,
+        country: country ?? undefined,
         resultsWanted: query.resultsWanted ?? options.resultsWanted ?? DEFAULT_RESULTS_WANTED,
         hoursOld: query.hoursOld ?? undefined,
         isRemote: query.remote ?? undefined,

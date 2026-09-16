@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { DiscoveryRun } from '@discovery-platform/client';
-import { StartDiscoveryForm } from './project-detail';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import type { DiscoveryRun, Project } from '@discovery-platform/client';
+import { StartDiscoveryForm, ProjectDetailPage } from './project-detail';
 
 vi.mock('../lib/api');
 import { api } from '../lib/api';
@@ -12,6 +13,14 @@ function run(overrides: Partial<DiscoveryRun> = {}): DiscoveryRun {
     id: 'run1', project_id: 'p1', status: 'succeeded',
     started_at: new Date().toISOString(), completed_at: new Date().toISOString(),
     stats: {}, error: null, created_at: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+function project(overrides: Partial<Project> = {}): Project {
+  return {
+    id: 'p1', workspace_id: 'w1', name: 'Test project', domain: 'vacancies', status: 'active',
+    config: {}, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     ...overrides,
   };
 }
@@ -87,5 +96,61 @@ describe('StartDiscoveryForm', () => {
     await userEvent.click(screen.getByRole('radio', { name: 'Website' }));
     expect(screen.getByLabelText('Website URL')).toBeInTheDocument();
     expect(screen.queryByLabelText('Branche')).not.toBeInTheDocument();
+  });
+});
+
+function renderProjectDetail() {
+  return render(
+    <MemoryRouter initialEntries={['/projects/p1']}>
+      <Routes><Route path="/projects/:id" element={<ProjectDetailPage />} /></Routes>
+    </MemoryRouter>,
+  );
+}
+
+describe('ProjectDetailPage', () => {
+  beforeEach(() => {
+    vi.mocked(api.projects.get).mockReset().mockResolvedValue(project());
+    vi.mocked(api.records.listByProject).mockReset().mockResolvedValue([]);
+    vi.mocked(api.runs.listByProject).mockReset().mockResolvedValue([]);
+    vi.mocked(api.runs.get).mockReset();
+    vi.mocked(api.runs.start).mockReset();
+  });
+
+  // "New records" appears twice on the page (the status card's own field, and the Run history
+  // table's column header) — the status card is always rendered first in the DOM, above Run
+  // history, so its own field is reliably the first match.
+  function newRecordsValue() {
+    return screen.getAllByText('New records')[0].closest('div')?.textContent?.replace('New records', '');
+  }
+
+  it('after starting a second run in the same session, the status card shows the newest run\'s own data — not the first run\'s, even though both resolve with the same "succeeded" status', async () => {
+    const runA = run({ id: 'runA', stats: { recordsCreated: 1 } });
+    const runB = run({ id: 'runB', stats: { recordsCreated: 9 } });
+    vi.mocked(api.runs.get).mockImplementation(async id => (id === 'runA' ? runA : runB));
+    vi.mocked(api.runs.start).mockResolvedValueOnce(runA).mockResolvedValueOnce(runB);
+
+    renderProjectDetail();
+    await waitFor(() => expect(screen.getByLabelText('Website URL')).toBeInTheDocument());
+
+    await userEvent.type(screen.getByLabelText('Website URL'), 'https://a.example');
+    await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
+    await waitFor(() => expect(newRecordsValue()).toBe('1'));
+
+    await userEvent.clear(screen.getByLabelText('Website URL'));
+    await userEvent.type(screen.getByLabelText('Website URL'), 'https://b.example');
+    await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
+
+    await waitFor(() => expect(newRecordsValue()).toBe('9'));
+  });
+
+  it('on a fresh load (a refresh), the most recent run from Run history is shown in the status card — no active/polled run yet', async () => {
+    const olderRun = run({ id: 'older', created_at: '2026-01-01T10:00:00Z', stats: { recordsCreated: 1 } });
+    const newestRun = run({ id: 'newest', created_at: '2026-01-01T10:05:00Z', stats: { recordsCreated: 7 } });
+    // listRunsByProject is already newest-first (see packages/discovery-db's own ORDER BY) — the
+    // mock mirrors that real ordering rather than re-sorting client-side.
+    vi.mocked(api.runs.listByProject).mockResolvedValue([newestRun, olderRun]);
+
+    renderProjectDetail();
+    await waitFor(() => expect(newRecordsValue()).toBe('7'));
   });
 });

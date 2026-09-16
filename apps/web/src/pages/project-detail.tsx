@@ -119,11 +119,19 @@ export function ProjectDetailPage() {
   // poll already sees the terminal status).
   const { data: polledRun } = usePolling(() => api.runs.get(activeRunId!), {
     enabled: activeRunId !== null,
+    // Identifies *which* run is being polled — without this, starting a second run while
+    // `enabled` stays continuously true (see the effect below) would silently keep polling and
+    // displaying the *first* run forever; usePolling only restarts on an enabled/key change.
+    key: activeRunId,
     intervalMs: 1500,
     stopWhen: run => RUN_TERMINAL_STATUSES.has(run.status),
   });
 
   // Once the polled run reaches a terminal state, stop polling and refresh the record/run lists.
+  // Depends on polledRun?.id, not just its status: every Discovery run today completes
+  // synchronously, so two consecutive runs both resolve with the exact same status string
+  // ('succeeded') on their very first poll — a status-only dependency would never re-fire for
+  // the second run, leaving activeRunId (and so the status card) stuck on the first one.
   useEffect(() => {
     if (polledRun && activeRunId === polledRun.id && RUN_TERMINAL_STATUSES.has(polledRun.status)) {
       setActiveRunId(null);
@@ -131,7 +139,7 @@ export function ProjectDetailPage() {
       refetchRuns();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [polledRun?.status]);
+  }, [polledRun?.id, polledRun?.status]);
 
   if (projectLoading) return <LoadingState label="Loading project…" />;
   if (projectError) return <ErrorState message={projectError} onRetry={refetchProject} />;

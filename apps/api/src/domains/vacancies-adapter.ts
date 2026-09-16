@@ -30,8 +30,8 @@ import {
   type CrawlOptions, type SourceSearchProvider,
 } from '@discovery-platform/core';
 import {
-  extractVacancy, vacanciesCrawlerConfig, vacancyCompletenessScore, findVacancyDuplicates, buildBranchSearchQuery,
-  createTsJobSpySourceProvider,
+  extractVacancy, vacanciesCrawlerConfig, vacancyCompletenessScore, findVacancyDuplicates,
+  buildBranchSearchQuery, buildJobBoardSearchTerm, createTsJobSpySourceProvider,
   type VacancyFacts, type VacancySourceProvider, type VacancySourceCandidate, type VacancySourceMeta,
 } from '@discovery-platform/domain-vacancies';
 import type { DomainAdapter, ExistingRecordSnapshot, DiscoveryRunInput, DiscoveryRunOutcome } from '../domain-registry.js';
@@ -233,7 +233,14 @@ async function runBranchDiscovery(
   input: Extract<DiscoveryRunInput, { mode: 'branch' }>,
   overrides: VacanciesCrawlOverrides,
 ): Promise<DiscoveryRunOutcome> {
-  const searchQuery = buildBranchSearchQuery({ branch: input.branch, region: input.region, keywords: input.keywords });
+  // Two distinct queries, never one string reused for both: a web-search engine (Brave) gets the
+  // generic "vacature vacatures jobs" discovery hints plus region folded into the query text (it
+  // has no separate location parameter); a job board (ts-jobspy) gets only the user's own branch
+  // + keywords, verbatim — no hints, no region (region goes through its own dedicated location/
+  // country parameters instead — see sources/location.ts). Neither ever rewords/translates the
+  // user's branch ("Beveiliging" must never silently become "Security").
+  const webSearchQuery = buildBranchSearchQuery({ branch: input.branch, region: input.region, keywords: input.keywords });
+  const jobBoardSearchTerm = buildJobBoardSearchTerm({ branch: input.branch, keywords: input.keywords });
   const sources: VacancySourceMeta[] = [];
   const freshFacts: VacancyFacts[] = [];
   let candidatesFound = 0;
@@ -244,7 +251,7 @@ async function runBranchDiscovery(
   // from still contributing.
   try {
     const jobBoard = resolveJobBoardProvider(overrides);
-    const jobBoardResult = await jobBoard.findCandidates({ query: searchQuery, location: input.region, resultsWanted: JOB_BOARD_RESULTS_WANTED_PER_SITE });
+    const jobBoardResult = await jobBoard.findCandidates({ query: jobBoardSearchTerm, location: input.region, resultsWanted: JOB_BOARD_RESULTS_WANTED_PER_SITE });
     sources.push(...jobBoardResult.meta);
     candidatesFound += jobBoardResult.candidates.length;
     for (const candidate of jobBoardResult.candidates) {
@@ -262,7 +269,7 @@ async function runBranchDiscovery(
     const start = Date.now();
     try {
       const rawCandidates = await searchProvider.search({
-        query: searchQuery, country: BRANCH_SEARCH_COUNTRY, language: BRANCH_SEARCH_LANGUAGE, count: MAX_BRANCH_CANDIDATES,
+        query: webSearchQuery, country: BRANCH_SEARCH_COUNTRY, language: BRANCH_SEARCH_LANGUAGE, count: MAX_BRANCH_CANDIDATES,
       });
       const candidates = normalizeCandidateUrls(rawCandidates, { maxCandidates: MAX_BRANCH_CANDIDATES });
       candidatesFound += candidates.length;
@@ -293,7 +300,8 @@ async function runBranchDiscovery(
     records,
     stats: {
       searchMode: 'branch',
-      searchQuery,
+      searchQuery: webSearchQuery,
+      jobBoardSearchTerm,
       branch: input.branch,
       region: input.region,
       keywords: input.keywords,

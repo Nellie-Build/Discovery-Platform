@@ -99,7 +99,9 @@ test('"Security" + "Zuid-Holland" (Security + Zuid-Holland) is turned into the r
   });
   const adapter = createVacanciesAdapter({ jobBoardProvider: provider, transport: async () => { throw new Error('enrichment must not be needed for a complete candidate'); } });
   const outcome = await adapter.runDiscovery(branchInput({ branch: 'Security', region: 'Zuid-Holland', keywords: 'beveiliger security officer' }));
-  assert.equal(calls[0].query, 'vacature vacatures jobs Security beveiliger security officer Zuid-Holland');
+  // The job board never gets the web-search hints, and region is never folded into the search
+  // term — it goes through the query's own dedicated `location` field instead.
+  assert.equal(calls[0].query, 'Security beveiliger security officer');
   assert.equal(calls[0].location, 'Zuid-Holland');
   assert.equal(outcome.records.length, 1);
   assert.equal(outcome.records[0].displayName, 'Security Officer');
@@ -107,6 +109,46 @@ test('"Security" + "Zuid-Holland" (Security + Zuid-Holland) is turned into the r
   assert.equal(outcome.stats.branch, 'Security');
   assert.equal(outcome.stats.region, 'Zuid-Holland');
   assert.equal(outcome.stats.keywords, 'beveiliger security officer');
+  assert.equal(outcome.stats.jobBoardSearchTerm, 'Security beveiliger security officer');
+  // The web-search (Brave) query, kept separate, still gets the discovery hints + region.
+  assert.equal(outcome.stats.searchQuery, 'vacature vacatures jobs Security beveiliger security officer Zuid-Holland');
+});
+
+test('Beveiliging + Zuid-Holland + Nederland: the job board receives country="netherlands" and an English location, never the raw Dutch region text', async () => {
+  const { provider, calls } = fakeJobBoardProvider({
+    candidates: [jobBoardCandidate({ title: 'Beveiliger', company: 'Acme Security', location: 'Amsterdam', sourceUrl: 'https://indeed.example/job/2' })],
+    meta: [{ provider: 'ts-jobspy', site: 'indeed', status: 'ok', candidates: 1, durationMs: 500, error: null }],
+  });
+  const adapter = createVacanciesAdapter({ jobBoardProvider: provider });
+  await adapter.runDiscovery(branchInput({ branch: 'Beveiliging', region: 'Nederland', keywords: 'beveiliger security officer' }));
+  assert.equal(calls[0].query, 'Beveiliging beveiliger security officer');
+  assert.ok(!calls[0].query.includes('Security'), '"Beveiliging" must never be silently replaced by "Security"');
+  assert.equal(calls[0].location, 'Nederland'); // the raw region is handed to the provider, which normalizes it internally
+});
+
+// ─── Per-jobboard statistics stay visible (Indeed vs. LinkedIn separately) ──────────────────────
+
+test('stats.sources reports Indeed and LinkedIn separately (status, candidates, durationMs, error) — not merged into one combined "ts-jobspy" entry, so it is visible which specific board did or didn\'t honor the location filter', async () => {
+  const { provider } = fakeJobBoardProvider({
+    candidates: [jobBoardCandidate({ title: 'Beveiliger', company: 'Acme Security', location: 'Amsterdam', sourceUrl: 'https://indeed.example/job/1' })],
+    meta: [
+      { provider: 'ts-jobspy', site: 'indeed', status: 'ok', candidates: 5, durationMs: 620, error: null },
+      { provider: 'ts-jobspy', site: 'linkedin', status: 'error', candidates: 0, durationMs: 310, error: 'RateLimitException: linkedin rate limited' },
+    ],
+  });
+  const adapter = createVacanciesAdapter({ jobBoardProvider: provider });
+  const outcome = await adapter.runDiscovery(branchInput());
+  const indeedMeta = outcome.stats.sources.find(s => s.provider === 'ts-jobspy' && s.site === 'indeed');
+  const linkedinMeta = outcome.stats.sources.find(s => s.provider === 'ts-jobspy' && s.site === 'linkedin');
+  assert.ok(indeedMeta, 'Indeed must have its own separate stats.sources entry');
+  assert.ok(linkedinMeta, 'LinkedIn must have its own separate stats.sources entry');
+  assert.equal(indeedMeta.status, 'ok');
+  assert.equal(indeedMeta.candidates, 5);
+  assert.equal(indeedMeta.durationMs, 620);
+  assert.equal(indeedMeta.error, null);
+  assert.equal(linkedinMeta.status, 'error');
+  assert.equal(linkedinMeta.candidates, 0);
+  assert.match(linkedinMeta.error, /rate limited/);
 });
 
 // ─── Multiple sources, failure isolation ────────────────────────────────────────────────────────
@@ -310,7 +352,8 @@ test('region is optional: a branch search without a region still builds a valid 
   });
   const adapter = createVacanciesAdapter({ jobBoardProvider: jobBoard.provider });
   const outcome = await adapter.runDiscovery(branchInput({ region: null }));
-  assert.equal(jobBoard.calls[0].query, 'vacature vacatures jobs Security');
+  assert.equal(jobBoard.calls[0].query, 'Security');
+  assert.equal(jobBoard.calls[0].location, null);
   assert.equal(outcome.stats.region, null);
   assert.equal(outcome.records.length, 1);
 });
