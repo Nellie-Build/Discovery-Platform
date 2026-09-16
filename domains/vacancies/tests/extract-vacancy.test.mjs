@@ -73,9 +73,9 @@ test('B: a vacancy without JSON-LD is still recognized from reliable HTML/text l
   const results = extractVacancy(page);
   assert.equal(results.length, 1);
   const [facts] = results;
-  // The page's own <h1> ("Magazijnmedewerker") is preferred over the <title> tag, which often
-  // carries an unrelated site-wide suffix on a real site.
-  assert.equal(facts.title, 'Magazijnmedewerker');
+  // No JSON-LD and no itemprop="title" on this fixture, so the <title> tag wins over the <h1> —
+  // see the dedicated title-priority tests below for why a bare <h1> is only a last resort.
+  assert.equal(facts.title, 'Vacature: Magazijnmedewerker');
   assert.equal(facts.location, 'Rotterdam');
   assert.equal(facts.salary, '€2.600 - €2.900 per maand');
   assert.equal(facts.hours, '32-40 uur');
@@ -107,7 +107,7 @@ test('D: a vacancy with no JSON-LD and no inline "Label: value" text is still re
   const results = extractVacancy(page);
   assert.equal(results.length, 1);
   const [facts] = results;
-  assert.equal(facts.title, 'Financieel Medewerker'); // <h1>, preferred over <title>
+  assert.equal(facts.title, 'Vacature: Financieel Medewerker - Werken bij Voorbeeldbedrijf'); // <title> tag, no better source available
   assert.equal(facts.location, 'Eindhoven'); // <dt>Locatie</dt><dd>Eindhoven</dd>
   assert.equal(facts.hours, '36 uur per week'); // <dt>Uren</dt><dd>...</dd>
   assert.equal(facts.salary, '€3.000 - €3.500 per maand'); // <th>Salaris</th><td>...</td>
@@ -141,4 +141,57 @@ test('a label element with no adjacent value, and a bare mention of a label word
   assert.equal(facts.location, null);
   assert.equal(facts.salary, '€3.000 per maand');
   assert.equal(facts.contactPerson, 'Anna Jansen');
+});
+
+// ─── Title priority regression: a real production incident on werkenbijdeoverheid.nl, where a
+// site-wide header <h1> ("Werken bij de Overheid") was picked up as the job title instead of the
+// actual function heading. Fixed by ranking <title> above a bare <h1>, and by rejecting any
+// heading that matches the page's own og:site_name meta tag or a delimiter-separated segment of
+// its own <title> — never a hardcoded site name or domain check. ──────────────────────────────
+
+test('a generic/site-wide <h1> (matching the page\'s own og:site_name) is never chosen as the title when there is no better source', async () => {
+  const page = await loadPage('job-only-generic-h1.html', 'https://careersite.example/vacatures/data-engineer');
+  const [facts] = extractVacancy(page);
+  assert.equal(facts.title, null);
+  assert.equal(facts.salary, '€3.500 - €4.200 per maand');
+});
+
+test('a usable, page-specific <h1> may still be used as a last resort when there is truly no better source (no JSON-LD, no itemprop="title", no <title> tag)', async () => {
+  const page = await loadPage('job-usable-h1-fallback.html', 'https://careersite.example/vacatures/data-engineer');
+  const [facts] = extractVacancy(page);
+  // The first, generic <h1> ("CareerSite", matching og:site_name) is skipped in favor of the
+  // second, page-specific one.
+  assert.equal(facts.title, 'Data Engineer');
+});
+
+test('JobPosting JSON-LD title always wins, even alongside a site-wide <h1 itemprop="name"> that could otherwise be mistaken for it', async () => {
+  const page = await loadPage('job-jsonld-generic-h1.html', 'https://careersite.example/vacatures/data-engineer');
+  const [facts] = extractVacancy(page);
+  assert.equal(facts.title, 'Data Engineer');
+  assert.equal(facts.company, 'Acme BV');
+});
+
+// ─── Additional generic semantic patterns for company/location ─────────────────────────────
+
+test('company and location are read from schema.org microdata (itemprop="hiringOrganization"/"name" and itemprop="jobLocation"/"addressLocality"/"addressRegion") when there is no JSON-LD', async () => {
+  const page = await loadPage('job-microdata.html', 'https://cloudcorp.example/vacatures/cloud-engineer');
+  const [facts] = extractVacancy(page);
+  assert.equal(facts.company, 'CloudCorp BV');
+  assert.equal(facts.location, 'Groningen');
+});
+
+test('a bare, unscoped itemprop="name" (not nested inside hiringOrganization) is never read as the company — the same ambiguous property caused the title regression above', async () => {
+  const page = await loadPage('job-bare-itemprop-name.html', 'https://example.test/vacatures/security-specialist');
+  const [facts] = extractVacancy(page);
+  assert.equal(facts.company, null);
+  assert.equal(facts.salary, '€4.000 - €5.000 per maand');
+});
+
+test('location, hours, salary and contract type are read from an accessible-name attribute (aria-label/title) on an icon element paired with its sibling value — the real pattern werkenbijdeoverheid.nl itself uses', async () => {
+  const page = await loadPage('job-aria-icons.html', 'https://www.werkenbijdeoverheid.nl/vacatures/platform-engineer');
+  const [facts] = extractVacancy(page);
+  assert.equal(facts.location, 'Apeldoorn');
+  assert.equal(facts.hours, '32 - 36 uur');
+  assert.equal(facts.salary, '€4.818 - €7.094 (bruto)');
+  assert.equal(facts.contractType, 'Arbeidsovereenkomst voor bepaalde tijd');
 });
