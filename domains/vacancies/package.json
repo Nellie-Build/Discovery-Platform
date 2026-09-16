@@ -17,7 +17,8 @@
     "test": "npm run build && node --test tests/*.test.mjs"
   },
   "dependencies": {
-    "@discovery-platform/core": "^0.1.0"
+    "@discovery-platform/core": "^0.1.0",
+    "ts-jobspy": "3.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.13.4",

@@ -70,3 +70,15 @@ test('routes/*.ts never import @discovery-platform/domain-* directly — only th
   }
   assert.deepEqual(offenders, []);
 });
+
+test('apps/api never imports ts-jobspy (or any job-board-scraper package) directly, anywhere — that dependency lives entirely inside domains/vacancies, behind its own VacancySourceProvider', async () => {
+  const files = await listTsFiles(SRC_DIR);
+  const offenders = [];
+  for (const file of files) {
+    const source = await readFile(file, 'utf8');
+    for (const spec of importSpecifiers(source)) {
+      if (spec === 'ts-jobspy' || spec.startsWith('ts-jobspy/')) offenders.push(`${file}: ${spec}`);
+    }
+  }
+  assert.deepEqual(offenders, []);
+});

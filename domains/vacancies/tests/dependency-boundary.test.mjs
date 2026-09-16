@@ -74,11 +74,11 @@ test('dependency boundary: domains/vacancies may depend on discovery-core (and c
     assert.deepEqual(offenders, []);
   });
 
-  await t.test('imports only @discovery-platform/core, cheerio types, and Node built-ins besides its own files', () => {
+  await t.test('imports only @discovery-platform/core, cheerio types, ts-jobspy (this domain\'s own job-board provider dependency — see src/sources/jobspy-source.ts), and Node built-ins besides its own files', () => {
     const offenders = [];
     for (const [file, source] of sources) {
       for (const spec of importSpecifiers(source)) {
-        if (spec.startsWith('.') || spec.startsWith('node:') || spec === '@discovery-platform/core' || spec === 'cheerio') continue;
+        if (spec.startsWith('.') || spec.startsWith('node:') || spec === '@discovery-platform/core' || spec === 'cheerio' || spec === 'ts-jobspy') continue;
         offenders.push(`${file}: ${spec}`);
       }
     }

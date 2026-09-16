@@ -23,6 +23,23 @@ export function fakeClock(startAt = 0) {
   return { now: () => now, sleep: async ms => { now += ms; } };
 }
 
+/** The default job-board provider every test gets unless it explicitly injects its own — an
+ * empty result, so no test that never meant to exercise branch/job-board behavior can ever
+ * accidentally call the real ts-jobspy package (no live Indeed/LinkedIn requests in this suite). */
+function emptyJobBoardProvider() {
+  return {
+    async findCandidates() {
+      return {
+        candidates: [],
+        meta: [
+          { provider: 'ts-jobspy', site: 'indeed', status: 'empty', candidates: 0, durationMs: 1, error: null },
+          { provider: 'ts-jobspy', site: 'linkedin', status: 'empty', candidates: 0, durationMs: 1, error: null },
+        ],
+      };
+    },
+  };
+}
+
 let emailCounter = 0;
 export function uniqueEmail() {
   emailCounter += 1;
@@ -39,12 +56,12 @@ export function uniqueEmail() {
  * running server, so a test can simulate two different logged-in users (or one anonymous
  * caller) at once — exactly what the workspace-isolation tests need.
  */
-export async function startTestApp({ pages, apiKey, searchProvider } = {}) {
+export async function startTestApp({ pages, apiKey, searchProvider, jobBoardProvider } = {}) {
   const db = new PGlite();
   await runMigrations(db);
 
   const domainRegistry = pages
-    ? { vacancies: createVacanciesAdapter({ transport: fakeSite(pages), clock: fakeClock(), searchProvider }) }
+    ? { vacancies: createVacanciesAdapter({ transport: fakeSite(pages), clock: fakeClock(), searchProvider, jobBoardProvider: jobBoardProvider ?? emptyJobBoardProvider() }) }
     : undefined;
   const app = createApp(db, {
     apiKey, domainRegistry,
