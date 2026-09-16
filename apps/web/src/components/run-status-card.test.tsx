@@ -33,4 +33,22 @@ describe('RunStatusCard', () => {
     expect(field).not.toBeNull();
     expect(field?.textContent).toContain('—');
   });
+
+  it('shows Branche/Regio/Kandidaatbronnen for a branch-search run', () => {
+    render(<RunStatusCard run={run({
+      stats: { searchMode: 'branch', branch: 'Security', region: 'Nederland', candidatesFound: 12, candidatesCrawled: 8, pagesVisited: 8, factsFound: 3, recordsCreated: 3 },
+    })} />);
+    expect(screen.getByText('Branche')).toBeInTheDocument();
+    expect(screen.getByText('Security')).toBeInTheDocument();
+    expect(screen.getByText('Regio')).toBeInTheDocument();
+    expect(screen.getByText('Nederland')).toBeInTheDocument();
+    expect(screen.getByText('Kandidaatbronnen')).toBeInTheDocument();
+    expect(screen.getByText('12')).toBeInTheDocument();
+  });
+
+  it('never shows Branche/Regio/Kandidaatbronnen for a website-mode run', () => {
+    render(<RunStatusCard run={run({ stats: { searchMode: 'website', pagesVisited: 10, factsFound: 5, recordsCreated: 3 } })} />);
+    expect(screen.queryByText('Branche')).not.toBeInTheDocument();
+    expect(screen.queryByText('Kandidaatbronnen')).not.toBeInTheDocument();
+  });
 });

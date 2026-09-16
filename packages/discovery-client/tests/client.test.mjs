@@ -72,6 +72,26 @@ test('runs.start posts the sourceUrl to /projects/:id/runs', async () => {
   } finally { restore(); }
 });
 
+test('runs.startBranchSearch posts branch/region/keywords to /projects/:id/runs, leaving runs.start\'s own sourceUrl request shape untouched', async () => {
+  const { calls, restore } = fakeFetch(() => jsonResponse(201, { id: 'run2', status: 'succeeded' }));
+  try {
+    const client = createApiClient({ baseUrl: 'http://api.test/api/v1' });
+    const run = await client.runs.startBranchSearch('project1', { branch: 'Security', region: 'Nederland' });
+    assert.equal(calls[0].url, 'http://api.test/api/v1/projects/project1/runs');
+    assert.deepEqual(JSON.parse(calls[0].init.body), { branch: 'Security', region: 'Nederland' });
+    assert.equal(run.status, 'succeeded');
+  } finally { restore(); }
+});
+
+test('runs.startBranchSearch works with region/keywords both omitted — only branch is required', async () => {
+  const { calls, restore } = fakeFetch(() => jsonResponse(201, { id: 'run3', status: 'succeeded' }));
+  try {
+    const client = createApiClient({ baseUrl: 'http://api.test/api/v1' });
+    await client.runs.startBranchSearch('project1', { branch: 'Security' });
+    assert.deepEqual(JSON.parse(calls[0].init.body), { branch: 'Security' });
+  } finally { restore(); }
+});
+
 test('auth.logout returns void for a 204 response without trying to parse a body', async () => {
   const { restore } = fakeFetch(() => ({ ok: true, status: 204, text: async () => '' }));
   try {

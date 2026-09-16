@@ -22,8 +22,24 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
     if (!project) throw notFound('Project not found.');
     await assertWorkspaceAccess(pool, req, project.workspace_id);
     res.locals.projectId = project.id;
-    const { sourceUrl } = req.body ?? {};
-    if (typeof sourceUrl !== 'string' || !sourceUrl.trim()) throw badRequest('invalid_source_url', 'sourceUrl is required.');
+    const body = req.body ?? {};
+    // Two request shapes, both backwards compatible with the original: { sourceUrl } (unchanged)
+    // starts a website crawl; { branch, region?, keywords? } starts a branch search. Which one a
+    // client sent is inferred from which field is present — no new required field on existing
+    // { sourceUrl }-only clients.
+    let discoveryInput: { mode: 'website'; sourceUrl: string } | { mode: 'branch'; branch: string; region: string | null; keywords: string | null };
+    if (typeof body.sourceUrl === 'string' && body.sourceUrl.trim()) {
+      discoveryInput = { mode: 'website', sourceUrl: body.sourceUrl.trim() };
+    } else if (typeof body.branch === 'string' && body.branch.trim()) {
+      discoveryInput = {
+        mode: 'branch',
+        branch: body.branch.trim(),
+        region: typeof body.region === 'string' && body.region.trim() ? body.region.trim() : null,
+        keywords: typeof body.keywords === 'string' && body.keywords.trim() ? body.keywords.trim() : null,
+      };
+    } else {
+      throw badRequest('invalid_source', 'sourceUrl or branch is required.');
+    }
     const adapter = domainRegistry[project.domain];
     if (!adapter) throw badRequest('unknown_domain', `No domain adapter registered for "${project.domain}".`);
 
@@ -33,10 +49,8 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
     let outcome;
     try {
       const existing = await records.listRecordsByProject(project.id, { domain: project.domain });
-      outcome = await adapter.runDiscovery({
-        sourceUrl: sourceUrl.trim(),
-        existingRecords: existing.map(record => ({ id: record.id, domainData: record.domain_data })),
-      });
+      const existingRecords = existing.map(record => ({ id: record.id, domainData: record.domain_data }));
+      outcome = await adapter.runDiscovery({ ...discoveryInput, existingRecords });
     } catch (error) {
       const failed = await runs.markFailed(run.id, error instanceof Error ? error.message : String(error));
       res.status(201).json({ ...failed, recordsCreated: 0 });

@@ -7,6 +7,6 @@ export const api = {
   auth: { register: vi.fn(), login: vi.fn(), logout: vi.fn(), me: vi.fn() },
   workspaces: { listMine: vi.fn(), get: vi.fn(), create: vi.fn() },
   projects: { listByWorkspace: vi.fn(), get: vi.fn(), create: vi.fn() },
-  runs: { start: vi.fn(), listByProject: vi.fn(), get: vi.fn() },
+  runs: { start: vi.fn(), startBranchSearch: vi.fn(), listByProject: vi.fn(), get: vi.fn() },
   records: { listByProject: vi.fn(), get: vi.fn() },
 };

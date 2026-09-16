@@ -3,4 +3,5 @@ export {
   ApiError,
   type PublicUser, type Workspace, type WorkspaceMembership, type Project,
   type DiscoveryRun, type DiscoveryRecord, type RecordSource, type RecordContact, type RecordWithDetails,
+  type BranchSearchInput,
 } from './types.js';

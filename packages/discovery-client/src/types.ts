@@ -31,6 +31,14 @@ export interface Project {
   updated_at: string;
 }
 
+/** Body for `runs.startBranchSearch` — the "search by branch" alternative to `runs.start`'s
+ * plain `sourceUrl`. `region` and `keywords` are both optional. */
+export interface BranchSearchInput {
+  branch: string;
+  region?: string;
+  keywords?: string;
+}
+
 export interface DiscoveryRun {
   id: string;
   project_id: string;

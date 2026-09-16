@@ -15,6 +15,10 @@ export {
 } from './crawler/website-crawler.js';
 export type { CrawlRecord, CrawlResult, CrawlStatus, ExtractedPage } from './crawler/types.js';
 export {
+  fetchAndExtractPage,
+  type SinglePageFetchOptions, type SinglePageFetchResult,
+} from './crawler/single-page.js';
+export {
   extractContacts, extractWhatsApp, extractWhatsAppText, mergeContacts, EMPTY_CONTACTS,
   type ExtractedContacts, type ContactNormalizers,
 } from './extract/contacts.js';
@@ -32,3 +36,11 @@ export {
   createGeminiVisionProvider, VISION_SAFETY_INSTRUCTIONS,
   type VisionProvider, type VisionAnalysisConfig, type GeminiVisionProviderOptions,
 } from './vision/provider.js';
+export {
+  createBraveSearchProvider,
+  type SourceSearchProvider, type SourceSearchInput, type SearchCandidate, type BraveSearchProviderOptions,
+} from './search/provider.js';
+export {
+  normalizeCandidateUrls,
+  type NormalizeCandidatesOptions,
+} from './search/candidates.js';

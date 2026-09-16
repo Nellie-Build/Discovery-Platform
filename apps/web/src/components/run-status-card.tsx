@@ -23,6 +23,7 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
 export function RunStatusCard({ run }: { run: DiscoveryRun }) {
   const stats = run.stats ?? {};
   const duration = formatDuration(run.started_at, run.completed_at);
+  const isBranchSearch = stats.searchMode === 'branch';
 
   return (
     <Card>
@@ -34,6 +35,9 @@ export function RunStatusCard({ run }: { run: DiscoveryRun }) {
         <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
           <Field label="Started" value={run.started_at ? new Date(run.started_at).toLocaleString() : null} />
           <Field label="Duration" value={duration} />
+          {isBranchSearch && <Field label="Branche" value={typeof stats.branch === 'string' ? stats.branch : null} />}
+          {isBranchSearch && <Field label="Regio" value={typeof stats.region === 'string' ? stats.region : null} />}
+          {isBranchSearch && <Field label="Kandidaatbronnen" value={typeof stats.candidatesFound === 'number' ? stats.candidatesFound : null} />}
           <Field label="Pages visited" value={typeof stats.pagesVisited === 'number' ? stats.pagesVisited : null} />
           <Field label="Records found" value={typeof stats.factsFound === 'number' ? stats.factsFound : null} />
           <Field label="New records" value={typeof stats.recordsCreated === 'number' ? stats.recordsCreated : null} />

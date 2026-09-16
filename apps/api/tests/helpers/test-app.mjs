@@ -39,12 +39,12 @@ export function uniqueEmail() {
  * running server, so a test can simulate two different logged-in users (or one anonymous
  * caller) at once — exactly what the workspace-isolation tests need.
  */
-export async function startTestApp({ pages, apiKey } = {}) {
+export async function startTestApp({ pages, apiKey, searchProvider } = {}) {
   const db = new PGlite();
   await runMigrations(db);
 
   const domainRegistry = pages
-    ? { vacancies: createVacanciesAdapter({ transport: fakeSite(pages), clock: fakeClock() }) }
+    ? { vacancies: createVacanciesAdapter({ transport: fakeSite(pages), clock: fakeClock(), searchProvider }) }
     : undefined;
   const app = createApp(db, {
     apiKey, domainRegistry,

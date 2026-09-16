@@ -7,6 +7,7 @@ import { usePolling } from '../hooks/use-polling';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input, Label, FieldError } from '../components/ui/input';
+import { SegmentedControl } from '../components/ui/segmented-control';
 import { Badge, statusBadgeTone } from '../components/ui/badge';
 import { LoadingState, ErrorState } from '../components/ui/states';
 import { RunStatusCard } from '../components/run-status-card';
@@ -15,8 +16,18 @@ import { getDomainRenderer } from '../domains/registry';
 
 const RUN_TERMINAL_STATUSES = new Set(['succeeded', 'failed']);
 
-function StartDiscoveryForm({ projectId, onStarted }: { projectId: string; onStarted: (run: DiscoveryRun) => void }) {
+type SearchMode = 'website' | 'branch';
+const SEARCH_MODE_OPTIONS = [
+  { value: 'website' as const, label: 'Website' },
+  { value: 'branch' as const, label: 'Branche' },
+];
+
+export function StartDiscoveryForm({ projectId, onStarted }: { projectId: string; onStarted: (run: DiscoveryRun) => void }) {
+  const [mode, setMode] = useState<SearchMode>('website');
   const [sourceUrl, setSourceUrl] = useState('');
+  const [branch, setBranch] = useState('');
+  const [region, setRegion] = useState('');
+  const [keywords, setKeywords] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -25,7 +36,13 @@ function StartDiscoveryForm({ projectId, onStarted }: { projectId: string; onSta
     setSubmitting(true);
     setError(null);
     try {
-      const run = await api.runs.start(projectId, sourceUrl);
+      const run = mode === 'website'
+        ? await api.runs.start(projectId, sourceUrl)
+        : await api.runs.startBranchSearch(projectId, {
+          branch,
+          ...(region.trim() ? { region: region.trim() } : {}),
+          ...(keywords.trim() ? { keywords: keywords.trim() } : {}),
+        });
       onStarted(run);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not start the Discovery run.');
@@ -38,15 +55,43 @@ function StartDiscoveryForm({ projectId, onStarted }: { projectId: string; onSta
     <Card>
       <CardHeader><CardTitle>Start Discovery</CardTitle></CardHeader>
       <CardContent>
-        <form onSubmit={handleSubmit} className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <div className="flex-1">
-            <Label htmlFor="source-url">Website URL</Label>
-            <Input
-              id="source-url" type="url" required placeholder="https://company.com/careers"
-              value={sourceUrl} onChange={e => setSourceUrl(e.target.value)}
-            />
-          </div>
-          <Button type="submit" disabled={submitting}>{submitting ? 'Starting…' : 'Start Discovery'}</Button>
+        <div className="mb-4">
+          <p className="mb-1.5 block text-sm font-medium text-slate-700">Zoeken via</p>
+          <SegmentedControl name="Zoeken via" options={SEARCH_MODE_OPTIONS} value={mode} onChange={setMode} />
+        </div>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+          {mode === 'website' ? (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <div className="flex-1">
+                <Label htmlFor="source-url">Website URL</Label>
+                <Input
+                  id="source-url" type="url" required placeholder="https://company.com/careers"
+                  value={sourceUrl} onChange={e => setSourceUrl(e.target.value)}
+                />
+              </div>
+              <Button type="submit" disabled={submitting}>{submitting ? 'Starting…' : 'Start Discovery'}</Button>
+            </div>
+          ) : (
+            <>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div>
+                  <Label htmlFor="branch">Branche</Label>
+                  <Input id="branch" required placeholder="Security" value={branch} onChange={e => setBranch(e.target.value)} />
+                </div>
+                <div>
+                  <Label htmlFor="region">Regio</Label>
+                  <Input id="region" placeholder="Nederland" value={region} onChange={e => setRegion(e.target.value)} />
+                </div>
+                <div>
+                  <Label htmlFor="keywords">Extra trefwoorden</Label>
+                  <Input id="keywords" placeholder="beveiliger security officer" value={keywords} onChange={e => setKeywords(e.target.value)} />
+                </div>
+              </div>
+              <div>
+                <Button type="submit" disabled={submitting}>{submitting ? 'Starting…' : 'Start Discovery'}</Button>
+              </div>
+            </>
+          )}
         </form>
         <FieldError>{error}</FieldError>
       </CardContent>
