@@ -55,15 +55,39 @@ export interface AdminProject extends Project {
   workspace_name: string;
 }
 
+/**
+ * How much a Discovery Run should try to do — every field is optional; the server fills in and
+ * clamps anything missing or out of range (see apps/api/src/discovery-run-config.ts — the
+ * frontend is never the security boundary). `searchBreadth` is a plain string ("focused" |
+ * "standard" | "broad" | "advanced" for the vacancies module today) — the Web App never hardcodes
+ * what each tier means, it only offers whatever the domain reports.
+ */
+export interface DiscoveryRunConfig {
+  targetRecords?: number;
+  searchBreadth?: string;
+  maxPages?: number;
+  maxCandidates?: number;
+  maxDurationMs?: number;
+  maxEnrichments?: number;
+  onlyNewRecords?: boolean;
+}
+
+/** Vacancy-module-specific search filters — opaque to apps/api, passed straight through to the
+ * domain adapter. `sources` only matters for branch mode (which providers to use); a website
+ * crawl only ever reads `postedWithinDays`. */
+export interface VacancySearchFilters {
+  postedWithinDays?: number;
+  sources?: string[];
+}
+
 /** Body for `runs.startBranchSearch` — the "search by branch" alternative to `runs.start`'s
- * plain `sourceUrl`. `region`, `keywords` and `searchBreadth` are all optional. `searchBreadth`
- * is a plain string ("focused" | "standard" | "broad" for the vacancies module today) — the Web
- * App never hardcodes what each tier means, it only offers whatever the domain reports. */
+ * plain `sourceUrl`. `region` and `keywords` are both optional. */
 export interface BranchSearchInput {
   branch: string;
   region?: string;
   keywords?: string;
-  searchBreadth?: string;
+  runConfig?: DiscoveryRunConfig;
+  filters?: VacancySearchFilters;
 }
 
 export interface DiscoveryRun {

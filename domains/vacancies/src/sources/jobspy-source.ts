@@ -43,6 +43,10 @@ function buildSalary(job: Job): string | null {
 function mapJobToCandidate(job: Job): VacancySourceCandidate {
   const description = text(job.description, 10_000);
   const email = job.emails[0] ?? null;
+  // job.datePosted is already a plain YYYY-MM-DD (ts-jobspy's own doc comment: "UTC calendar
+  // date of the posting instant, when the site reports one") — an explicit provider-reported
+  // date, never inferred here.
+  const postedDate = text(job.datePosted, 10);
   const facts: Partial<VacancyFacts> = {
     title: text(job.title),
     company: text(job.company),
@@ -54,6 +58,7 @@ function mapJobToCandidate(job: Job): VacancySourceCandidate {
     contactPerson: null,
     phone: null,
     email,
+    postedDate,
   };
   return {
     facts,
@@ -76,6 +81,12 @@ function mapSiteMeta(site: SiteMeta): VacancySourceMeta {
 export interface TsJobSpySourceProviderOptions {
   /** Jobs requested per site (not a total) — a conservative default, never unbounded. */
   resultsWanted?: number;
+  /** Which of the two working sites (see this file's own header comment) this provider instance
+   * actually queries — defaults to both, exactly like before this option existed. A caller that
+   * wants "Indeed only" or "LinkedIn only" as its own separately selectable source (see the
+   * vacancies module's own provider registry) constructs two instances, one per site, rather than
+   * this file ever needing to know about "source selection" as a concept itself. */
+  sites?: ScrapeOptions['sites'];
   /** Test-only injection point — never used in production, where the real ts-jobspy scrapeJobs
    * is always called. Mirrors the fetchImpl seam @discovery-platform/core's own providers use. */
   scrapeJobsImpl?: typeof scrapeJobs;
@@ -83,6 +94,7 @@ export interface TsJobSpySourceProviderOptions {
 
 export function createTsJobSpySourceProvider(options: TsJobSpySourceProviderOptions = {}): VacancySourceProvider {
   const scrape = options.scrapeJobsImpl ?? scrapeJobs;
+  const sites = options.sites?.length ? options.sites : JOB_BOARD_SITES;
   return {
     id: 'ts-jobspy',
     async findCandidates(query: VacancySourceQuery): Promise<VacancySourceResult> {
@@ -99,7 +111,7 @@ export function createTsJobSpySourceProvider(options: TsJobSpySourceProviderOpti
       // "fixed" by guessing which country a city belongs to.
       const { location, country } = normalizeJobBoardLocation(query.location);
       const result = await scrape({
-        sites: JOB_BOARD_SITES,
+        sites,
         searchTerm: query.query,
         location: location ?? undefined,
         country: country ?? undefined,

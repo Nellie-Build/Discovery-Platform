@@ -19,6 +19,11 @@ export interface VacancyFacts {
   contactPerson: string | null;
   phone: string | null;
   email: string | null;
+  /** ISO 8601 date (YYYY-MM-DD), only ever taken from an explicit structured source — JobPosting
+   * JSON-LD's own `datePosted`, a job-board provider's own reported posting date, or an explicit
+   * page date attribute (see extractPostedDate below). Never guessed or inferred from prose —
+   * absent when the source doesn't report one. */
+  postedDate: string | null;
   sourceUrl: string;
 }
 
@@ -458,8 +463,45 @@ export function extractJobPostingJsonLd($: CheerioAPI): Partial<VacancyFacts>[] 
     const description = text(n.description, 10_000);
     if (description) facts.description = stripHtml(description);
 
+    const postedDate = normalizeIsoDate(typeof n.datePosted === 'string' ? n.datePosted : null);
+    if (postedDate) facts.postedDate = postedDate;
+
     return facts;
   });
+}
+
+/** Accepts only an explicit, unambiguous calendar date — `YYYY-MM-DD`, or the date portion of a
+ * full ISO 8601 timestamp (`YYYY-MM-DDTHH:mm:ss...`). Never a relative phrase ("3 dagen geleden"),
+ * never a locale-specific format (`DD-MM-YYYY` is ambiguous with `MM-DD-YYYY`) — those would
+ * require guessing a convention this package has no business assuming. */
+function normalizeIsoDate(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw.trim());
+  if (!match) return null;
+  const [, year, month, day] = match;
+  const date = new Date(`${year}-${month}-${day}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * A generic, explicit-only DOM fallback for a posting date, used only when there is no JobPosting
+ * JSON-LD — schema.org microdata's own `itemprop="datePosted"` (on a `<meta content>` or a `<time
+ * datetime>` element), or a bare `<time datetime="...">` element. Both are standard, structural
+ * HTML/schema.org conventions, never a site-specific selector.
+ */
+function extractPostedDateDom($: CheerioAPI): string | null {
+  const metaScoped = $('[itemprop="datePosted"]').first();
+  if (metaScoped.length) {
+    const value = normalizeIsoDate(metaScoped.attr('content') ?? metaScoped.attr('datetime') ?? text(metaScoped.text()));
+    if (value) return value;
+  }
+  const time = $('time[datetime]').first();
+  if (time.length) {
+    const value = normalizeIsoDate(time.attr('datetime'));
+    if (value) return value;
+  }
+  return null;
 }
 
 /**
@@ -599,6 +641,7 @@ export function extractVacancyWithDiagnostic(page: CrawlPage): { facts: VacancyF
   const metadataBlockFacts = normalizeVacancyFacts(extractMetadataBlockDom(page.$, domTitle.el));
   const domDescription = extractDescriptionDom(page.$) ?? extractDescriptionDomFallback(page.$);
   const jsonLdFacts = extractJobPostingJsonLd(page.$);
+  const domPostedDate = extractPostedDateDom(page.$);
 
   function build(structured: Partial<VacancyFacts>): VacancyFacts {
     return {
@@ -612,6 +655,7 @@ export function extractVacancyWithDiagnostic(page: CrawlPage): { facts: VacancyF
       contactPerson: textFacts.contactPerson ?? domLabelFacts.contactPerson ?? null,
       phone: page.contacts.phone ?? null,
       email: page.contacts.email ?? null,
+      postedDate: structured.postedDate ?? domPostedDate ?? null,
       sourceUrl: page.url,
     };
   }

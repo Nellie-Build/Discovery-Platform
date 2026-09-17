@@ -3,7 +3,7 @@ import { ProjectsRepository, DiscoveryRunsRepository, DiscoveryRecordsRepository
 import { asyncHandler, badRequest, notFound } from '../http-errors.js';
 import { assertWorkspaceAccess } from '../workspace-access.js';
 import { assertModuleEnabled } from '../module-registry.js';
-import { defaultDomainRegistry, type DomainRegistry } from '../domain-registry.js';
+import { defaultDomainRegistry, resolveDiscoveryRunConfig, type DomainRegistry, type DiscoveryRunConfig } from '../domain-registry.js';
 
 /**
  * The one route that actually exercises the whole chain this phase exists to prove:
@@ -24,23 +24,29 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
     await assertWorkspaceAccess(pool, req, project.workspace_id);
     res.locals.projectId = project.id;
     const body = req.body ?? {};
+    // `runConfig` is never trusted as given — every field is clamped to its own absolute ceiling
+    // here, before the domain adapter ever sees it, regardless of what the frontend itself allows
+    // a user to type (see resolveDiscoveryRunConfig's own doc comment). `filters` is opaque,
+    // module-owned data apps/api never inspects — passed straight through to the adapter.
+    const runConfig: DiscoveryRunConfig = resolveDiscoveryRunConfig(
+      body.runConfig && typeof body.runConfig === 'object' ? body.runConfig : undefined,
+    );
+    const filters: Record<string, unknown> = body.filters && typeof body.filters === 'object' && !Array.isArray(body.filters) ? body.filters : {};
     // Two request shapes, both backwards compatible with the original: { sourceUrl } (unchanged)
     // starts a website crawl; { branch, region?, keywords? } starts a branch search. Which one a
     // client sent is inferred from which field is present — no new required field on existing
     // { sourceUrl }-only clients.
-    let discoveryInput: { mode: 'website'; sourceUrl: string } | { mode: 'branch'; branch: string; region: string | null; keywords: string | null; searchBreadth: string | null };
+    let discoveryInput: { mode: 'website'; sourceUrl: string; runConfig: DiscoveryRunConfig; filters: Record<string, unknown> }
+      | { mode: 'branch'; branch: string; region: string | null; keywords: string | null; runConfig: DiscoveryRunConfig; filters: Record<string, unknown> };
     if (typeof body.sourceUrl === 'string' && body.sourceUrl.trim()) {
-      discoveryInput = { mode: 'website', sourceUrl: body.sourceUrl.trim() };
+      discoveryInput = { mode: 'website', sourceUrl: body.sourceUrl.trim(), runConfig, filters };
     } else if (typeof body.branch === 'string' && body.branch.trim()) {
       discoveryInput = {
         mode: 'branch',
         branch: body.branch.trim(),
         region: typeof body.region === 'string' && body.region.trim() ? body.region.trim() : null,
         keywords: typeof body.keywords === 'string' && body.keywords.trim() ? body.keywords.trim() : null,
-        // A generic string, never validated against a domain-specific enum here — the domain
-        // adapter itself decides what breadth tiers exist and what an unrecognized one falls
-        // back to (see the vacancies module's own isSearchBreadth/DEFAULT_SEARCH_BREADTH).
-        searchBreadth: typeof body.searchBreadth === 'string' && body.searchBreadth.trim() ? body.searchBreadth.trim() : null,
+        runConfig, filters,
       };
     } else {
       throw badRequest('invalid_source', 'sourceUrl or branch is required.');

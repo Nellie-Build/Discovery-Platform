@@ -8,7 +8,7 @@ import type { VacancySourceProvider } from './types.js';
  * new provider later (another job board, a direct source) means registering it here, not editing
  * apps/api's own branch-discovery logic.
  */
-export type SearchBreadth = 'focused' | 'standard' | 'broad';
+export type SearchBreadth = 'focused' | 'standard' | 'broad' | 'advanced';
 
 export const DEFAULT_SEARCH_BREADTH: SearchBreadth = 'standard';
 
@@ -43,10 +43,15 @@ export const SEARCH_BREADTH_LIMITS: Record<SearchBreadth, SearchBreadthLimits> =
   standard: { maxCandidatesPerProvider: 10, maxTotalCandidates: 20, maxEnrichments: 10, providerTimeoutMs: 20_000 },
   // Every active provider, wider candidate limits, more enrichment.
   broad: { maxCandidatesPerProvider: 20, maxTotalCandidates: 40, maxEnrichments: 20, providerTimeoutMs: 30_000 },
+  // A purely informational fallback — in "advanced" mode the caller's own explicit
+  // DiscoveryRunConfig (targetRecords/maxCandidates/maxEnrichments) always takes precedence, so
+  // these numbers are never actually the operative caps; provider *selection* behaves like broad
+  // (every registered provider participates) unless the caller explicitly names `sources`.
+  advanced: { maxCandidatesPerProvider: 20, maxTotalCandidates: 40, maxEnrichments: 20, providerTimeoutMs: 30_000 },
 };
 
 export function isSearchBreadth(value: unknown): value is SearchBreadth {
-  return value === 'focused' || value === 'standard' || value === 'broad';
+  return value === 'focused' || value === 'standard' || value === 'broad' || value === 'advanced';
 }
 
 /** A plain, generic registry — never itself imports ts-jobspy or Brave; callers register already
@@ -55,9 +60,24 @@ export function isSearchBreadth(value: unknown): value is SearchBreadth {
 export function createVacancySourceProviderRegistry(registrations: VacancySourceProviderRegistration[]) {
   return {
     /** Every registered provider that participates in the given breadth tier, in registration
-     * order. */
+     * order. "advanced" behaves like "broad" — every provider is tier-eligible — since in
+     * advanced mode the caller's own explicit `sources` selection (see `providersByIds`) is what
+     * actually narrows things down, not the tier itself. */
     providersFor(breadth: SearchBreadth): VacancySourceProviderRegistration[] {
-      return registrations.filter(registration => registration.tiers.includes(breadth));
+      const tier = breadth === 'advanced' ? 'broad' : breadth;
+      return registrations.filter(registration => registration.tiers.includes(tier));
+    },
+    /** Every registered provider whose id is in `ids`, in registration order — used when a caller
+     * explicitly selects sources instead of relying on a breadth tier's own defaults. An id that
+     * doesn't match any registration is simply absent from the result (see the vacancies
+     * adapter's own reporting of an unknown/unavailable requested source). */
+    providersByIds(ids: string[]): VacancySourceProviderRegistration[] {
+      return registrations.filter(registration => ids.includes(registration.id));
+    },
+    /** Every registered provider id, regardless of tier — what "enabled providers" means for
+     * source-selection validation (see the vacancies adapter). */
+    allIds(): string[] {
+      return registrations.map(registration => registration.id);
     },
   };
 }

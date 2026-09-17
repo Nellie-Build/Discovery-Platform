@@ -73,7 +73,17 @@ function jobBoardCandidate({ title, company, location, description = 'A real vac
 }
 
 function branchInput(overrides = {}) {
-  return { mode: 'branch', branch: 'Security', region: 'Nederland', keywords: null, existingRecords: [], ...overrides };
+  const { runConfig, filters, ...rest } = overrides;
+  return {
+    mode: 'branch', branch: 'Security', region: 'Nederland', keywords: null, existingRecords: [],
+    runConfig: {
+      targetRecords: 50, searchBreadth: 'standard', maxPages: 25, maxCandidates: 100,
+      maxDurationMs: 180_000, maxEnrichments: 30, onlyNewRecords: true,
+      ...runConfig,
+    },
+    filters: filters ?? {},
+    ...rest,
+  };
 }
 
 test('website mode is completely unaffected: still a plain crawlWebsite() call, no search provider or job-board provider involved', async () => {
@@ -343,7 +353,7 @@ test('the maximum number of Brave candidates is respected even when the search p
   let fetchCount = 0;
   const transport = async () => { fetchCount++; return { status: 404, headers: { 'content-type': 'text/plain' }, body: Buffer.from('not found') }; };
   const adapter = createVacanciesAdapter({ jobBoardProvider: emptyJobBoardProvider(), searchProvider: provider, transport });
-  await adapter.runDiscovery(branchInput());
+  await adapter.runDiscovery(branchInput({ runConfig: { targetRecords: 10, maxCandidates: 10 } }));
   assert.equal(fetchCount, 10, 'never fetches more than the configured maximum');
 });
 
@@ -356,7 +366,7 @@ test('focused breadth: web search is never attempted even when a searchProvider 
   });
   const { provider: braveProvider, calls } = fakeSearchProvider([{ url: 'https://acme.example/vacatures/x', title: 'X', snippet: '...', source: 'brave' }]);
   const adapter = createVacanciesAdapter({ jobBoardProvider: jobBoard.provider, searchProvider: braveProvider });
-  const outcome = await adapter.runDiscovery(branchInput({ searchBreadth: 'focused' }));
+  const outcome = await adapter.runDiscovery(branchInput({ runConfig: { searchBreadth: 'focused' } }));
   assert.equal(calls.length, 0, 'brave must never be called at all for focused breadth');
   assert.ok(!outcome.stats.sources.some(s => s.provider === 'brave'));
   assert.equal(outcome.stats.searchBreadth, 'focused');
@@ -377,7 +387,7 @@ test('standard breadth (the default, unset) still calls web search when configur
 
 test('an unrecognized searchBreadth value falls back to standard, never crashes', async () => {
   const adapter = createVacanciesAdapter({ jobBoardProvider: emptyJobBoardProvider() });
-  const outcome = await adapter.runDiscovery(branchInput({ searchBreadth: 'unlimited' }));
+  const outcome = await adapter.runDiscovery(branchInput({ runConfig: { searchBreadth: 'unlimited' } }));
   assert.equal(outcome.stats.searchBreadth, 'standard');
 });
 
@@ -385,7 +395,7 @@ test('broad breadth requests more candidates per provider than focused/standard 
   const calls = [];
   const jobBoard = { async findCandidates(query) { calls.push(query); return { candidates: [], meta: [{ provider: 'ts-jobspy', site: 'indeed', status: 'empty', candidates: 0, durationMs: 1, error: null }] }; } };
   const adapter = createVacanciesAdapter({ jobBoardProvider: jobBoard });
-  await adapter.runDiscovery(branchInput({ searchBreadth: 'broad' }));
+  await adapter.runDiscovery(branchInput({ runConfig: { searchBreadth: 'broad', targetRecords: 1 } }));
   assert.equal(calls[0].resultsWanted, 20, 'broad breadth must request its own configured cap, never an unbounded amount');
 });
 

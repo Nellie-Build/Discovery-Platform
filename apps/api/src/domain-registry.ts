@@ -5,6 +5,10 @@
  * adapter file and adding one line here; no route changes, no database migration.
  */
 import { vacanciesAdapter } from './domains/vacancies-adapter.js';
+import type { DiscoveryRunConfig } from './discovery-run-config.js';
+
+export type { DiscoveryRunConfig } from './discovery-run-config.js';
+export { resolveDiscoveryRunConfig, ABSOLUTE_MAX_TARGET_RECORDS, ABSOLUTE_MAX_PAGES, ABSOLUTE_MAX_CANDIDATES, ABSOLUTE_MAX_DURATION_MS, ABSOLUTE_MAX_ENRICHMENTS } from './discovery-run-config.js';
 
 export type DomainRegistry = Record<string, DomainAdapter>;
 
@@ -34,15 +38,25 @@ export interface DiscoveryRunOutcome {
  * layer sitting in front of the same crawler/extractor every mode ultimately shares. A domain
  * adapter that has no notion of branch search yet can simply never see the `branch` variant, since
  * apps/api only ever constructs it when a request explicitly asks for it (see routes/runs.ts).
+ * `runConfig` is always present and always already resolved/clamped — every domain adapter can
+ * trust its numbers outright. Module-specific filters (e.g. vacancies' own postedWithinDays/
+ * sources) travel as a separate, domain-owned `filters` object apps/api never inspects.
  */
 export type DiscoveryRunInput =
-  | { mode: 'website'; sourceUrl: string; existingRecords: ExistingRecordSnapshot[] }
+  | {
+      mode: 'website'; sourceUrl: string; runConfig: DiscoveryRunConfig;
+      /** Opaque to apps/api — passed straight through to the domain adapter. For vacancies today:
+       * `{ postedWithinDays?: number }` (a website crawl has no branch/keywords/sources to
+       * filter on, but a JobPosting JSON-LD page can still carry an explicit postedDate). */
+      filters: Record<string, unknown>;
+      existingRecords: ExistingRecordSnapshot[];
+    }
   | {
       mode: 'branch'; branch: string; region: string | null; keywords: string | null;
-      /** "focused" | "standard" | "broad" — generic on purpose, apps/api never hardcodes what
-       * each tier means (see the vacancies module's own SearchBreadth/SEARCH_BREADTH_LIMITS).
-       * null means "the domain's own default". */
-      searchBreadth: string | null;
+      runConfig: DiscoveryRunConfig;
+      /** Opaque to apps/api — passed straight through to the domain adapter. For vacancies today:
+       * `{ postedWithinDays?: number; sources?: string[] }`. */
+      filters: Record<string, unknown>;
       existingRecords: ExistingRecordSnapshot[];
     };
 

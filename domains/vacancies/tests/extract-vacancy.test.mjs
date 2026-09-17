@@ -385,3 +385,43 @@ test('a bare mention of an hours-shaped or contract-type-shaped value elsewhere 
   assert.equal(facts.hours, null);
   assert.equal(facts.contractType, null);
 });
+
+// ─── postedDate ─────────────────────────────────────────────────────────────────────────────────
+
+test('postedDate is read from JobPosting JSON-LD\'s own datePosted, verbatim', () => {
+  const page = pageFromHtml(
+    '<html><head><title>Vacature</title><script type="application/ld+json">' +
+    JSON.stringify({ '@context': 'https://schema.org/', '@type': 'JobPosting', title: 'Consultant', datePosted: '2026-08-20T09:00:00+02:00' }) +
+    '</script></head><body><h1>Consultant</h1></body></html>',
+    'https://example.test/vacatures/consultant',
+  );
+  const [facts] = extractVacancy(page);
+  assert.equal(facts.postedDate, '2026-08-20');
+});
+
+test('postedDate is read from a generic itemprop="datePosted" microdata element when there is no JSON-LD', () => {
+  const page = pageFromHtml(
+    '<html><head><title>Vacature - ACME</title><meta property="og:site_name" content="ACME"/></head><body>\n' +
+    '<h1>Consultant</h1>\n' +
+    '<meta itemprop="datePosted" content="2026-08-21"/>\n' +
+    '<p>Salaris: €3.000 per maand</p>\n' +
+    '<p>Contactpersoon: Anna Jansen</p>\n' +
+    '</body></html>',
+    'https://example.test/vacatures/consultant',
+  );
+  const [facts] = extractVacancy(page);
+  assert.equal(facts.postedDate, '2026-08-21');
+});
+
+test('a page with no explicit posted-date signal at all leaves postedDate null, never guessed', () => {
+  const page = pageFromHtml(
+    '<html><head><title>Vacature - ACME</title><meta property="og:site_name" content="ACME"/></head><body>\n' +
+    '<h1>Consultant</h1>\n' +
+    '<p>Salaris: €3.000 per maand</p>\n' +
+    '<p>Contactpersoon: Anna Jansen</p>\n' +
+    '</body></html>',
+    'https://example.test/vacatures/consultant',
+  );
+  const [facts] = extractVacancy(page);
+  assert.equal(facts.postedDate, null);
+});

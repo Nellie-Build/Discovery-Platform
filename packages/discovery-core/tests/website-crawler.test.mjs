@@ -207,3 +207,116 @@ test('reports a failed status when the site is reachable but every page request 
   assert.equal(result.pagesVisited, 1);
   assert.match(result.error, /socket hang up/);
 });
+
+// ─── Configurable limits and stopReason ─────────────────────────────────────────────────────────
+
+function manyPages(count) {
+  const fillers = Array.from({ length: count }, (_, i) => `/page${i}`);
+  const pages = {
+    '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nAllow: /' },
+    '/sitemap.xml': { contentType: 'application/xml', body: '<urlset></urlset>' },
+    '/': { body: html(fillers.map(p => [p])) },
+  };
+  for (const p of fillers) pages[p] = {};
+  return pages;
+}
+
+test('maxPages is caller-configurable — no longer hardcoded to 10 — and reports stopReason "page_limit" when it caps the crawl', async () => {
+  const result = await crawlWebsite('https://example.com', {
+    transport: site(manyPages(15)), clock: fakeClock(), contactNormalizers, extract: titleExtract, maxPages: 3,
+  });
+  assert.equal(result.pagesVisited, 3);
+  assert.equal(result.stopReason, 'page_limit');
+});
+
+test('maxPages can be raised well past the old hardcoded 10 — a caller asking for 25 pages can get up to 25 when enough candidates exist', async () => {
+  const result = await crawlWebsite('https://example.com', {
+    transport: site(manyPages(40)), clock: fakeClock(), contactNormalizers, extract: titleExtract, maxPages: 25,
+  });
+  assert.equal(result.pagesVisited, 25);
+  assert.equal(result.stopReason, 'page_limit');
+});
+
+test('a crawl that runs out of candidates before any limit reports stopReason "no_more_candidates"', async () => {
+  const pages = {
+    '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nAllow: /' },
+    '/sitemap.xml': { contentType: 'application/xml', body: '<urlset></urlset>' },
+    '/': { body: html([['/about']]) },
+    '/about': {},
+  };
+  const result = await crawlWebsite('https://example.com', {
+    transport: site(pages), clock: fakeClock(), contactNormalizers, extract: titleExtract, maxPages: 50,
+  });
+  assert.equal(result.pagesVisited, 2);
+  assert.equal(result.stopReason, 'no_more_candidates');
+});
+
+test('candidatesDiscovered counts every distinct discovered URL, not just visited pages', async () => {
+  const pages = manyPages(15);
+  const result = await crawlWebsite('https://example.com', {
+    transport: site(pages), clock: fakeClock(), contactNormalizers, extract: titleExtract, maxPages: 3,
+  });
+  // The homepage links to all 15 fillers in one go — all discovered even though only 3 are visited.
+  assert.equal(result.candidatesDiscovered, 16); // homepage itself + 15 filler links
+  assert.equal(result.pagesVisited, 3);
+});
+
+test('maxCandidates is caller-configurable and reports stopReason "candidate_limit" when it drops a discoverable link', async () => {
+  const result = await crawlWebsite('https://example.com', {
+    transport: site(manyPages(20)), clock: fakeClock(), contactNormalizers, extract: titleExtract,
+    maxPages: 100, maxCandidates: 5,
+  });
+  assert.equal(result.candidateLimitReached, true);
+  assert.equal(result.stopReason, 'candidate_limit');
+  // Only ever visits what fit in the candidate queue (homepage + at most 5 queued fillers).
+  assert.ok(result.pagesVisited <= 6);
+});
+
+test('shouldContinue lets a caller stop the crawl early once its own target is reached, reporting stopReason "target_reached"', async () => {
+  const result = await crawlWebsite('https://example.com', {
+    transport: site(manyPages(15)), clock: fakeClock(), contactNormalizers, extract: titleExtract,
+    maxPages: 50,
+    shouldContinue: extractedSoFar => extractedSoFar.length < 3,
+  });
+  assert.equal(result.pagesVisited, 3);
+  assert.equal(result.stopReason, 'target_reached');
+});
+
+test('shouldContinue never causes a premature stop when the caller keeps returning true — behaves exactly as if it were never passed', async () => {
+  const result = await crawlWebsite('https://example.com', {
+    transport: site(manyPages(5)), clock: fakeClock(), contactNormalizers, extract: titleExtract,
+    maxPages: 50, shouldContinue: () => true,
+  });
+  assert.equal(result.pagesVisited, 6);
+  assert.equal(result.stopReason, 'no_more_candidates');
+});
+
+test('a 429 response reports stopReason "rate_limited"', async () => {
+  const pages = {
+    '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nAllow: /' },
+    '/sitemap.xml': { contentType: 'application/xml', body: '<urlset></urlset>' },
+    '/': { status: 429, body: 'slow down' },
+  };
+  const result = await crawlWebsite('https://example.com', { transport: site(pages), clock: fakeClock(), contactNormalizers, extract: titleExtract });
+  assert.equal(result.stopReason, 'rate_limited');
+});
+
+test('a fully robots-blocked site reports stopReason "robots_blocked"', async () => {
+  const pages = {
+    '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nDisallow: /' },
+  };
+  const result = await crawlWebsite('https://example.com', { transport: site(pages), clock: fakeClock(), contactNormalizers, extract: titleExtract });
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.stopReason, 'robots_blocked');
+});
+
+test('exceeding maxDurationMs reports stopReason "time_limit"', async () => {
+  let now = 0;
+  // Every sleep() jumps virtual time far past any reasonable maxDurationMs, so the very next
+  // request is refused for exceeding the crawl's own time budget.
+  const clock = { now: () => now, sleep: async ms => { now += ms + 200_000; } };
+  const result = await crawlWebsite('https://example.com', {
+    transport: site(manyPages(10)), clock, contactNormalizers, extract: titleExtract, maxDurationMs: 250_000,
+  });
+  assert.equal(result.stopReason, 'time_limit');
+});

@@ -2,10 +2,32 @@ import type { DiscoveryRun } from '@discovery-platform/client';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge, statusBadgeTone } from './ui/badge';
 
+function formatSeconds(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
 function formatDuration(startedAt: string | null, completedAt: string | null): string | null {
   if (!startedAt || !completedAt) return null;
-  const seconds = Math.max(0, Math.round((new Date(completedAt).getTime() - new Date(startedAt).getTime()) / 1000));
-  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return formatSeconds((new Date(completedAt).getTime() - new Date(startedAt).getTime()) / 1000);
+}
+
+/** Dutch labels for discovery-core's/the vacancies adapter's own `stopReason` codes (see
+ * packages/discovery-core's CrawlStopReason and vacancies-adapter.ts's own branch-mode
+ * stopReason) — the one place a stop reason code is translated for display. */
+const STOP_REASON_LABELS: Record<string, string> = {
+  target_reached: 'Doel bereikt',
+  no_more_candidates: 'Geen kandidaten meer',
+  page_limit: 'Maximale paginalimiet bereikt',
+  candidate_limit: 'Maximale kandidatenlimiet bereikt',
+  time_limit: 'Maximale tijdslimiet bereikt',
+  rate_limited: 'Snelheidslimiet van de bron bereikt',
+  robots_blocked: 'Geblokkeerd door robots.txt',
+  provider_exhausted: 'Bron uitgeput',
+};
+
+function stopReasonLabel(stopReason: unknown): string | null {
+  return typeof stopReason === 'string' ? STOP_REASON_LABELS[stopReason] ?? stopReason : null;
 }
 
 interface SourceMeta {
@@ -65,8 +87,13 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
  * duplicates), or the error message when it failed. */
 export function RunStatusCard({ run }: { run: DiscoveryRun }) {
   const stats = run.stats ?? {};
-  const duration = formatDuration(run.started_at, run.completed_at);
+  const duration = typeof stats.durationMs === 'number' ? formatSeconds(stats.durationMs / 1000) : formatDuration(run.started_at, run.completed_at);
   const isBranchSearch = stats.searchMode === 'branch';
+  const duplicates = typeof stats.duplicates === 'number'
+    ? stats.duplicates
+    : (stats.duplicatesWithinCrawl ?? stats.duplicatesAgainstExisting) !== undefined
+      ? Number(stats.duplicatesWithinCrawl ?? 0) + Number(stats.duplicatesAgainstExisting ?? 0)
+      : null;
 
   return (
     <Card>
@@ -77,22 +104,28 @@ export function RunStatusCard({ run }: { run: DiscoveryRun }) {
       <CardContent>
         <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
           <Field label="Started" value={run.started_at ? new Date(run.started_at).toLocaleString() : null} />
-          <Field label="Duration" value={duration} />
+          <Field label="Duur" value={duration} />
           {isBranchSearch && <Field label="Branche" value={typeof stats.branch === 'string' ? stats.branch : null} />}
           {isBranchSearch && <Field label="Regio" value={typeof stats.region === 'string' ? stats.region : null} />}
           {isBranchSearch && <Field label="Kandidaatbronnen" value={typeof stats.candidatesFound === 'number' ? stats.candidatesFound : null} />}
           <Field label="Pages visited" value={typeof stats.pagesVisited === 'number' ? stats.pagesVisited : null} />
           <Field label="Records found" value={typeof stats.factsFound === 'number' ? stats.factsFound : null} />
           <Field label="New records" value={typeof stats.recordsCreated === 'number' ? stats.recordsCreated : null} />
-          <Field
-            label="Duplicates"
-            value={
-              (stats.duplicatesWithinCrawl ?? stats.duplicatesAgainstExisting) !== undefined
-                ? Number(stats.duplicatesWithinCrawl ?? 0) + Number(stats.duplicatesAgainstExisting ?? 0)
-                : null
-            }
-          />
+          <Field label="Duplicates" value={duplicates} />
         </dl>
+        {/* The run's own configured target and how it actually progressed — see
+            DiscoveryRunConfig/`stats.stopReason`. Shown separately from the crawl-detail fields
+            above so both "target reached" and "target not reached" read clearly at a glance. */}
+        <div className="mt-4 border-t border-slate-100 pt-4">
+          <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Voortgang</h3>
+          <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+            <Field label="Doel" value={typeof stats.targetRecords === 'number' ? stats.targetRecords : null} />
+            <Field label="Gevonden" value={typeof stats.recordsAccepted === 'number' ? stats.recordsAccepted : null} />
+            <Field label="Kandidaten" value={typeof stats.candidatesDiscovered === 'number' ? stats.candidatesDiscovered : null} />
+            <Field label="Verwerkt" value={typeof stats.candidatesProcessed === 'number' ? stats.candidatesProcessed : null} />
+            <Field label="Gestopt omdat" value={stopReasonLabel(stats.stopReason)} />
+          </dl>
+        </div>
         {isBranchSearch && Array.isArray(stats.sources) && <SourcesSection sources={stats.sources as SourceMeta[]} />}
         {run.status === 'failed' && run.error && (
           <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">

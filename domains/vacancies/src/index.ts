@@ -24,6 +24,7 @@ export { VACANCY_POSTER_RESPONSE_SCHEMA, VACANCY_POSTER_PROMPT, parseVacancyPost
 export { vacancyVisionConfig, createVacancyVisionProvider } from './vision/provider.js';
 export { buildBranchSearchQuery, buildJobBoardSearchTerm, BRANCH_SEARCH_HINTS, type BranchSearchInput } from './source-discovery.js';
 export { scoreVacancyRelevance, type VacancyRelevanceQuery, type VacancyRelevanceResult } from './relevance.js';
+export { isWithinPostedWindow, type PostedDateFilterOptions } from './date-filter.js';
 export type {
   VacancySourceProvider, VacancySourceQuery, VacancySourceCandidate, VacancySourceMeta, VacancySourceResult,
 } from './sources/types.js';

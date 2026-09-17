@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ApiError, type DiscoveryRun } from '@discovery-platform/client';
+import { ApiError, type DiscoveryRun, type DiscoveryRunConfig, type VacancySearchFilters } from '@discovery-platform/client';
 import { api } from '../lib/api';
 import { useAsync } from '../hooks/use-async';
 import { usePolling } from '../hooks/use-polling';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input, Label, FieldError } from '../components/ui/input';
-import { SegmentedControl } from '../components/ui/segmented-control';
+import { SegmentedControl, type SegmentedControlOption } from '../components/ui/segmented-control';
 import { Badge, statusBadgeTone } from '../components/ui/badge';
 import { Dialog } from '../components/ui/dialog';
 import { LoadingState, ErrorState } from '../components/ui/states';
@@ -76,13 +76,96 @@ const SEARCH_MODE_OPTIONS = [
 // Generic search-breadth tiers — never a hardcoded provider count in this UI. What each tier
 // actually does (which providers run, which caps apply) is entirely the domain module's own
 // decision server-side (see domains/vacancies/src/sources/registry.ts's SEARCH_BREADTH_LIMITS);
-// this form only ever passes the tier's id through.
-type SearchBreadthOption = 'focused' | 'standard' | 'broad';
-const SEARCH_BREADTH_OPTIONS = [
-  { value: 'focused' as const, label: 'Focused' },
-  { value: 'standard' as const, label: 'Standard' },
-  { value: 'broad' as const, label: 'Broad' },
+// this form only ever passes the tier's id through. 'advanced' additionally reveals the raw
+// DiscoveryRunConfig numeric fields below — see AdvancedSettings.
+type SearchModeOption = 'focused' | 'standard' | 'broad' | 'advanced';
+const ZOEKMODUS_OPTIONS: SegmentedControlOption<SearchModeOption>[] = [
+  { value: 'focused', label: 'Focused' },
+  { value: 'standard', label: 'Standard' },
+  { value: 'broad', label: 'Broad' },
+  { value: 'advanced', label: 'Geavanceerd' },
 ];
+
+type TargetPreset = '10' | '25' | '50' | '100' | '250' | '500' | 'custom';
+const TARGET_PRESET_OPTIONS: SegmentedControlOption<TargetPreset>[] = [
+  { value: '10', label: '10' },
+  { value: '25', label: '25' },
+  { value: '50', label: '50' },
+  { value: '100', label: '100' },
+  { value: '250', label: '250' },
+  { value: '500', label: '500' },
+  { value: 'custom', label: 'Aangepast' },
+];
+
+type PostedWithinOption = 'all' | 'today' | '7' | '14' | '30';
+const POSTED_WITHIN_OPTIONS: SegmentedControlOption<PostedWithinOption>[] = [
+  { value: 'all', label: 'Alles' },
+  { value: 'today', label: 'Vandaag' },
+  { value: '7', label: 'Laatste 7 dagen' },
+  { value: '14', label: 'Laatste 14 dagen' },
+  { value: '30', label: 'Laatste 30 dagen' },
+];
+const POSTED_WITHIN_DAYS: Record<PostedWithinOption, number | undefined> = {
+  all: undefined, today: 1, '7': 7, '14': 14, '30': 30,
+};
+
+// Every vacancy source the branch-mode adapter knows how to select (see
+// apps/api/src/domains/vacancies-adapter.ts's own VACANCY_SOURCE_IDS) — kept in one place so
+// "everything checked" can be compared against the full set below.
+const VACANCY_SOURCE_OPTIONS: Array<{ id: 'indeed' | 'linkedin' | 'web_search'; label: string }> = [
+  { id: 'indeed', label: 'Indeed' },
+  { id: 'linkedin', label: 'LinkedIn' },
+  { id: 'web_search', label: 'Web Search (indien beschikbaar)' },
+];
+const ALL_VACANCY_SOURCE_IDS = VACANCY_SOURCE_OPTIONS.map(s => s.id);
+
+function Toggle({ id, checked, onChange, label }: { id: string; checked: boolean; onChange: (checked: boolean) => void; label: string }) {
+  return (
+    <div className="flex items-center gap-2.5">
+      <button
+        type="button" id={id} role="switch" aria-checked={checked} aria-label={label}
+        onClick={() => onChange(!checked)}
+        className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? 'bg-brand-600' : 'bg-slate-300'}`}
+      >
+        <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
+      </button>
+      <label htmlFor={id} className="text-sm text-slate-700">{label}</label>
+    </div>
+  );
+}
+
+/** targetRecords + maxPages/maxCandidates/maxDuration/maxEnrichments, only shown once the user
+ * picks Zoekmodus "Geavanceerd" — every field maps 1:1 to DiscoveryRunConfig (see
+ * apps/api/src/discovery-run-config.ts). Left blank, a field is simply omitted from the request
+ * and the server fills in (and, regardless, clamps) its own default — the frontend is never the
+ * security boundary, the ABSOLUTE_MAX_* server constants are. */
+function AdvancedSettings({ maxPages, setMaxPages, maxCandidates, setMaxCandidates, maxDurationSec, setMaxDurationSec, maxEnrichments, setMaxEnrichments }: {
+  maxPages: string; setMaxPages: (v: string) => void;
+  maxCandidates: string; setMaxCandidates: (v: string) => void;
+  maxDurationSec: string; setMaxDurationSec: (v: string) => void;
+  maxEnrichments: string; setMaxEnrichments: (v: string) => void;
+}) {
+  return (
+    <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-4">
+      <div>
+        <Label htmlFor="max-pages">Max pagina's</Label>
+        <Input id="max-pages" type="number" min={1} placeholder="server default" value={maxPages} onChange={e => setMaxPages(e.target.value)} />
+      </div>
+      <div>
+        <Label htmlFor="max-candidates">Max kandidaten</Label>
+        <Input id="max-candidates" type="number" min={1} placeholder="server default" value={maxCandidates} onChange={e => setMaxCandidates(e.target.value)} />
+      </div>
+      <div>
+        <Label htmlFor="max-duration">Max duur (sec)</Label>
+        <Input id="max-duration" type="number" min={1} placeholder="server default" value={maxDurationSec} onChange={e => setMaxDurationSec(e.target.value)} />
+      </div>
+      <div>
+        <Label htmlFor="max-enrichments">Max verrijkingen</Label>
+        <Input id="max-enrichments" type="number" min={0} placeholder="server default" value={maxEnrichments} onChange={e => setMaxEnrichments(e.target.value)} />
+      </div>
+    </div>
+  );
+}
 
 export function StartDiscoveryForm({ projectId, onStarted }: { projectId: string; onStarted: (run: DiscoveryRun) => void }) {
   const [mode, setMode] = useState<SearchMode>('website');
@@ -90,22 +173,69 @@ export function StartDiscoveryForm({ projectId, onStarted }: { projectId: string
   const [branch, setBranch] = useState('');
   const [region, setRegion] = useState('');
   const [keywords, setKeywords] = useState('');
-  const [searchBreadth, setSearchBreadth] = useState<SearchBreadthOption>('standard');
+  const [searchMode, setSearchMode] = useState<SearchModeOption>('standard');
+
+  // Zoekinstellingen — shared by both Website and Branche mode (see spec section 4).
+  const [targetPreset, setTargetPreset] = useState<TargetPreset>('50');
+  const [targetCustom, setTargetCustom] = useState('50');
+  const [postedWithin, setPostedWithin] = useState<PostedWithinOption>('all');
+  const [onlyNewRecords, setOnlyNewRecords] = useState(true);
+  const [sources, setSources] = useState<Set<string>>(new Set(ALL_VACANCY_SOURCE_IDS));
+  const [maxPages, setMaxPages] = useState('');
+  const [maxCandidates, setMaxCandidates] = useState('');
+  const [maxDurationSec, setMaxDurationSec] = useState('');
+  const [maxEnrichments, setMaxEnrichments] = useState('');
+
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  function toggleSource(id: string, checked: boolean) {
+    setSources(prev => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  }
+
+  function buildRunConfig(): DiscoveryRunConfig {
+    const targetRecords = targetPreset === 'custom' ? Number(targetCustom) : Number(targetPreset);
+    const config: DiscoveryRunConfig = { targetRecords, searchBreadth: searchMode, onlyNewRecords };
+    if (searchMode === 'advanced') {
+      if (maxPages.trim()) config.maxPages = Number(maxPages);
+      if (maxCandidates.trim()) config.maxCandidates = Number(maxCandidates);
+      if (maxDurationSec.trim()) config.maxDurationMs = Number(maxDurationSec) * 1000;
+      if (maxEnrichments.trim()) config.maxEnrichments = Number(maxEnrichments);
+    }
+    return config;
+  }
+
+  function buildFilters(): VacancySearchFilters {
+    const filters: VacancySearchFilters = {};
+    const postedWithinDays = POSTED_WITHIN_DAYS[postedWithin];
+    if (postedWithinDays) filters.postedWithinDays = postedWithinDays;
+    // Only sent when the user actually changed it from "everything checked" — leaving every
+    // source checked must behave exactly like never specifying `sources` at all (the breadth
+    // tier's own default), so an unconfigured Web Search never surfaces a "requested but not
+    // configured" notice for a user who never singled it out (see vacancies-adapter.ts's own
+    // `webSearchExplicitlyRequested`).
+    if (mode === 'branch' && sources.size !== ALL_VACANCY_SOURCE_IDS.length) filters.sources = [...sources];
+    return filters;
+  }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setSubmitting(true);
     setError(null);
     try {
+      const runConfig = buildRunConfig();
+      const filters = buildFilters();
       const run = mode === 'website'
-        ? await api.runs.start(projectId, sourceUrl)
+        ? await api.runs.start(projectId, sourceUrl, { runConfig, filters })
         : await api.runs.startBranchSearch(projectId, {
           branch,
           ...(region.trim() ? { region: region.trim() } : {}),
           ...(keywords.trim() ? { keywords: keywords.trim() } : {}),
-          searchBreadth,
+          runConfig, filters,
         });
       onStarted(run);
     } catch (err) {
@@ -123,43 +253,93 @@ export function StartDiscoveryForm({ projectId, onStarted }: { projectId: string
           <p className="mb-1.5 block text-sm font-medium text-slate-700">Zoeken via</p>
           <SegmentedControl name="Zoeken via" options={SEARCH_MODE_OPTIONS} value={mode} onChange={setMode} />
         </div>
-        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           {mode === 'website' ? (
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-              <div className="flex-1">
-                <Label htmlFor="source-url">Website URL</Label>
-                <Input
-                  id="source-url" type="url" required placeholder="https://company.com/careers"
-                  value={sourceUrl} onChange={e => setSourceUrl(e.target.value)}
-                />
-              </div>
-              <Button type="submit" disabled={submitting}>{submitting ? 'Starting…' : 'Start Discovery'}</Button>
+            <div className="flex-1">
+              <Label htmlFor="source-url">Website URL</Label>
+              <Input
+                id="source-url" type="url" required placeholder="https://company.com/careers"
+                value={sourceUrl} onChange={e => setSourceUrl(e.target.value)}
+              />
             </div>
           ) : (
-            <>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div>
-                  <Label htmlFor="branch">Branche</Label>
-                  <Input id="branch" required placeholder="Security" value={branch} onChange={e => setBranch(e.target.value)} />
-                </div>
-                <div>
-                  <Label htmlFor="region">Regio</Label>
-                  <Input id="region" placeholder="Nederland" value={region} onChange={e => setRegion(e.target.value)} />
-                </div>
-                <div>
-                  <Label htmlFor="keywords">Extra trefwoorden</Label>
-                  <Input id="keywords" placeholder="beveiliger security officer" value={keywords} onChange={e => setKeywords(e.target.value)} />
-                </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div>
+                <Label htmlFor="branch">Branche</Label>
+                <Input id="branch" required placeholder="Security" value={branch} onChange={e => setBranch(e.target.value)} />
               </div>
               <div>
-                <p className="mb-1.5 block text-sm font-medium text-slate-700">Search breadth</p>
-                <SegmentedControl name="Search breadth" options={SEARCH_BREADTH_OPTIONS} value={searchBreadth} onChange={setSearchBreadth} />
+                <Label htmlFor="region">Regio</Label>
+                <Input id="region" placeholder="Nederland" value={region} onChange={e => setRegion(e.target.value)} />
               </div>
               <div>
-                <Button type="submit" disabled={submitting}>{submitting ? 'Starting…' : 'Start Discovery'}</Button>
+                <Label htmlFor="keywords">Extra trefwoorden</Label>
+                <Input id="keywords" placeholder="beveiliger security officer" value={keywords} onChange={e => setKeywords(e.target.value)} />
               </div>
-            </>
+            </div>
           )}
+
+          <div className="rounded-md border border-slate-200 p-3">
+            <h3 className="mb-3 text-sm font-semibold text-slate-800">Zoekinstellingen</h3>
+            <div className="flex flex-col gap-3">
+              <div>
+                <p className="mb-1.5 block text-sm font-medium text-slate-700">Gewenste resultaten</p>
+                <SegmentedControl name="Gewenste resultaten" options={TARGET_PRESET_OPTIONS} value={targetPreset} onChange={setTargetPreset} />
+                {targetPreset === 'custom' && (
+                  <Input
+                    id="target-custom" type="number" min={1} className="mt-2 max-w-[10rem]" aria-label="Aangepast aantal resultaten"
+                    value={targetCustom} onChange={e => setTargetCustom(e.target.value)}
+                  />
+                )}
+              </div>
+
+              <div>
+                <p className="mb-1.5 block text-sm font-medium text-slate-700">Geplaatst in</p>
+                <SegmentedControl name="Geplaatst in" options={POSTED_WITHIN_OPTIONS} value={postedWithin} onChange={setPostedWithin} />
+              </div>
+
+              <Toggle id="only-new-records" checked={onlyNewRecords} onChange={setOnlyNewRecords} label="Alleen nieuwe resultaten" />
+
+              <div>
+                <p className="mb-1.5 block text-sm font-medium text-slate-700">Bronnen</p>
+                {mode === 'branch' ? (
+                  <div className="flex flex-wrap gap-4">
+                    {VACANCY_SOURCE_OPTIONS.map(source => (
+                      <label key={source.id} className="flex items-center gap-2 text-sm text-slate-700">
+                        <input
+                          type="checkbox" checked={sources.has(source.id)}
+                          onChange={e => toggleSource(source.id, e.target.checked)}
+                          className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                        />
+                        {source.label}
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500">Website crawl</p>
+                )}
+              </div>
+
+              <div>
+                <p className="mb-1.5 block text-sm font-medium text-slate-700">Zoekmodus</p>
+                <SegmentedControl name="Zoekmodus" options={ZOEKMODUS_OPTIONS} value={searchMode} onChange={setSearchMode} />
+                {searchMode === 'advanced' && (
+                  <div className="mt-3">
+                    <AdvancedSettings
+                      maxPages={maxPages} setMaxPages={setMaxPages}
+                      maxCandidates={maxCandidates} setMaxCandidates={setMaxCandidates}
+                      maxDurationSec={maxDurationSec} setMaxDurationSec={setMaxDurationSec}
+                      maxEnrichments={maxEnrichments} setMaxEnrichments={setMaxEnrichments}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <Button type="submit" disabled={submitting}>{submitting ? 'Starting…' : 'Start Discovery'}</Button>
+          </div>
         </form>
         <FieldError>{error}</FieldError>
       </CardContent>

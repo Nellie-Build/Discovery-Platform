@@ -91,7 +91,7 @@ test('Indeed result mapping: an Indeed job is mapped to VacancyFacts using exact
     title: 'Security Officer', company: 'Acme Security', location: 'Den Haag',
     salary: 'EUR 2800-3400 monthly', hours: null, contractType: 'fulltime',
     description: 'We are hiring a security officer.', contactPerson: null, phone: null,
-    email: 'jobs@acme-security.example',
+    email: 'jobs@acme-security.example', postedDate: '2026-09-01',
   });
   assert.equal(candidate.needsEnrichment, false); // has both description and an email
 });
@@ -152,4 +152,49 @@ test('defaults resultsWanted to a conservative value (10) when the caller does n
   const provider = createTsJobSpySourceProvider({ scrapeJobsImpl: impl });
   await provider.findCandidates({ query: 'Security' });
   assert.equal(calls[0].resultsWanted, 10);
+});
+
+// ─── postedDate mapping ─────────────────────────────────────────────────────────────────────────
+
+test('job.datePosted is mapped to facts.postedDate exactly as ts-jobspy reported it, never reformatted or guessed', async () => {
+  const { impl } = fakeScrapeJobs({
+    jobs: [job({ datePosted: '2026-08-15' })],
+    meta: { sites: [siteMetaOk('indeed', 1)], totalDurationMs: 200, jobsPerSecond: 1, failureRate: 0, duplicatesRemoved: 0 },
+  });
+  const provider = createTsJobSpySourceProvider({ scrapeJobsImpl: impl });
+  const result = await provider.findCandidates({ query: 'Security' });
+  assert.equal(result.candidates[0].facts.postedDate, '2026-08-15');
+});
+
+test('a job with no datePosted at all maps to postedDate: null, never a guessed/fabricated date', async () => {
+  const { impl } = fakeScrapeJobs({
+    jobs: [job({ datePosted: null })],
+    meta: { sites: [siteMetaOk('indeed', 1)], totalDurationMs: 200, jobsPerSecond: 1, failureRate: 0, duplicatesRemoved: 0 },
+  });
+  const provider = createTsJobSpySourceProvider({ scrapeJobsImpl: impl });
+  const result = await provider.findCandidates({ query: 'Security' });
+  assert.equal(result.candidates[0].facts.postedDate, null);
+});
+
+// ─── site selection (indeed/linkedin as separately selectable sources) ─────────────────────────
+
+test('defaults to both indeed and linkedin, exactly like before the "sites" option existed', async () => {
+  const { impl, calls } = fakeScrapeJobs({ jobs: [], meta: { sites: [], totalDurationMs: 1, jobsPerSecond: 0, failureRate: 0, duplicatesRemoved: 0 } });
+  const provider = createTsJobSpySourceProvider({ scrapeJobsImpl: impl });
+  await provider.findCandidates({ query: 'Security' });
+  assert.deepEqual(calls[0].sites, ['indeed', 'linkedin']);
+});
+
+test('a provider constructed with sites: ["indeed"] only ever requests indeed, never linkedin', async () => {
+  const { impl, calls } = fakeScrapeJobs({ jobs: [], meta: { sites: [siteMetaOk('indeed', 0)], totalDurationMs: 1, jobsPerSecond: 0, failureRate: 0, duplicatesRemoved: 0 } });
+  const provider = createTsJobSpySourceProvider({ scrapeJobsImpl: impl, sites: ['indeed'] });
+  await provider.findCandidates({ query: 'Security' });
+  assert.deepEqual(calls[0].sites, ['indeed']);
+});
+
+test('a provider constructed with sites: ["linkedin"] only ever requests linkedin, never indeed', async () => {
+  const { impl, calls } = fakeScrapeJobs({ jobs: [], meta: { sites: [siteMetaOk('linkedin', 0)], totalDurationMs: 1, jobsPerSecond: 0, failureRate: 0, duplicatesRemoved: 0 } });
+  const provider = createTsJobSpySourceProvider({ scrapeJobsImpl: impl, sites: ['linkedin'] });
+  await provider.findCandidates({ query: 'Security' });
+  assert.deepEqual(calls[0].sites, ['linkedin']);
 });

@@ -80,4 +80,32 @@ describe('RunStatusCard', () => {
     render(<RunStatusCard run={run({ stats: { searchMode: 'website', pagesVisited: 10, factsFound: 5, recordsCreated: 3 } })} />);
     expect(screen.queryByText('Sources')).not.toBeInTheDocument();
   });
+
+  it('shows Doel/Gevonden/Kandidaten/Verwerkt and a Dutch "Gestopt omdat" label when the target was reached', () => {
+    render(<RunStatusCard run={run({
+      stats: {
+        pagesVisited: 126, factsFound: 100, recordsCreated: 100,
+        targetRecords: 100, recordsAccepted: 100, candidatesDiscovered: 217, candidatesProcessed: 126,
+        duplicates: 14, stopReason: 'target_reached',
+      },
+    })} />);
+    expect(screen.getByText('Doel')?.closest('div')?.textContent).toBe('Doel100');
+    expect(screen.getByText('Gevonden')?.closest('div')?.textContent).toBe('Gevonden100');
+    expect(screen.getByText('Kandidaten')?.closest('div')?.textContent).toBe('Kandidaten217');
+    expect(screen.getByText('Verwerkt')?.closest('div')?.textContent).toBe('Verwerkt126');
+    expect(screen.getByText('Gestopt omdat')?.closest('div')?.textContent).toBe('Gestopt omdatDoel bereikt');
+  });
+
+  it('shows the Dutch label for a run that stopped before reaching its target', () => {
+    render(<RunStatusCard run={run({
+      stats: { targetRecords: 100, recordsAccepted: 63, stopReason: 'no_more_candidates' },
+    })} />);
+    expect(screen.getByText('63')).toBeInTheDocument();
+    expect(screen.getByText('Geen kandidaten meer')).toBeInTheDocument();
+  });
+
+  it('falls back to the raw code for an unrecognized stopReason rather than hiding the field', () => {
+    render(<RunStatusCard run={run({ stats: { stopReason: 'something_new' } })} />);
+    expect(screen.getByText('something_new')).toBeInTheDocument();
+  });
 });

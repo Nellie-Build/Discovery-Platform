@@ -41,7 +41,9 @@ describe('StartDiscoveryForm', () => {
     await userEvent.type(screen.getByLabelText('Website URL'), 'https://company.example/careers');
     await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
 
-    expect(api.runs.start).toHaveBeenCalledWith('p1', 'https://company.example/careers');
+    expect(api.runs.start).toHaveBeenCalledWith('p1', 'https://company.example/careers', {
+      runConfig: { targetRecords: 50, searchBreadth: 'standard', onlyNewRecords: true }, filters: {},
+    });
     expect(api.runs.startBranchSearch).not.toHaveBeenCalled();
     expect(onStarted).toHaveBeenCalledWith(startedRun);
   });
@@ -69,7 +71,10 @@ describe('StartDiscoveryForm', () => {
     await userEvent.type(screen.getByLabelText('Extra trefwoorden'), 'beveiliger security officer');
     await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
 
-    expect(api.runs.startBranchSearch).toHaveBeenCalledWith('p1', { branch: 'Security', region: 'Nederland', keywords: 'beveiliger security officer', searchBreadth: 'standard' });
+    expect(api.runs.startBranchSearch).toHaveBeenCalledWith('p1', {
+      branch: 'Security', region: 'Nederland', keywords: 'beveiliger security officer',
+      runConfig: { targetRecords: 50, searchBreadth: 'standard', onlyNewRecords: true }, filters: {},
+    });
     expect(api.runs.start).not.toHaveBeenCalled();
     expect(onStarted).toHaveBeenCalledWith(startedRun);
   });
@@ -82,7 +87,9 @@ describe('StartDiscoveryForm', () => {
     await userEvent.type(screen.getByLabelText('Branche'), 'Security');
     await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
 
-    expect(api.runs.startBranchSearch).toHaveBeenCalledWith('p1', { branch: 'Security', searchBreadth: 'standard' });
+    expect(api.runs.startBranchSearch).toHaveBeenCalledWith('p1', {
+      branch: 'Security', runConfig: { targetRecords: 50, searchBreadth: 'standard', onlyNewRecords: true }, filters: {},
+    });
   });
 
   it('Branche mode: choosing a different search breadth sends it, never a hardcoded provider count', async () => {
@@ -94,13 +101,122 @@ describe('StartDiscoveryForm', () => {
     await userEvent.click(screen.getByRole('radio', { name: 'Broad' }));
     await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
 
-    expect(api.runs.startBranchSearch).toHaveBeenCalledWith('p1', { branch: 'Security', searchBreadth: 'broad' });
+    expect(api.runs.startBranchSearch).toHaveBeenCalledWith('p1', {
+      branch: 'Security', runConfig: { targetRecords: 50, searchBreadth: 'broad', onlyNewRecords: true }, filters: {},
+    });
   });
 
   it('Branche mode: the branch field is required — the form does not submit without it', async () => {
     render(<StartDiscoveryForm projectId="p1" onStarted={vi.fn()} />);
     await userEvent.click(screen.getByRole('radio', { name: 'Branche' }));
     expect(screen.getByLabelText('Branche')).toBeRequired();
+  });
+
+  describe('Zoekinstellingen', () => {
+    it('choosing a target preset other than the default sends it as targetRecords', async () => {
+      vi.mocked(api.runs.start).mockResolvedValue(run());
+      render(<StartDiscoveryForm projectId="p1" onStarted={vi.fn()} />);
+
+      await userEvent.type(screen.getByLabelText('Website URL'), 'https://company.example');
+      await userEvent.click(screen.getByRole('radio', { name: '100' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
+
+      expect(api.runs.start).toHaveBeenCalledWith('p1', 'https://company.example', {
+        runConfig: { targetRecords: 100, searchBreadth: 'standard', onlyNewRecords: true }, filters: {},
+      });
+    });
+
+    it('"Aangepast" reveals a custom number field whose value becomes targetRecords', async () => {
+      vi.mocked(api.runs.start).mockResolvedValue(run());
+      render(<StartDiscoveryForm projectId="p1" onStarted={vi.fn()} />);
+
+      await userEvent.type(screen.getByLabelText('Website URL'), 'https://company.example');
+      await userEvent.click(screen.getByRole('radio', { name: 'Aangepast' }));
+      const customInput = screen.getByLabelText('Aangepast aantal resultaten');
+      await userEvent.clear(customInput);
+      await userEvent.type(customInput, '777');
+      await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
+
+      expect(api.runs.start).toHaveBeenCalledWith('p1', 'https://company.example', {
+        runConfig: { targetRecords: 777, searchBreadth: 'standard', onlyNewRecords: true }, filters: {},
+      });
+    });
+
+    it('choosing "Geplaatst in" sends postedWithinDays in filters', async () => {
+      vi.mocked(api.runs.start).mockResolvedValue(run());
+      render(<StartDiscoveryForm projectId="p1" onStarted={vi.fn()} />);
+
+      await userEvent.type(screen.getByLabelText('Website URL'), 'https://company.example');
+      await userEvent.click(screen.getByRole('radio', { name: 'Laatste 7 dagen' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
+
+      expect(api.runs.start).toHaveBeenCalledWith('p1', 'https://company.example', {
+        runConfig: { targetRecords: 50, searchBreadth: 'standard', onlyNewRecords: true }, filters: { postedWithinDays: 7 },
+      });
+    });
+
+    it('turning off "Alleen nieuwe resultaten" sends onlyNewRecords: false', async () => {
+      vi.mocked(api.runs.start).mockResolvedValue(run());
+      render(<StartDiscoveryForm projectId="p1" onStarted={vi.fn()} />);
+
+      await userEvent.type(screen.getByLabelText('Website URL'), 'https://company.example');
+      await userEvent.click(screen.getByRole('switch', { name: 'Alleen nieuwe resultaten' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
+
+      expect(api.runs.start).toHaveBeenCalledWith('p1', 'https://company.example', {
+        runConfig: { targetRecords: 50, searchBreadth: 'standard', onlyNewRecords: false }, filters: {},
+      });
+    });
+
+    it('Website mode shows a plain "Website crawl" label instead of source checkboxes', async () => {
+      render(<StartDiscoveryForm projectId="p1" onStarted={vi.fn()} />);
+      expect(screen.getByText('Website crawl')).toBeInTheDocument();
+      expect(screen.queryByText('Indeed')).not.toBeInTheDocument();
+    });
+
+    it('Branche mode: unchecking a source sends the remaining sources explicitly; leaving every source checked omits filters.sources entirely', async () => {
+      vi.mocked(api.runs.startBranchSearch).mockResolvedValue(run());
+      render(<StartDiscoveryForm projectId="p1" onStarted={vi.fn()} />);
+
+      await userEvent.click(screen.getByRole('radio', { name: 'Branche' }));
+      await userEvent.type(screen.getByLabelText('Branche'), 'Security');
+      await userEvent.click(screen.getByLabelText('LinkedIn'));
+      await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
+
+      expect(api.runs.startBranchSearch).toHaveBeenCalledWith('p1', {
+        branch: 'Security',
+        runConfig: { targetRecords: 50, searchBreadth: 'standard', onlyNewRecords: true },
+        filters: { sources: ['indeed', 'web_search'] },
+      });
+    });
+
+    it('Zoekmodus "Geavanceerd" reveals maxPages/maxCandidates/maxDuration/maxEnrichments, sent only when filled in', async () => {
+      vi.mocked(api.runs.start).mockResolvedValue(run());
+      render(<StartDiscoveryForm projectId="p1" onStarted={vi.fn()} />);
+
+      await userEvent.type(screen.getByLabelText('Website URL'), 'https://company.example');
+      await userEvent.click(screen.getByRole('radio', { name: 'Geavanceerd' }));
+      await userEvent.type(screen.getByLabelText("Max pagina's"), '40');
+      await userEvent.type(screen.getByLabelText('Max kandidaten'), '150');
+      await userEvent.type(screen.getByLabelText('Max duur (sec)'), '120');
+      await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
+
+      expect(api.runs.start).toHaveBeenCalledWith('p1', 'https://company.example', {
+        runConfig: {
+          targetRecords: 50, searchBreadth: 'advanced', onlyNewRecords: true,
+          maxPages: 40, maxCandidates: 150, maxDurationMs: 120_000,
+        },
+        filters: {},
+      });
+    });
+
+    it('switching away from "Geavanceerd" hides the advanced fields again', async () => {
+      render(<StartDiscoveryForm projectId="p1" onStarted={vi.fn()} />);
+      await userEvent.click(screen.getByRole('radio', { name: 'Geavanceerd' }));
+      expect(screen.getByLabelText("Max pagina's")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('radio', { name: 'Standard' }));
+      expect(screen.queryByLabelText("Max pagina's")).not.toBeInTheDocument();
+    });
   });
 
   it('switching back to Website mode restores the Website URL field and hides the branch fields', async () => {

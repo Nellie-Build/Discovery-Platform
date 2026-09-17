@@ -2,7 +2,7 @@ import {
   ApiError,
   type PublicUser, type Workspace, type WorkspaceMembership, type Project, type AdminProject,
   type DiscoveryRun, type DiscoveryRecord, type RecordWithDetails, type BranchSearchInput,
-  type DiscoveryModuleDefinition,
+  type DiscoveryModuleDefinition, type DiscoveryRunConfig, type VacancySearchFilters,
 } from './types.js';
 
 export interface ApiClientOptions {
@@ -57,7 +57,8 @@ export function createApiClient({ baseUrl }: ApiClientOptions) {
       delete: (id: string) => req<void>('DELETE', `/projects/${id}`),
     },
     runs: {
-      start: (projectId: string, sourceUrl: string) => req<DiscoveryRun>('POST', `/projects/${projectId}/runs`, { sourceUrl }),
+      start: (projectId: string, sourceUrl: string, options: { runConfig?: DiscoveryRunConfig; filters?: VacancySearchFilters } = {}) =>
+        req<DiscoveryRun>('POST', `/projects/${projectId}/runs`, { sourceUrl, ...options }),
       /** "Search by branch" mode — a Source Discovery layer in front of the same crawler/
        * extractor `start()` uses, for a project with no single website in mind yet. `region` and
        * `keywords` are both optional. */

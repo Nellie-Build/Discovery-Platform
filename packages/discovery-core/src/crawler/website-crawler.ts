@@ -15,11 +15,16 @@ const robotsParser = createRequire(import.meta.url)('robots-parser') as (url: st
 import { fetchPublicUrl, type HttpTransport, type HttpResult } from './http.js';
 import { websiteScope, linkPriority, type PriorityTier } from './url-policy.js';
 import { extractContacts, mergeContacts, type ExtractedContacts, type ContactNormalizers } from '../extract/contacts.js';
-import type { CrawlRecord, CrawlResult, ExtractedPage } from './types.js';
+import type { CrawlRecord, CrawlResult, CrawlStopReason, ExtractedPage } from './types.js';
 
 export const CRAWL_POLICY = {
   userAgent: 'DiscoveryCoreBot/1.0', maxPages: 10, maxMetadataRequests: 8,
   minDelayMs: 2000, maxRedirects: 3, maxDurationMs: 300_000,
+  /** A caller-supplied `maxPages`/`maxCandidates` is always clamped to these — defense in depth,
+   * never relying only on the caller (e.g. apps/api) to have validated user input. This package
+   * has no notion of "targetRecords" itself, only of pages/candidates/time, so these ceilings are
+   * deliberately generous rather than product-specific. */
+  absoluteMaxPages: 300, absoluteMaxCandidates: 1000,
 };
 
 /** Everything a domain's own `extract` callback gets to look at for one successfully fetched
@@ -57,6 +62,24 @@ export interface CrawlOptions<TFacts> {
   userAgent?: string;
   expectedName?: string | null;
   maxDurationMs?: number;
+  /** How many pages this one crawl may fetch — defaults to `CRAWL_POLICY.maxPages` (10) when
+   * unset, exactly like before. Always clamped to `CRAWL_POLICY.absoluteMaxPages`, regardless of
+   * what a caller passes — this package is never the last line of defense against runaway input,
+   * but it never blindly trusts it either. */
+  maxPages?: number;
+  /** How many distinct candidate URLs this crawl may ever queue at once — defaults to 500,
+   * exactly like before. Clamped to `CRAWL_POLICY.absoluteMaxCandidates`. */
+  maxCandidates?: number;
+  /**
+   * Called once after every successfully extracted page, with every `ExtractedPage` gathered so
+   * far — return `false` to stop the crawl early (the run's `stopReason` becomes
+   * `'target_reached'`). This package has no concept of a "valid" or "duplicate" record; the
+   * caller decides that (typically via its own dedupe/validation against a target record count)
+   * and simply tells the crawler whether continuing is still worthwhile. Omit to crawl until
+   * another stop condition (page/candidate/time limit, or no more candidates) is reached, exactly
+   * like before this option existed.
+   */
+  shouldContinue?: (extractedSoFar: ExtractedPage<TFacts>[]) => boolean;
   transport?: HttpTransport;
   onRecord?: (record: CrawlRecord) => Promise<void>;
   // Injectable clock for deterministic tests; the CLI always uses real time.
@@ -72,13 +95,21 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
   const start = clock.now();
   const maxDurationMs = Math.min(CRAWL_POLICY.maxDurationMs, options.maxDurationMs ?? CRAWL_POLICY.maxDurationMs);
   if (!Number.isFinite(maxDurationMs) || maxDurationMs <= 0) throw new Error('Ongeldige crawl-tijdslimiet.');
+  const maxPages = Math.min(CRAWL_POLICY.absoluteMaxPages, Math.max(1, Math.floor(options.maxPages ?? CRAWL_POLICY.maxPages)));
+  const maxCandidates = Math.min(CRAWL_POLICY.absoluteMaxCandidates, Math.max(1, Math.floor(options.maxCandidates ?? 500)));
   let lastRequest = -Infinity, delay = CRAWL_POLICY.minDelayMs;
   let pages = 0, metadata = 0, stopped: string | null = null;
+  let stopReasonCode: CrawlStopReason | null = null;
+  let candidateLimitReached = false;
   let homepageStatus: number | null = null, homepageBlocked = false;
   const records: CrawlRecord[] = [], visited = new Set<string>();
   const contactPages: { url: string; contacts: ExtractedContacts }[] = [];
   const extractedPages: ExtractedPage<TFacts>[] = [];
   const candidates = new Map<string, number>();
+  /** Every distinct, in-scope URL ever discovered via a link or sitemap entry — never shrinks,
+   * unlike `candidates` (which loses an entry once visited/dequeued). Powers `candidatesDiscovered`
+   * in the final result. */
+  const discoveredUrls = new Set<string>();
   const robots = new Map<string, Promise<{ parser: ReturnType<typeof robotsParser>; error: string | null }>>();
   let checkedSitemap = false;
   const errors: string[] = [];
@@ -99,7 +130,9 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
   }
   function add(input: string, base: string, label = '') {
     const url = scope.normalize(input, base);
-    if (!url || visited.has(url) || candidates.size >= 500) return;
+    if (!url || visited.has(url)) return;
+    discoveredUrls.add(url);
+    if (!candidates.has(url) && candidates.size >= maxCandidates) { candidateLimitReached = true; return; }
     const priority = linkPriority(url, label, linkPriorityExtraTiers);
     candidates.set(url, Math.min(candidates.get(url) ?? Infinity, priority));
   }
@@ -140,12 +173,13 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
         }
       }
       if (stopped) { await denied(url, kind, stopped); return null; }
-      if ((kind === 'page' ? pages >= CRAWL_POLICY.maxPages : metadata >= CRAWL_POLICY.maxMetadataRequests)) {
+      if ((kind === 'page' ? pages >= maxPages : metadata >= CRAWL_POLICY.maxMetadataRequests)) {
         await denied(url, kind, 'Verzoeklimiet bereikt.'); return null;
       }
       const wait = Math.max(0, lastRequest + delay - clock.now());
       if (clock.now() + wait - start >= maxDurationMs) {
         stopped = 'Tijdslimiet bereikt; vereiste crawl-delay wordt niet verkort.';
+        stopReasonCode = 'time_limit';
         await denied(url, kind, stopped); return null;
       }
       if (wait) await clock.sleep(wait);
@@ -175,7 +209,10 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
         durationMs: clock.now() - lastRequest, contentType, bytes: response.body.length, title,
         sha256: createHash('sha256').update(response.body).digest('hex'), redirectTo: destination, error });
       if (kind === 'page' && error) errors.push(error);
-      if ([429, 503].includes(response.status)) stopped = `HTTP ${response.status}: website vraagt om rust; verdere verzoeken gestopt.`;
+      if ([429, 503].includes(response.status)) {
+        stopped = `HTTP ${response.status}: website vraagt om rust; verdere verzoeken gestopt.`;
+        stopReasonCode = 'rate_limited';
+      }
       if (redirect) {
         if (error || !destination) return null;
         url = destination;
@@ -243,12 +280,14 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
     // homepage-only crawl before extraction ever gets a chance to run on it. The site's real
     // homepage is still queued as a normal candidate (unless it *is* the requested page) so it
     // stays available as a rich source of further navigation links, exactly as before.
+    discoveredUrls.add(scope.requestedPage);
     if (scope.requestedPage !== scope.homepage) add(scope.homepage, scope.homepage);
     let next: string | undefined = scope.requestedPage;
     let handled = 0;
-    while (next && !stopped && pages < CRAWL_POLICY.maxPages && handled < CRAWL_POLICY.maxPages) {
+    while (next && !stopped && pages < maxPages && handled < maxPages) {
       await crawlPage(next);
       handled++;
+      if (options.shouldContinue && !options.shouldContinue(extractedPages)) { stopReasonCode = 'target_reached'; break; }
       next = [...candidates].filter(([url]) => !visited.has(url)).sort((a, b) => a[1] - b[1])[0]?.[0];
       if (next) candidates.delete(next);
     }
@@ -259,8 +298,18 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
   const successful = records.some(item => item.kind === 'page' && item.status === 'ok' &&
     (item.httpStatus ?? 0) >= 200 && (item.httpStatus ?? 0) < 300 && /html/i.test(item.contentType ?? ''));
   if (stopped) errors.push(stopped);
+  // Priority order matches actual loop-break causality: a fully robots-blocked homepage always
+  // wins (see `status` below, which already treats it the same way); an explicit event captured
+  // live while it happened (target reached, the crawl's own time limit, a 429/503 rate-limit)
+  // comes next; then the two numeric caps, page budget before candidate-queue budget (a page-limit
+  // stop is certain — we know pages >= maxPages — while candidateLimitReached only means *some*
+  // link had to be dropped at some point, not necessarily what ended the loop); anything else is
+  // simply "ran out of candidates to try", the natural-completion case.
+  const stopReason: CrawlStopReason = homepageBlocked ? 'robots_blocked'
+    : stopReasonCode ?? (pages >= maxPages ? 'page_limit' : candidateLimitReached ? 'candidate_limit' : 'no_more_candidates');
   return { homepage: scope.homepage, domain: scope.domain, pagesVisited: pages, httpStatus: homepageStatus,
     status: homepageBlocked ? 'blocked' : !successful ? 'failed' : errors.length ? 'partial' : 'succeeded',
     error: errors.length ? [...new Set(errors)].join('; ').slice(0, 4000) : null, records,
-    contacts: mergeContacts(contactPages), extractedPages };
+    contacts: mergeContacts(contactPages), extractedPages, stopReason,
+    candidatesDiscovered: discoveredUrls.size, candidateLimitReached };
 }
