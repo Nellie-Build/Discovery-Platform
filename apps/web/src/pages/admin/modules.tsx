@@ -21,8 +21,8 @@ export function AdminTabs() {
           to={tab.to}
           className={({ isActive }) =>
             clsx(
-              'border-b-2 px-3 py-2 text-sm font-medium transition-colors',
-              isActive ? 'border-brand-600 text-brand-800' : 'border-transparent text-slate-500 hover:text-slate-800',
+              'border-b-2 px-4 py-2.5 text-sm font-medium transition-all duration-200',
+              isActive ? 'border-brand-600 text-brand-700 font-semibold' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-b-2 hover:border-slate-300',
             )
           }
         >
@@ -95,13 +95,13 @@ export function AdminModulesPage() {
                       disabled={togglingId === module.id}
                       onClick={() => handleToggle(module.id, !module.enabled)}
                       className={clsx(
-                        'relative h-6 w-11 rounded-full transition-colors disabled:opacity-50',
-                        module.enabled ? 'bg-brand-600' : 'bg-slate-300',
+                        'relative h-6 w-11 rounded-full transition-all duration-200 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:ring-offset-2',
+                        module.enabled ? 'bg-brand-600 shadow-md' : 'bg-slate-300 shadow-sm',
                       )}
                     >
                       <span
                         className={clsx(
-                          'absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform',
+                          'absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-md transition-transform duration-200',
                           module.enabled ? 'translate-x-[22px]' : 'translate-x-0.5',
                         )}
                       />
