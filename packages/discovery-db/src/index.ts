@@ -5,7 +5,7 @@ export { createPool, withTransaction, type Queryable, type QueryResultLike, type
 export { runMigrations } from './migrate.js';
 
 export { WorkspacesRepository, type Workspace } from './repositories/workspaces.js';
-export { ProjectsRepository, type Project, type CreateProjectInput } from './repositories/projects.js';
+export { ProjectsRepository, type Project, type ProjectWithWorkspace, type CreateProjectInput } from './repositories/projects.js';
 export { DiscoveryRunsRepository, type DiscoveryRun } from './repositories/runs.js';
 export {
   DiscoveryRecordsRepository,
@@ -13,3 +13,5 @@ export {
 } from './repositories/records.js';
 export { UsersRepository, toPublicUser, type User, type PublicUser } from './repositories/users.js';
 export { WorkspaceMembersRepository, type WorkspaceMember } from './repositories/workspace-members.js';
+export { ModulesRepository, type DiscoveryModuleDefinition } from './repositories/modules.js';
+export { SourcesRepository, type SourceDefinition } from './repositories/sources.js';

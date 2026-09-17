@@ -37,7 +37,14 @@ export interface DiscoveryRunOutcome {
  */
 export type DiscoveryRunInput =
   | { mode: 'website'; sourceUrl: string; existingRecords: ExistingRecordSnapshot[] }
-  | { mode: 'branch'; branch: string; region: string | null; keywords: string | null; existingRecords: ExistingRecordSnapshot[] };
+  | {
+      mode: 'branch'; branch: string; region: string | null; keywords: string | null;
+      /** "focused" | "standard" | "broad" — generic on purpose, apps/api never hardcodes what
+       * each tier means (see the vacancies module's own SearchBreadth/SEARCH_BREADTH_LIMITS).
+       * null means "the domain's own default". */
+      searchBreadth: string | null;
+      existingRecords: ExistingRecordSnapshot[];
+    };
 
 export interface DomainAdapter {
   id: string;

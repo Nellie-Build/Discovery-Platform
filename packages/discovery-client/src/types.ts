@@ -5,7 +5,23 @@
 export interface PublicUser {
   id: string;
   email: string;
+  /** Platform-level admin flag (see migrations/004_admin_modules.sql) — the Web App's own /admin
+   * nav link and route guard read this, never a hardcoded email. */
+  is_admin: boolean;
   created_at: string;
+  updated_at: string;
+}
+
+/** One row of the Module Registry — see apps/api/src/routes/admin.ts. */
+export interface DiscoveryModuleDefinition {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  status: string;
+  version: string;
+  capabilities: string[];
+  config: Record<string, unknown>;
   updated_at: string;
 }
 
@@ -29,14 +45,25 @@ export interface Project {
   config: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  deleted_at: string | null;
+  deleted_by: string | null;
+}
+
+/** Admin-only: a project (active or soft-deleted) with its workspace's name attached — see
+ * apps/api/src/routes/admin.ts. */
+export interface AdminProject extends Project {
+  workspace_name: string;
 }
 
 /** Body for `runs.startBranchSearch` — the "search by branch" alternative to `runs.start`'s
- * plain `sourceUrl`. `region` and `keywords` are both optional. */
+ * plain `sourceUrl`. `region`, `keywords` and `searchBreadth` are all optional. `searchBreadth`
+ * is a plain string ("focused" | "standard" | "broad" for the vacancies module today) — the Web
+ * App never hardcodes what each tier means, it only offers whatever the domain reports. */
 export interface BranchSearchInput {
   branch: string;
   region?: string;
   keywords?: string;
+  searchBreadth?: string;
 }
 
 export interface DiscoveryRun {

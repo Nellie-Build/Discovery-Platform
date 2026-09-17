@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import type { DiscoveryRun, Project } from '@discovery-platform/client';
-import { StartDiscoveryForm, ProjectDetailPage } from './project-detail';
+import { StartDiscoveryForm, ProjectDetailPage, isNewerRun } from './project-detail';
 
 vi.mock('../lib/api');
 import { api } from '../lib/api';
@@ -21,6 +21,7 @@ function project(overrides: Partial<Project> = {}): Project {
   return {
     id: 'p1', workspace_id: 'w1', name: 'Test project', domain: 'vacancies', status: 'active',
     config: {}, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    deleted_at: null, deleted_by: null,
     ...overrides,
   };
 }
@@ -68,7 +69,7 @@ describe('StartDiscoveryForm', () => {
     await userEvent.type(screen.getByLabelText('Extra trefwoorden'), 'beveiliger security officer');
     await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
 
-    expect(api.runs.startBranchSearch).toHaveBeenCalledWith('p1', { branch: 'Security', region: 'Nederland', keywords: 'beveiliger security officer' });
+    expect(api.runs.startBranchSearch).toHaveBeenCalledWith('p1', { branch: 'Security', region: 'Nederland', keywords: 'beveiliger security officer', searchBreadth: 'standard' });
     expect(api.runs.start).not.toHaveBeenCalled();
     expect(onStarted).toHaveBeenCalledWith(startedRun);
   });
@@ -81,7 +82,19 @@ describe('StartDiscoveryForm', () => {
     await userEvent.type(screen.getByLabelText('Branche'), 'Security');
     await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
 
-    expect(api.runs.startBranchSearch).toHaveBeenCalledWith('p1', { branch: 'Security' });
+    expect(api.runs.startBranchSearch).toHaveBeenCalledWith('p1', { branch: 'Security', searchBreadth: 'standard' });
+  });
+
+  it('Branche mode: choosing a different search breadth sends it, never a hardcoded provider count', async () => {
+    vi.mocked(api.runs.startBranchSearch).mockResolvedValue(run({ id: 'run4' }));
+    render(<StartDiscoveryForm projectId="p1" onStarted={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole('radio', { name: 'Branche' }));
+    await userEvent.type(screen.getByLabelText('Branche'), 'Security');
+    await userEvent.click(screen.getByRole('radio', { name: 'Broad' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
+
+    expect(api.runs.startBranchSearch).toHaveBeenCalledWith('p1', { branch: 'Security', searchBreadth: 'broad' });
   });
 
   it('Branche mode: the branch field is required — the form does not submit without it', async () => {
@@ -107,6 +120,30 @@ function renderProjectDetail() {
   );
 }
 
+describe('isNewerRun', () => {
+  it('accepts a run when nothing is currently shown yet', () => {
+    expect(isNewerRun(run({ id: 'a', created_at: '2026-01-01T10:00:00Z' }), null)).toBe(true);
+  });
+
+  it('accepts a run created after the one currently shown (run B, started after run A, may replace it)', () => {
+    const runA = run({ id: 'runA', created_at: '2026-01-01T10:00:00Z' });
+    const runB = run({ id: 'runB', created_at: '2026-01-01T10:05:00Z' });
+    expect(isNewerRun(runB, runA)).toBe(true);
+  });
+
+  it('rejects a run created before the one currently shown — a delayed response for run A must never overwrite run B once B is already displayed', () => {
+    const runA = run({ id: 'runA', created_at: '2026-01-01T10:00:00Z' });
+    const runB = run({ id: 'runB', created_at: '2026-01-01T10:05:00Z' });
+    expect(isNewerRun(runA, runB)).toBe(false);
+  });
+
+  it('accepts a tie (equal created_at) so two runs started in the same instant are never both rejected', () => {
+    const runA = run({ id: 'runA', created_at: '2026-01-01T10:00:00Z' });
+    const runB = run({ id: 'runB', created_at: '2026-01-01T10:00:00Z' });
+    expect(isNewerRun(runB, runA)).toBe(true);
+  });
+});
+
 describe('ProjectDetailPage', () => {
   beforeEach(() => {
     vi.mocked(api.projects.get).mockReset().mockResolvedValue(project());
@@ -124,8 +161,8 @@ describe('ProjectDetailPage', () => {
   }
 
   it('after starting a second run in the same session, the status card shows the newest run\'s own data — not the first run\'s, even though both resolve with the same "succeeded" status', async () => {
-    const runA = run({ id: 'runA', stats: { recordsCreated: 1 } });
-    const runB = run({ id: 'runB', stats: { recordsCreated: 9 } });
+    const runA = run({ id: 'runA', created_at: '2026-01-01T10:00:00Z', stats: { recordsCreated: 1 } });
+    const runB = run({ id: 'runB', created_at: '2026-01-01T10:05:00Z', stats: { recordsCreated: 9 } });
     vi.mocked(api.runs.get).mockImplementation(async id => (id === 'runA' ? runA : runB));
     vi.mocked(api.runs.start).mockResolvedValueOnce(runA).mockResolvedValueOnce(runB);
 
@@ -149,6 +186,45 @@ describe('ProjectDetailPage', () => {
     // listRunsByProject is already newest-first (see packages/discovery-db's own ORDER BY) — the
     // mock mirrors that real ordering rather than re-sorting client-side.
     vi.mocked(api.runs.listByProject).mockResolvedValue([newestRun, olderRun]);
+
+    renderProjectDetail();
+    await waitFor(() => expect(newRecordsValue()).toBe('7'));
+  });
+
+  it('deleting a project always shows the exact confirm dialog text, and only calls the API after the user confirms', async () => {
+    vi.mocked(api.projects.delete).mockReset();
+    renderProjectDetail();
+    await waitFor(() => expect(screen.getByText('Test project')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Delete project' }));
+    expect(screen.getByText(
+      'Project verwijderen? Dit project en de bijbehorende gegevens worden niet meer getoond. ' +
+      'Deze actie kan later door een beheerder worden hersteld.',
+    )).toBeInTheDocument();
+    expect(api.projects.delete).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(api.projects.delete).not.toHaveBeenCalled();
+  });
+
+  it('confirming project deletion calls the API with the project id', async () => {
+    vi.mocked(api.projects.delete).mockReset().mockResolvedValue(undefined);
+    renderProjectDetail();
+    await waitFor(() => expect(screen.getByText('Test project')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Delete project' }));
+    const dialogButtons = screen.getAllByRole('button', { name: 'Delete project' });
+    await userEvent.click(dialogButtons[dialogButtons.length - 1]);
+
+    await waitFor(() => expect(api.projects.delete).toHaveBeenCalledWith('p1'));
+  });
+
+  it('run history = A, B, C → on page load, the status card shows C (the newest run by created_at)', async () => {
+    const runA = run({ id: 'runA', created_at: '2026-01-01T10:00:00Z', stats: { recordsCreated: 1 } });
+    const runB = run({ id: 'runB', created_at: '2026-01-01T10:05:00Z', stats: { recordsCreated: 4 } });
+    const runC = run({ id: 'runC', created_at: '2026-01-01T10:10:00Z', stats: { recordsCreated: 7 } });
+    // Newest-first, exactly as the real ORDER BY created_at DESC returns them.
+    vi.mocked(api.runs.listByProject).mockResolvedValue([runC, runB, runA]);
 
     renderProjectDetail();
     await waitFor(() => expect(newRecordsValue()).toBe('7'));

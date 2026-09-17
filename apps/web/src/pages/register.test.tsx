@@ -27,7 +27,7 @@ describe('RegisterPage', () => {
 
   it('registers with the entered email/password and gets a workspace back', async () => {
     vi.mocked(api.auth.register).mockResolvedValue({
-      user: { id: 'u1', email: 'new@example.com', created_at: '', updated_at: '' },
+      user: { id: 'u1', email: 'new@example.com', is_admin: false, created_at: '', updated_at: '' },
       workspace: { id: 'w1', name: 'My workspace', created_at: '', updated_at: '' },
     });
     renderRegister();

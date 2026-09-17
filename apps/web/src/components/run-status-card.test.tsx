@@ -51,4 +51,33 @@ describe('RunStatusCard', () => {
     expect(screen.queryByText('Branche')).not.toBeInTheDocument();
     expect(screen.queryByText('Kandidaatbronnen')).not.toBeInTheDocument();
   });
+
+  it('shows a compact Sources section per provider for a branch-search run, including a disabled entry for a source that never ran', () => {
+    render(<RunStatusCard run={run({
+      stats: {
+        searchMode: 'branch', branch: 'Security', recordsCreated: 3,
+        sources: [
+          { provider: 'ts-jobspy', site: 'indeed', status: 'ok', candidates: 12, durationMs: 500, error: null },
+          { provider: 'ts-jobspy', site: 'linkedin', status: 'ok', candidates: 8, durationMs: 400, error: null },
+        ],
+      },
+    })} />);
+    expect(screen.getByText('Sources')).toBeInTheDocument();
+    expect(screen.getByText('Indeed')).toBeInTheDocument();
+    expect(screen.getByText('12 results')).toBeInTheDocument();
+    expect(screen.getByText('LinkedIn')).toBeInTheDocument();
+    expect(screen.getByText('8 results')).toBeInTheDocument();
+    expect(screen.getByText('Web Search')).toBeInTheDocument();
+    expect(screen.getByText('disabled')).toBeInTheDocument();
+  });
+
+  it('does not show a Sources section when a branch-search run has no stats.sources at all', () => {
+    render(<RunStatusCard run={run({ stats: { searchMode: 'branch', branch: 'Security', recordsCreated: 0 } })} />);
+    expect(screen.queryByText('Sources')).not.toBeInTheDocument();
+  });
+
+  it('never shows a Sources section for a website-mode run', () => {
+    render(<RunStatusCard run={run({ stats: { searchMode: 'website', pagesVisited: 10, factsFound: 5, recordsCreated: 3 } })} />);
+    expect(screen.queryByText('Sources')).not.toBeInTheDocument();
+  });
 });

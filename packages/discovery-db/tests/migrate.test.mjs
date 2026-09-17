@@ -6,15 +6,50 @@ import { runMigrations } from '../dist/migrate.js';
 test('runMigrations applies every migration on a clean database and creates every table', async () => {
   const db = new PGlite();
   const { applied } = await runMigrations(db);
-  assert.deepEqual(applied, ['001_init', '002_auth']);
+  assert.deepEqual(applied, ['001_init', '002_auth', '003_projects_soft_delete', '004_admin_modules', '005_source_registry']);
 
   const { rows } = await db.query(
     "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
   );
   assert.deepEqual(rows.map(r => r.table_name), [
-    'discovery_records', 'discovery_runs', 'projects', 'record_contacts', 'record_sources',
-    'schema_migrations', 'session', 'users', 'workspace_members', 'workspaces',
+    'discovery_records', 'discovery_runs', 'modules', 'projects', 'record_contacts', 'record_sources',
+    'schema_migrations', 'session', 'sources', 'users', 'workspace_members', 'workspaces',
   ]);
+  await db.close();
+});
+
+test('the Module Registry is seeded with vacancies active/enabled and every other module coming_soon/disabled', async () => {
+  const db = new PGlite();
+  await runMigrations(db);
+  const { rows } = await db.query('SELECT id, enabled, status FROM modules ORDER BY id');
+  const vacancies = rows.find(r => r.id === 'vacancies');
+  assert.equal(vacancies.enabled, true);
+  assert.equal(vacancies.status, 'active');
+  for (const row of rows) {
+    if (row.id === 'vacancies') continue;
+    assert.equal(row.enabled, false, `${row.id} must not be enabled yet`);
+    assert.equal(row.status, 'coming_soon');
+  }
+  await db.close();
+});
+
+test('users.is_admin defaults to false — no account is an admin unless explicitly promoted', async () => {
+  const db = new PGlite();
+  await runMigrations(db);
+  const { rows: [user] } = await db.query("INSERT INTO users (email, password_hash) VALUES ('a@example.com', 'hash') RETURNING *");
+  assert.equal(user.is_admin, false);
+  await db.close();
+});
+
+test('projects.deleted_at/deleted_by are nullable and default to null (a fresh project is never soft-deleted)', async () => {
+  const db = new PGlite();
+  await runMigrations(db);
+  const { rows: [workspace] } = await db.query('INSERT INTO workspaces (name) VALUES ($1) RETURNING *', ['W']);
+  const { rows: [project] } = await db.query(
+    "INSERT INTO projects (workspace_id, name, domain) VALUES ($1, 'P', 'vacancies') RETURNING *", [workspace.id],
+  );
+  assert.equal(project.deleted_at, null);
+  assert.equal(project.deleted_by, null);
   await db.close();
 });
 

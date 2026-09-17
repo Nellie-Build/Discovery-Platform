@@ -1,7 +1,7 @@
 export { createApiClient, type ApiClient, type ApiClientOptions } from './client.js';
 export {
   ApiError,
-  type PublicUser, type Workspace, type WorkspaceMembership, type Project,
+  type PublicUser, type Workspace, type WorkspaceMembership, type Project, type AdminProject,
   type DiscoveryRun, type DiscoveryRecord, type RecordSource, type RecordContact, type RecordWithDetails,
-  type BranchSearchInput,
+  type BranchSearchInput, type DiscoveryModuleDefinition,
 } from './types.js';

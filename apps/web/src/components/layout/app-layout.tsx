@@ -64,6 +64,11 @@ function EnvironmentBadge() {
 
 export function AppLayout() {
   const { user, logout } = useAuth();
+  // Never a hardcoded email — this reads the session's own is_admin flag (see
+  // migrations/004_admin_modules.sql). The server independently enforces the same check on every
+  // /admin/* request (see apps/api/src/admin-access.ts); this only controls whether the link
+  // appears at all.
+  const navItemsWithAdmin = user?.is_admin ? [...navItems, { to: '/admin/modules', label: 'Admin' }] : navItems;
 
   return (
     <div className="flex min-h-screen bg-slate-50">
@@ -78,7 +83,7 @@ export function AppLayout() {
           <WorkspaceSelector />
         </div>
         <nav className="flex flex-1 flex-col gap-1">
-          {navItems.map(item => <NavItem key={item.to} {...item} />)}
+          {navItemsWithAdmin.map(item => <NavItem key={item.to} {...item} />)}
           <div className="my-3 border-t border-slate-100" />
           {secondaryNavItems.map(item => <NavItem key={item.to} {...item} />)}
         </nav>

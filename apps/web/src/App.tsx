@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './lib/auth-context';
 import { WorkspaceProvider } from './lib/workspace-context';
 import { ProtectedRoute } from './components/protected-route';
+import { AdminRoute } from './components/admin-route';
 import { AppLayout } from './components/layout/app-layout';
 import { LoginPage } from './pages/login';
 import { RegisterPage } from './pages/register';
@@ -13,6 +14,8 @@ import { RecordsPage } from './pages/records';
 import { RecordDetailPage } from './pages/record-detail';
 import { SettingsPage } from './pages/settings';
 import { AccountPage } from './pages/account';
+import { AdminModulesPage } from './pages/admin/modules';
+import { AdminProjectsPage } from './pages/admin/projects';
 import './domains'; // registers every domain renderer as a side effect — see domains/index.ts
 
 export function App() {
@@ -38,6 +41,8 @@ export function App() {
               <Route path="/records/:id" element={<RecordDetailPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/account" element={<AccountPage />} />
+              <Route path="/admin/modules" element={<AdminRoute><AdminModulesPage /></AdminRoute>} />
+              <Route path="/admin/projects" element={<AdminRoute><AdminProjectsPage /></AdminRoute>} />
             </Route>
           </Routes>
         </WorkspaceProvider>

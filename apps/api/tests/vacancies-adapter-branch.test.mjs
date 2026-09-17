@@ -158,16 +158,16 @@ test('meerdere bronnen tegelijk: the job board and Brave both contribute candida
     candidates: [jobBoardCandidate({ title: 'Security Officer', company: 'Acme Security', location: 'Den Haag', sourceUrl: 'https://indeed.example/job/1' })],
     meta: [{ provider: 'ts-jobspy', site: 'indeed', status: 'ok', candidates: 1, durationMs: 400, error: null }],
   });
-  const braveUrl = 'https://acme.example/vacatures/backend-developer';
-  const { provider: braveProvider } = fakeSearchProvider([{ url: braveUrl, title: 'Backend Developer', snippet: '...', source: 'brave' }]);
+  const braveUrl = 'https://acme.example/vacatures/it-security-specialist';
+  const { provider: braveProvider } = fakeSearchProvider([{ url: braveUrl, title: 'IT Security Specialist', snippet: '...', source: 'brave' }]);
   const adapter = createVacanciesAdapter({
     jobBoardProvider: jobBoard.provider,
     searchProvider: braveProvider,
-    transport: transportFor({ [braveUrl]: { body: jobPostingPage('Backend Developer', 'Acme', 'Utrecht') } }),
+    transport: transportFor({ [braveUrl]: { body: jobPostingPage('IT Security Specialist', 'Beta Corp', 'Rotterdam') } }),
   });
   const outcome = await adapter.runDiscovery(branchInput());
   assert.equal(outcome.records.length, 2);
-  assert.deepEqual(new Set(outcome.records.map(r => r.displayName)), new Set(['Security Officer', 'Backend Developer']));
+  assert.deepEqual(new Set(outcome.records.map(r => r.displayName)), new Set(['Security Officer', 'IT Security Specialist']));
   const sources = outcome.stats.sources.map(s => s.provider);
   assert.ok(sources.includes('ts-jobspy'));
   assert.ok(sources.includes('brave'));
@@ -175,16 +175,16 @@ test('meerdere bronnen tegelijk: the job board and Brave both contribute candida
 
 test('één bron error, andere bron blijft behouden: the job board throwing entirely does not discard Brave\'s own candidates', async () => {
   const failingJobBoard = { async findCandidates() { throw new Error('ts-jobspy: LinkedIn rate limited, Indeed unreachable'); } };
-  const braveUrl = 'https://acme.example/vacatures/backend-developer';
-  const { provider: braveProvider } = fakeSearchProvider([{ url: braveUrl, title: 'Backend Developer', snippet: '...', source: 'brave' }]);
+  const braveUrl = 'https://acme.example/vacatures/it-security-specialist';
+  const { provider: braveProvider } = fakeSearchProvider([{ url: braveUrl, title: 'IT Security Specialist', snippet: '...', source: 'brave' }]);
   const adapter = createVacanciesAdapter({
     jobBoardProvider: failingJobBoard,
     searchProvider: braveProvider,
-    transport: transportFor({ [braveUrl]: { body: jobPostingPage('Backend Developer', 'Acme', 'Utrecht') } }),
+    transport: transportFor({ [braveUrl]: { body: jobPostingPage('IT Security Specialist', 'Beta Corp', 'Rotterdam') } }),
   });
   const outcome = await adapter.runDiscovery(branchInput());
   assert.equal(outcome.records.length, 1);
-  assert.equal(outcome.records[0].displayName, 'Backend Developer');
+  assert.equal(outcome.records[0].displayName, 'IT Security Specialist');
   const jobBoardMeta = outcome.stats.sources.find(s => s.provider === 'ts-jobspy');
   assert.equal(jobBoardMeta.status, 'error');
   assert.match(jobBoardMeta.error, /LinkedIn rate limited/);
@@ -256,7 +256,9 @@ test('incomplete candidate kan optioneel enriched worden: a thin job-board candi
     jobBoardProvider: jobBoard.provider,
     transport: async url => { transportCalls++; return transportFor({ [sourceUrl]: { body: enrichedPage } })(url); },
   });
-  const outcome = await adapter.runDiscovery(branchInput());
+  // branch is 'Veiligheid', matching this candidate's own (Dutch) title — never 'Security': query
+  // relevance never translates "Veiligheid" to "Security" or vice versa (see relevance.ts).
+  const outcome = await adapter.runDiscovery(branchInput({ branch: 'Veiligheid' }));
   assert.equal(transportCalls, 1, 'a thin candidate is fetched exactly once for enrichment');
   assert.equal(outcome.records.length, 1);
   // The job board's own title/company/location win — enrichment (from a JSON-LD page that
@@ -343,6 +345,67 @@ test('the maximum number of Brave candidates is respected even when the search p
   const adapter = createVacanciesAdapter({ jobBoardProvider: emptyJobBoardProvider(), searchProvider: provider, transport });
   await adapter.runDiscovery(branchInput());
   assert.equal(fetchCount, 10, 'never fetches more than the configured maximum');
+});
+
+// ─── Search breadth ─────────────────────────────────────────────────────────────────────────────
+
+test('focused breadth: web search is never attempted even when a searchProvider is configured — job boards only', async () => {
+  const jobBoard = fakeJobBoardProvider({
+    candidates: [jobBoardCandidate({ title: 'Security Officer', company: 'Acme Security', location: 'Den Haag', sourceUrl: 'https://indeed.example/job/1' })],
+    meta: [{ provider: 'ts-jobspy', site: 'indeed', status: 'ok', candidates: 1, durationMs: 400, error: null }],
+  });
+  const { provider: braveProvider, calls } = fakeSearchProvider([{ url: 'https://acme.example/vacatures/x', title: 'X', snippet: '...', source: 'brave' }]);
+  const adapter = createVacanciesAdapter({ jobBoardProvider: jobBoard.provider, searchProvider: braveProvider });
+  const outcome = await adapter.runDiscovery(branchInput({ searchBreadth: 'focused' }));
+  assert.equal(calls.length, 0, 'brave must never be called at all for focused breadth');
+  assert.ok(!outcome.stats.sources.some(s => s.provider === 'brave'));
+  assert.equal(outcome.stats.searchBreadth, 'focused');
+  assert.equal(outcome.records.length, 1);
+});
+
+test('standard breadth (the default, unset) still calls web search when configured — unchanged original behavior', async () => {
+  const { provider: braveProvider } = fakeSearchProvider([{ url: 'https://acme.example/vacatures/x', title: 'Security X', snippet: '...', source: 'brave' }]);
+  const adapter = createVacanciesAdapter({
+    jobBoardProvider: emptyJobBoardProvider(),
+    searchProvider: braveProvider,
+    transport: transportFor({ 'https://acme.example/vacatures/x': { body: jobPostingPage('Security X', 'Acme', 'Rotterdam') } }),
+  });
+  const outcome = await adapter.runDiscovery(branchInput());
+  assert.equal(outcome.stats.searchBreadth, 'standard');
+  assert.ok(outcome.stats.sources.some(s => s.provider === 'brave'));
+});
+
+test('an unrecognized searchBreadth value falls back to standard, never crashes', async () => {
+  const adapter = createVacanciesAdapter({ jobBoardProvider: emptyJobBoardProvider() });
+  const outcome = await adapter.runDiscovery(branchInput({ searchBreadth: 'unlimited' }));
+  assert.equal(outcome.stats.searchBreadth, 'standard');
+});
+
+test('broad breadth requests more candidates per provider than focused/standard — hard caps still apply, never unlimited', async () => {
+  const calls = [];
+  const jobBoard = { async findCandidates(query) { calls.push(query); return { candidates: [], meta: [{ provider: 'ts-jobspy', site: 'indeed', status: 'empty', candidates: 0, durationMs: 1, error: null }] }; } };
+  const adapter = createVacanciesAdapter({ jobBoardProvider: jobBoard });
+  await adapter.runDiscovery(branchInput({ searchBreadth: 'broad' }));
+  assert.equal(calls[0].resultsWanted, 20, 'broad breadth must request its own configured cap, never an unbounded amount');
+});
+
+// ─── Query relevance ────────────────────────────────────────────────────────────────────────────
+
+test('an irrelevant candidate (no evidence for the branch/keywords anywhere) is rejected and never becomes a record, but a relevant one from the same run still is', async () => {
+  const jobBoard = fakeJobBoardProvider({
+    candidates: [
+      jobBoardCandidate({ title: 'Senior Project Manager Security', company: 'Acme Security', location: 'Den Haag', sourceUrl: 'https://indeed.example/job/1' }),
+      jobBoardCandidate({ title: 'HR Generalist', company: 'Acme HR', location: 'Den Haag', description: 'Support the HR team with onboarding and payroll.', sourceUrl: 'https://indeed.example/job/2' }),
+    ],
+    meta: [{ provider: 'ts-jobspy', site: 'indeed', status: 'ok', candidates: 2, durationMs: 400, error: null }],
+  });
+  const adapter = createVacanciesAdapter({ jobBoardProvider: jobBoard.provider });
+  const outcome = await adapter.runDiscovery(branchInput({ branch: 'Security', keywords: 'Project Manager' }));
+  assert.equal(outcome.records.length, 1);
+  assert.equal(outcome.records[0].displayName, 'Senior Project Manager Security');
+  assert.equal(outcome.stats.candidatesReceived, 2);
+  assert.equal(outcome.stats.relevanceAccepted, 1);
+  assert.equal(outcome.stats.relevanceRejected, 1);
 });
 
 test('region is optional: a branch search without a region still builds a valid query and runs', async () => {

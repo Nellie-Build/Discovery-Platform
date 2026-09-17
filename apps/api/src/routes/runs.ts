@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { ProjectsRepository, DiscoveryRunsRepository, DiscoveryRecordsRepository, withTransaction, type TransactionCapable } from '@discovery-platform/db';
 import { asyncHandler, badRequest, notFound } from '../http-errors.js';
 import { assertWorkspaceAccess } from '../workspace-access.js';
+import { assertModuleEnabled } from '../module-registry.js';
 import { defaultDomainRegistry, type DomainRegistry } from '../domain-registry.js';
 
 /**
@@ -27,7 +28,7 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
     // starts a website crawl; { branch, region?, keywords? } starts a branch search. Which one a
     // client sent is inferred from which field is present — no new required field on existing
     // { sourceUrl }-only clients.
-    let discoveryInput: { mode: 'website'; sourceUrl: string } | { mode: 'branch'; branch: string; region: string | null; keywords: string | null };
+    let discoveryInput: { mode: 'website'; sourceUrl: string } | { mode: 'branch'; branch: string; region: string | null; keywords: string | null; searchBreadth: string | null };
     if (typeof body.sourceUrl === 'string' && body.sourceUrl.trim()) {
       discoveryInput = { mode: 'website', sourceUrl: body.sourceUrl.trim() };
     } else if (typeof body.branch === 'string' && body.branch.trim()) {
@@ -36,12 +37,17 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
         branch: body.branch.trim(),
         region: typeof body.region === 'string' && body.region.trim() ? body.region.trim() : null,
         keywords: typeof body.keywords === 'string' && body.keywords.trim() ? body.keywords.trim() : null,
+        // A generic string, never validated against a domain-specific enum here — the domain
+        // adapter itself decides what breadth tiers exist and what an unrecognized one falls
+        // back to (see the vacancies module's own isSearchBreadth/DEFAULT_SEARCH_BREADTH).
+        searchBreadth: typeof body.searchBreadth === 'string' && body.searchBreadth.trim() ? body.searchBreadth.trim() : null,
       };
     } else {
       throw badRequest('invalid_source', 'sourceUrl or branch is required.');
     }
     const adapter = domainRegistry[project.domain];
     if (!adapter) throw badRequest('unknown_domain', `No domain adapter registered for "${project.domain}".`);
+    await assertModuleEnabled(pool, project.domain);
 
     const run = await runs.createRun(project.id);
     res.locals.runId = run.id;

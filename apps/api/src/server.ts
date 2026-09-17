@@ -13,6 +13,7 @@ import { createWorkspacesRouter } from './routes/workspaces.js';
 import { createProjectsRouter } from './routes/projects.js';
 import { createRunsRouter } from './routes/runs.js';
 import { createRecordsRouter } from './routes/records.js';
+import { createAdminRouter } from './routes/admin.js';
 import { defaultDomainRegistry, type DomainRegistry } from './domain-registry.js';
 
 const API_PREFIX = '/api/v1';
@@ -84,6 +85,7 @@ export function createApp(pool: TransactionCapable, options: CreateAppOptions): 
   app.use(API_PREFIX, createProjectsRouter(pool, domainRegistry));
   app.use(API_PREFIX, createRunsRouter(pool, domainRegistry));
   app.use(API_PREFIX, createRecordsRouter(pool));
+  app.use(API_PREFIX, createAdminRouter(pool));
   // Nothing under /api/v1 matched — a clean JSON 404, never the SPA fallback below.
   app.use(API_PREFIX, (_req, res) => { res.status(404).json({ error: 'not_found', message: 'Route not found.' }); });
 

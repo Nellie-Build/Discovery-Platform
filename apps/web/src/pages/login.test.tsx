@@ -26,7 +26,7 @@ describe('LoginPage', () => {
   });
 
   it('submits the entered email/password to auth.login', async () => {
-    vi.mocked(api.auth.login).mockResolvedValue({ id: 'u1', email: 'a@example.com', created_at: '', updated_at: '' });
+    vi.mocked(api.auth.login).mockResolvedValue({ id: 'u1', email: 'a@example.com', is_admin: false, created_at: '', updated_at: '' });
     renderLogin();
 
     await waitFor(() => expect(screen.getByLabelText(/email/i)).not.toBeDisabled());

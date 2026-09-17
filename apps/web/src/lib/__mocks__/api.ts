@@ -6,7 +6,11 @@ import { vi } from 'vitest';
 export const api = {
   auth: { register: vi.fn(), login: vi.fn(), logout: vi.fn(), me: vi.fn() },
   workspaces: { listMine: vi.fn(), get: vi.fn(), create: vi.fn() },
-  projects: { listByWorkspace: vi.fn(), get: vi.fn(), create: vi.fn() },
+  projects: { listByWorkspace: vi.fn(), get: vi.fn(), create: vi.fn(), delete: vi.fn() },
   runs: { start: vi.fn(), startBranchSearch: vi.fn(), listByProject: vi.fn(), get: vi.fn() },
   records: { listByProject: vi.fn(), get: vi.fn() },
+  admin: {
+    modules: { list: vi.fn(), setEnabled: vi.fn() },
+    projects: { list: vi.fn(), restore: vi.fn() },
+  },
 };

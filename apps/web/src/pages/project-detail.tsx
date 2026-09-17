@@ -1,5 +1,5 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ApiError, type DiscoveryRun } from '@discovery-platform/client';
 import { api } from '../lib/api';
 import { useAsync } from '../hooks/use-async';
@@ -9,17 +9,79 @@ import { Button } from '../components/ui/button';
 import { Input, Label, FieldError } from '../components/ui/input';
 import { SegmentedControl } from '../components/ui/segmented-control';
 import { Badge, statusBadgeTone } from '../components/ui/badge';
+import { Dialog } from '../components/ui/dialog';
 import { LoadingState, ErrorState } from '../components/ui/states';
 import { RunStatusCard } from '../components/run-status-card';
 import { RecordsTable } from '../components/records-table';
 import { getDomainRenderer } from '../domains/registry';
 
+const DELETE_PROJECT_CONFIRM_TEXT =
+  'Project verwijderen? Dit project en de bijbehorende gegevens worden niet meer getoond. ' +
+  'Deze actie kan later door een beheerder worden hersteld.';
+
+function DeleteProjectButton({ projectId, projectName }: { projectId: string; projectName: string }) {
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleConfirm() {
+    setDeleting(true);
+    setError(null);
+    try {
+      await api.projects.delete(projectId);
+      navigate('/projects');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not delete the project.');
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <>
+      <Button type="button" variant="secondary" onClick={() => setOpen(true)}>Delete project</Button>
+      <Dialog open={open} onClose={() => setOpen(false)} title={`Delete “${projectName}”?`}>
+        <p className="text-sm text-slate-600">{DELETE_PROJECT_CONFIRM_TEXT}</p>
+        <FieldError>{error}</FieldError>
+        <div className="mt-4 flex justify-end gap-3">
+          <Button type="button" variant="secondary" onClick={() => setOpen(false)}>Cancel</Button>
+          <Button type="button" onClick={handleConfirm} disabled={deleting}>{deleting ? 'Deleting…' : 'Delete project'}</Button>
+        </div>
+      </Dialog>
+    </>
+  );
+}
+
 const RUN_TERMINAL_STATUSES = new Set(['succeeded', 'failed']);
+
+/**
+ * True when `candidate` is allowed to replace `current` as "the run this page shows" — never an
+ * older run replacing a newer one, regardless of which one's own async response (start-run or
+ * poll) happens to resolve last. Compares `created_at`, the moment the run was actually created
+ * server-side, not response-arrival order: a slow response for a run started *before* another one
+ * must never overwrite what that newer run already put on screen (see handleRunStarted below).
+ */
+export function isNewerRun(candidate: DiscoveryRun, current: DiscoveryRun | null): boolean {
+  if (!current) return true;
+  return new Date(candidate.created_at).getTime() >= new Date(current.created_at).getTime();
+}
 
 type SearchMode = 'website' | 'branch';
 const SEARCH_MODE_OPTIONS = [
   { value: 'website' as const, label: 'Website' },
   { value: 'branch' as const, label: 'Branche' },
+];
+
+// Generic search-breadth tiers — never a hardcoded provider count in this UI. What each tier
+// actually does (which providers run, which caps apply) is entirely the domain module's own
+// decision server-side (see domains/vacancies/src/sources/registry.ts's SEARCH_BREADTH_LIMITS);
+// this form only ever passes the tier's id through.
+type SearchBreadthOption = 'focused' | 'standard' | 'broad';
+const SEARCH_BREADTH_OPTIONS = [
+  { value: 'focused' as const, label: 'Focused' },
+  { value: 'standard' as const, label: 'Standard' },
+  { value: 'broad' as const, label: 'Broad' },
 ];
 
 export function StartDiscoveryForm({ projectId, onStarted }: { projectId: string; onStarted: (run: DiscoveryRun) => void }) {
@@ -28,6 +90,7 @@ export function StartDiscoveryForm({ projectId, onStarted }: { projectId: string
   const [branch, setBranch] = useState('');
   const [region, setRegion] = useState('');
   const [keywords, setKeywords] = useState('');
+  const [searchBreadth, setSearchBreadth] = useState<SearchBreadthOption>('standard');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -42,6 +105,7 @@ export function StartDiscoveryForm({ projectId, onStarted }: { projectId: string
           branch,
           ...(region.trim() ? { region: region.trim() } : {}),
           ...(keywords.trim() ? { keywords: keywords.trim() } : {}),
+          searchBreadth,
         });
       onStarted(run);
     } catch (err) {
@@ -88,6 +152,10 @@ export function StartDiscoveryForm({ projectId, onStarted }: { projectId: string
                 </div>
               </div>
               <div>
+                <p className="mb-1.5 block text-sm font-medium text-slate-700">Search breadth</p>
+                <SegmentedControl name="Search breadth" options={SEARCH_BREADTH_OPTIONS} value={searchBreadth} onChange={setSearchBreadth} />
+              </div>
+              <div>
                 <Button type="submit" disabled={submitting}>{submitting ? 'Starting…' : 'Start Discovery'}</Button>
               </div>
             </>
@@ -102,6 +170,10 @@ export function StartDiscoveryForm({ projectId, onStarted }: { projectId: string
 export function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  // The newest run this page has actually shown so far, from either handleRunStarted or a poll
+  // result — the reference point isNewerRun compares an incoming response against, so a
+  // delayed/out-of-order response tied to an older run can never win a race against a newer one.
+  const latestKnownRunRef = useRef<DiscoveryRun | null>(null);
 
   const { data: project, loading: projectLoading, error: projectError, refetch: refetchProject } = useAsync(
     () => api.projects.get(id!), [id],
@@ -133,7 +205,9 @@ export function ProjectDetailPage() {
   // ('succeeded') on their very first poll — a status-only dependency would never re-fire for
   // the second run, leaving activeRunId (and so the status card) stuck on the first one.
   useEffect(() => {
-    if (polledRun && activeRunId === polledRun.id && RUN_TERMINAL_STATUSES.has(polledRun.status)) {
+    if (!polledRun || activeRunId !== polledRun.id) return;
+    if (isNewerRun(polledRun, latestKnownRunRef.current)) latestKnownRunRef.current = polledRun;
+    if (RUN_TERMINAL_STATUSES.has(polledRun.status)) {
       setActiveRunId(null);
       refetchRecords();
       refetchRuns();
@@ -148,7 +222,13 @@ export function ProjectDetailPage() {
   const renderer = getDomainRenderer(project.domain);
   const latestRun = polledRun ?? runs?.[0] ?? null;
 
+  // Guards against a start-run response arriving out of order: if the user starts run A, then
+  // (before A's own response comes back) starts run B, and B's response happens to resolve
+  // first, A's later, stale response must never re-activate A after B already took over. See
+  // isNewerRun above — an older run's response is simply ignored, never displayed.
   function handleRunStarted(run: DiscoveryRun) {
+    if (!isNewerRun(run, latestKnownRunRef.current)) return;
+    latestKnownRunRef.current = run;
     setActiveRunId(run.id);
     if (RUN_TERMINAL_STATUSES.has(run.status)) {
       refetchRecords();
@@ -168,7 +248,10 @@ export function ProjectDetailPage() {
             {records?.length ?? 0} record{records?.length === 1 ? '' : 's'} found · last run {latestRun ? new Date(latestRun.created_at).toLocaleDateString() : 'never'}
           </p>
         </div>
-        <Link to="/projects" className="text-sm font-medium text-slate-500 hover:text-slate-700">← All projects</Link>
+        <div className="flex items-center gap-4">
+          <Link to="/projects" className="text-sm font-medium text-slate-500 hover:text-slate-700">← All projects</Link>
+          <DeleteProjectButton projectId={project.id} projectName={project.name} />
+        </div>
       </div>
 
       <StartDiscoveryForm projectId={project.id} onStarted={handleRunStarted} />

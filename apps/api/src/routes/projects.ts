@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { ProjectsRepository, WorkspacesRepository, type TransactionCapable } from '@discovery-platform/db';
 import { asyncHandler, badRequest, notFound } from '../http-errors.js';
 import { assertWorkspaceAccess } from '../workspace-access.js';
+import { assertModuleEnabled } from '../module-registry.js';
 import { defaultDomainRegistry, type DomainRegistry } from '../domain-registry.js';
 
 export function createProjectsRouter(pool: TransactionCapable, domainRegistry: DomainRegistry = defaultDomainRegistry): Router {
@@ -22,6 +23,7 @@ export function createProjectsRouter(pool: TransactionCapable, domainRegistry: D
     await assertWorkspaceAccess(pool, req, workspaceId);
     const workspace = await workspaces.getWorkspaceById(workspaceId);
     if (!workspace) throw notFound('Workspace not found.');
+    await assertModuleEnabled(pool, domain);
     const project = await projects.createProject({ workspaceId, name: name.trim(), domain, config });
     res.status(201).json(project);
   }));
@@ -45,6 +47,20 @@ export function createProjectsRouter(pool: TransactionCapable, domainRegistry: D
     const workspace = await workspaces.getWorkspaceById(workspaceId);
     if (!workspace) throw notFound('Workspace not found.');
     res.json(await projects.listProjectsByWorkspace(workspaceId));
+  }));
+
+  // Soft delete: never a hard DELETE FROM — see ProjectsRepository.softDeleteProject. A project
+  // that is already deleted (or never existed) reads the same as "not found" here, since
+  // getProjectById excludes deleted rows by default — deleting twice, or deleting an unknown id,
+  // both give the same clean 404, never a 500 or a silent no-op.
+  router.delete('/projects/:id', asyncHandler(async (req, res) => {
+    const project = await projects.getProjectById(req.params.id);
+    if (!project) throw notFound('Project not found.');
+    await assertWorkspaceAccess(pool, req, project.workspace_id);
+    const deletedBy = req.auth?.type === 'user' ? req.auth.userId : null;
+    const deleted = await projects.softDeleteProject(project.id, deletedBy);
+    if (!deleted) throw notFound('Project not found.');
+    res.status(204).end();
   }));
 
   return router;

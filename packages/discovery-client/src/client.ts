@@ -1,7 +1,8 @@
 import {
   ApiError,
-  type PublicUser, type Workspace, type WorkspaceMembership, type Project,
+  type PublicUser, type Workspace, type WorkspaceMembership, type Project, type AdminProject,
   type DiscoveryRun, type DiscoveryRecord, type RecordWithDetails, type BranchSearchInput,
+  type DiscoveryModuleDefinition,
 } from './types.js';
 
 export interface ApiClientOptions {
@@ -51,6 +52,9 @@ export function createApiClient({ baseUrl }: ApiClientOptions) {
       get: (id: string) => req<Project>('GET', `/projects/${id}`),
       create: (input: { workspaceId: string; name: string; domain: string; config?: Record<string, unknown> }) =>
         req<Project>('POST', '/projects', input),
+      /** Soft delete — see apps/api/src/routes/projects.ts. The project disappears from
+       * listByWorkspace/get immediately; its records/runs stay intact. */
+      delete: (id: string) => req<void>('DELETE', `/projects/${id}`),
     },
     runs: {
       start: (projectId: string, sourceUrl: string) => req<DiscoveryRun>('POST', `/projects/${projectId}/runs`, { sourceUrl }),
@@ -67,6 +71,18 @@ export function createApiClient({ baseUrl }: ApiClientOptions) {
         return req<DiscoveryRecord[]>('GET', `/projects/${projectId}/records${query}`);
       },
       get: (id: string) => req<RecordWithDetails>('GET', `/records/${id}`),
+    },
+    /** Admin-only — every method 403s for a non-admin user (see apps/api/src/admin-access.ts). */
+    admin: {
+      modules: {
+        list: () => req<DiscoveryModuleDefinition[]>('GET', '/admin/modules'),
+        setEnabled: (id: string, enabled: boolean) => req<DiscoveryModuleDefinition>('PATCH', `/admin/modules/${id}`, { enabled }),
+      },
+      projects: {
+        /** Every project across every workspace, active and soft-deleted alike. */
+        list: () => req<AdminProject[]>('GET', '/admin/projects'),
+        restore: (id: string) => req<Project>('POST', `/admin/projects/${id}/restore`),
+      },
     },
   };
 }

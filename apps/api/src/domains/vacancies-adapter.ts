@@ -31,8 +31,9 @@ import {
 } from '@discovery-platform/core';
 import {
   extractVacancy, vacanciesCrawlerConfig, vacancyCompletenessScore, findVacancyDuplicates,
-  buildBranchSearchQuery, buildJobBoardSearchTerm, createTsJobSpySourceProvider,
-  type VacancyFacts, type VacancySourceProvider, type VacancySourceCandidate, type VacancySourceMeta,
+  buildBranchSearchQuery, buildJobBoardSearchTerm, createTsJobSpySourceProvider, scoreVacancyRelevance,
+  createVacancySourceProviderRegistry, isSearchBreadth, DEFAULT_SEARCH_BREADTH, SEARCH_BREADTH_LIMITS,
+  type VacancyFacts, type VacancySourceProvider, type VacancySourceCandidate, type VacancySourceMeta, type SearchBreadth,
 } from '@discovery-platform/domain-vacancies';
 import type { DomainAdapter, ExistingRecordSnapshot, DiscoveryRunInput, DiscoveryRunOutcome } from '../domain-registry.js';
 
@@ -47,12 +48,22 @@ export type VacanciesCrawlOverrides = Pick<CrawlOptions<VacancyFacts>, 'transpor
   jobBoardProvider?: VacancySourceProvider;
 };
 
-// Conservative caps for this phase — protect against an uncontrolled number of candidate page
-// fetches/API cost. jobsWanted is *per site* (ts-jobspy's own convention), not a total.
-const MAX_BRANCH_CANDIDATES = 10;
-const JOB_BOARD_RESULTS_WANTED_PER_SITE = 10;
 const BRANCH_SEARCH_COUNTRY = 'NL';
 const BRANCH_SEARCH_LANGUAGE = 'nl';
+
+/** Runs `fn` against a hard deadline — a provider that hangs (or is simply slow) is treated
+ * exactly like any other provider failure: isolated, reported in stats.sources, and never allowed
+ * to block the other source from still contributing (see runBranchDiscovery's own per-source
+ * try/catch). Never used to abort real in-flight work, only to stop *waiting* on it. */
+function withTimeout<T>(fn: () => Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs);
+    fn().then(
+      value => { clearTimeout(timer); resolve(value); },
+      error => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
 
 // Deliberately simple and country-agnostic, exactly like examples/vacancy-discovery's own —
 // domains/vacancies owns no phone-numbering-plan knowledge of its own, so a caller always
@@ -156,9 +167,10 @@ function resolveSearchProvider(overrides: VacanciesCrawlOverrides): SourceSearch
 
 /** apps/api never constructs a ts-jobspy option object or sees a ts-jobspy Job — this just asks
  * the domain module for its own default provider (real ts-jobspy in production) unless a test
- * already injected a fake one. */
+ * already injected a fake one. The actual per-run cap is passed as `resultsWanted` on each
+ * `findCandidates()` call instead (see runBranchDiscovery), so it can vary with search breadth. */
 function resolveJobBoardProvider(overrides: VacanciesCrawlOverrides): VacancySourceProvider {
-  return overrides.jobBoardProvider ?? createTsJobSpySourceProvider({ resultsWanted: JOB_BOARD_RESULTS_WANTED_PER_SITE });
+  return overrides.jobBoardProvider ?? createTsJobSpySourceProvider();
 }
 
 function fillMissing(primary: Partial<VacancyFacts>, secondary: Partial<VacancyFacts> | undefined, sourceUrl: string): VacancyFacts {
@@ -179,12 +191,14 @@ function fillMissing(primary: Partial<VacancyFacts>, secondary: Partial<VacancyF
 }
 
 /** A job-board candidate that already has structured data is never re-crawled by default — only
- * when the provider itself flagged `needsEnrichment` (important fields genuinely missing) do we
- * fetch its own URL once through the exact same fetchAndExtractPage()/extractVacancy() flow a
- * website crawl uses, then fill in only the fields the job board left null. The job board's own
- * fields always win over anything enrichment finds. */
-async function completeJobBoardCandidate(candidate: VacancySourceCandidate, overrides: VacanciesCrawlOverrides): Promise<VacancyFacts> {
-  if (!candidate.needsEnrichment) return fillMissing(candidate.facts, undefined, candidate.sourceUrl);
+ * when the provider itself flagged `needsEnrichment` (important fields genuinely missing) *and*
+ * the run's own enrichment budget (see SEARCH_BREADTH_LIMITS.maxEnrichments) is not yet
+ * exhausted do we fetch its own URL once through the exact same fetchAndExtractPage()/
+ * extractVacancy() flow a website crawl uses, then fill in only the fields the job board left
+ * null. The job board's own fields always win over anything enrichment finds. */
+async function completeJobBoardCandidate(candidate: VacancySourceCandidate, overrides: VacanciesCrawlOverrides, enrichmentBudget: { remaining: number }): Promise<VacancyFacts> {
+  if (!candidate.needsEnrichment || enrichmentBudget.remaining <= 0) return fillMissing(candidate.facts, undefined, candidate.sourceUrl);
+  enrichmentBudget.remaining--;
   const enrichment = await fetchAndExtractPage(candidate.sourceUrl, {
     extract: extractVacancy,
     contactNormalizers,
@@ -222,17 +236,36 @@ async function runWebsiteDiscovery(
   };
 }
 
+// Web search (Brave) participates from 'standard' up — 'focused' is job boards only (see
+// SEARCH_BREADTH_LIMITS's own doc comment). It is still additionally gated on actually being
+// configured (see resolveSearchProvider) regardless of breadth — an unconfigured optional source
+// is never attempted at any tier.
+const WEB_SEARCH_BREADTH_TIERS: SearchBreadth[] = ['standard', 'broad'];
+
 /**
- * Source Discovery for vacancies: branch query -> (job-board provider + optional web-search
- * provider) -> candidates -> normalize/dedupe -> the existing vacancy crawler/extractor for
- * enrichment only where needed -> the existing plausibility filtering (inside extractVacancy
- * itself) -> the exact same scoring/dedupe website mode already uses. Either source failing is
- * isolated: it is reported in `stats.sources` and never discards the other source's candidates.
+ * Source Discovery for vacancies: branch query -> (job-board provider registry + optional
+ * web-search provider) -> candidates -> normalize/dedupe -> the existing vacancy crawler/
+ * extractor for enrichment only where needed -> the existing plausibility filtering (inside
+ * extractVacancy itself) -> the exact same scoring/dedupe website mode already uses. Either
+ * source failing (or timing out — see withTimeout) is isolated: reported in `stats.sources`,
+ * never discarding the other source's candidates. `input.searchBreadth` (focused/standard/broad)
+ * decides which providers run and the hard candidate/enrichment/timeout caps for this run — see
+ * the vacancies module's own SEARCH_BREADTH_LIMITS; unset or unrecognized falls back to
+ * 'standard', today's original behavior.
  */
 async function runBranchDiscovery(
   input: Extract<DiscoveryRunInput, { mode: 'branch' }>,
   overrides: VacanciesCrawlOverrides,
 ): Promise<DiscoveryRunOutcome> {
+  const breadth: SearchBreadth = isSearchBreadth(input.searchBreadth) ? input.searchBreadth : DEFAULT_SEARCH_BREADTH;
+  const limits = SEARCH_BREADTH_LIMITS[breadth];
+  const jobBoardRegistry = createVacancySourceProviderRegistry([
+    { id: 'ts-jobspy', tiers: ['focused', 'standard', 'broad'], provider: resolveJobBoardProvider(overrides) },
+  ]);
+  const enrichmentBudget = { remaining: limits.maxEnrichments };
+  let totalCandidatesUsed = 0;
+  const remainingCandidateBudget = () => Math.max(0, limits.maxTotalCandidates - totalCandidatesUsed);
+
   // Two distinct queries, never one string reused for both: a web-search engine (Brave) gets the
   // generic "vacature vacatures jobs" discovery hints plus region folded into the query text (it
   // has no separate location parameter); a job board (ts-jobspy) gets only the user's own branch
@@ -246,35 +279,47 @@ async function runBranchDiscovery(
   let candidatesFound = 0;
   let candidatesCrawled = 0;
 
-  // The job board (ts-jobspy: Indeed + LinkedIn) — always attempted, no API key required. This
-  // is branch mode's primary source; a failure here is isolated and never prevents Brave (below)
-  // from still contributing.
-  try {
-    const jobBoard = resolveJobBoardProvider(overrides);
-    const jobBoardResult = await jobBoard.findCandidates({ query: jobBoardSearchTerm, location: input.region, resultsWanted: JOB_BOARD_RESULTS_WANTED_PER_SITE });
-    sources.push(...jobBoardResult.meta);
-    candidatesFound += jobBoardResult.candidates.length;
-    for (const candidate of jobBoardResult.candidates) {
-      freshFacts.push(await completeJobBoardCandidate(candidate, overrides));
-      candidatesCrawled++;
+  // The job board (ts-jobspy: Indeed + LinkedIn) — always attempted at every breadth tier, no API
+  // key required. This is branch mode's primary source; a failure (or a timeout) here is isolated
+  // and never prevents web search (below) from still contributing.
+  for (const { provider: jobBoard } of jobBoardRegistry.providersFor(breadth)) {
+    try {
+      const jobBoardResult = await withTimeout(
+        () => jobBoard.findCandidates({ query: jobBoardSearchTerm, location: input.region, resultsWanted: limits.maxCandidatesPerProvider }),
+        limits.providerTimeoutMs,
+      );
+      sources.push(...jobBoardResult.meta);
+      const capped = jobBoardResult.candidates.slice(0, Math.min(limits.maxCandidatesPerProvider, remainingCandidateBudget()));
+      candidatesFound += jobBoardResult.candidates.length;
+      totalCandidatesUsed += capped.length;
+      for (const candidate of capped) {
+        freshFacts.push(await completeJobBoardCandidate(candidate, overrides, enrichmentBudget));
+        candidatesCrawled++;
+      }
+    } catch (error) {
+      sources.push({ provider: 'ts-jobspy', site: 'ts-jobspy', status: 'error', candidates: 0, durationMs: 0, error: error instanceof Error ? error.message : String(error) });
     }
-  } catch (error) {
-    sources.push({ provider: 'ts-jobspy', site: 'ts-jobspy', status: 'error', candidates: 0, durationMs: 0, error: error instanceof Error ? error.message : String(error) });
   }
 
-  // Brave web search — entirely optional. No key configured means no attempt at all: it simply
-  // contributes nothing, never a run failure (see resolveSearchProvider's own doc comment).
-  const searchProvider = resolveSearchProvider(overrides);
+  // Web search (Brave) — optional at every tier: no key configured means no attempt at all, it
+  // simply contributes nothing, never a run failure (see resolveSearchProvider's own doc
+  // comment). Only participates from 'standard' breadth up (see WEB_SEARCH_BREADTH_TIERS).
+  const searchProvider = WEB_SEARCH_BREADTH_TIERS.includes(breadth) ? resolveSearchProvider(overrides) : undefined;
   if (searchProvider) {
     const start = Date.now();
     try {
-      const rawCandidates = await searchProvider.search({
-        query: webSearchQuery, country: BRANCH_SEARCH_COUNTRY, language: BRANCH_SEARCH_LANGUAGE, count: MAX_BRANCH_CANDIDATES,
-      });
-      const candidates = normalizeCandidateUrls(rawCandidates, { maxCandidates: MAX_BRANCH_CANDIDATES });
+      const searchCap = Math.min(limits.maxCandidatesPerProvider, remainingCandidateBudget());
+      const rawCandidates = await withTimeout(
+        () => searchProvider.search({ query: webSearchQuery, country: BRANCH_SEARCH_COUNTRY, language: BRANCH_SEARCH_LANGUAGE, count: searchCap }),
+        limits.providerTimeoutMs,
+      );
+      const candidates = normalizeCandidateUrls(rawCandidates, { maxCandidates: searchCap });
       candidatesFound += candidates.length;
+      totalCandidatesUsed += candidates.length;
       let braveCrawled = 0;
       for (const candidate of candidates) {
+        if (enrichmentBudget.remaining <= 0) break;
+        enrichmentBudget.remaining--;
         const result = await fetchAndExtractPage(candidate.url, {
           extract: extractVacancy,
           contactNormalizers,
@@ -295,11 +340,25 @@ async function runBranchDiscovery(
     }
   }
 
-  const { records, collapsed, duplicatesAgainstExisting } = buildRecordsFromFacts(freshFacts, input.existingRecords);
+  // Query relevance — the pipeline stage between plausibility (already applied per-candidate
+  // above: extractVacancy's own isPlausibleVacancyPage for Brave candidates; ts-jobspy results
+  // are trusted structured job postings and skip that specific check) and dedupe. Only branch
+  // mode has a query to be relevant to; website mode never reaches this function at all, so it
+  // stays completely unaffected (see runWebsiteDiscovery above).
+  const candidatesReceived = freshFacts.length;
+  const relevantFacts: VacancyFacts[] = [];
+  for (const fact of freshFacts) {
+    if (scoreVacancyRelevance(fact, { branch: input.branch, keywords: input.keywords }).accepted) relevantFacts.push(fact);
+  }
+  const relevanceAccepted = relevantFacts.length;
+  const relevanceRejected = candidatesReceived - relevanceAccepted;
+
+  const { records, collapsed, duplicatesAgainstExisting } = buildRecordsFromFacts(relevantFacts, input.existingRecords);
   return {
     records,
     stats: {
       searchMode: 'branch',
+      searchBreadth: breadth,
       searchQuery: webSearchQuery,
       jobBoardSearchTerm,
       branch: input.branch,
@@ -310,8 +369,12 @@ async function runBranchDiscovery(
       candidatesCrawled,
       pagesVisited: candidatesCrawled,
       factsFound: freshFacts.length,
+      candidatesReceived,
+      relevanceAccepted,
+      relevanceRejected,
       duplicatesWithinCrawl: collapsed,
       duplicatesAgainstExisting,
+      duplicates: collapsed + duplicatesAgainstExisting,
       recordsCreated: records.length,
     },
   };
