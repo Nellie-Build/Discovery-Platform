@@ -60,7 +60,7 @@ function SourcesSection({ sources }: { sources: SourceMeta[] }) {
       <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Sources</h3>
       <ul className="flex flex-col gap-1.5">
         {rows.map(source => (
-          <li key={`${source.provider}-${source.site}`} className="flex items-center justify-between rounded-md bg-slate-50 px-3 py-2 text-sm">
+          <li key={`${source.provider}-${source.site}`} className="flex items-center justify-between rounded-lg bg-slate-50 px-3.5 py-2.5 text-sm border border-slate-100 hover:bg-slate-100 hover:shadow-sm transition-all duration-200">
             <span className="font-medium text-slate-700">{sourceLabel(source.site)}</span>
             <div className="flex items-center gap-2">
               {source.status !== 'disabled' && <span className="text-slate-500">{source.candidates} results</span>}
@@ -128,7 +128,7 @@ export function RunStatusCard({ run }: { run: DiscoveryRun }) {
         </div>
         {isBranchSearch && Array.isArray(stats.sources) && <SourcesSection sources={stats.sources as SourceMeta[]} />}
         {run.status === 'failed' && run.error && (
-          <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 shadow-sm">
             {run.error}
           </div>
         )}

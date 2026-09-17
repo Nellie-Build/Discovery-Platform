@@ -156,7 +156,7 @@ export function RecordDetailPage() {
           {/* Raw data — development/debug only, never the primary way to read this record. */}
           <details open={debugOpen} onToggle={e => setDebugOpen((e.target as HTMLDetailsElement).open)}>
             <summary className="cursor-pointer text-sm font-medium text-slate-500 hover:text-slate-700">Raw data (debug)</summary>
-            <pre className="mt-2 max-h-64 overflow-auto rounded-md bg-slate-900 p-3 text-xs text-slate-100">
+            <pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-slate-900 p-3 text-xs text-slate-100 shadow-md">
               {JSON.stringify(record, null, 2)}
             </pre>
           </details>

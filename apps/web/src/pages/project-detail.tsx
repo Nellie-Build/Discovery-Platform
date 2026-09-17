@@ -146,7 +146,7 @@ function AdvancedSettings({ maxPages, setMaxPages, maxCandidates, setMaxCandidat
   maxEnrichments: string; setMaxEnrichments: (v: string) => void;
 }) {
   return (
-    <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-4">
+    <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm sm:grid-cols-4">
       <div>
         <Label htmlFor="max-pages">Max pagina's</Label>
         <Input id="max-pages" type="number" min={1} placeholder="server default" value={maxPages} onChange={e => setMaxPages(e.target.value)} />
@@ -279,7 +279,7 @@ export function StartDiscoveryForm({ projectId, onStarted }: { projectId: string
             </div>
           )}
 
-          <div className="rounded-md border border-slate-200 p-3">
+          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <h3 className="mb-3 text-sm font-semibold text-slate-800">Zoekinstellingen</h3>
             <div className="flex flex-col gap-3">
               <div>

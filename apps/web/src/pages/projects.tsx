@@ -55,7 +55,7 @@ function NewProjectDialog({ open, onClose, workspaceId, onCreated }: {
             id="project-domain"
             value={domain}
             onChange={e => setDomain(e.target.value)}
-            className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+            className="block w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm shadow-sm hover:border-slate-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-400 focus:ring-offset-1 transition-colors duration-200"
           >
             {DOMAIN_OPTIONS.map(option => (
               <option key={option.value} value={option.value} disabled={!option.available}>

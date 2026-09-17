@@ -21,8 +21,11 @@ function NavItem({ to, label }: { to: string; label: string }) {
       end={to === '/'}
       className={({ isActive }) =>
         clsx(
-          'block rounded-md px-3 py-2 text-sm font-medium transition-colors',
-          isActive ? 'bg-brand-50 text-brand-800' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
+          'block rounded-lg px-3.5 py-2.5 text-sm font-medium transition-all duration-200',
+          isActive
+            ? 'bg-brand-600 text-white shadow-md'
+            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 hover:shadow-sm',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:ring-offset-0',
         )
       }
     >
@@ -33,13 +36,13 @@ function NavItem({ to, label }: { to: string; label: string }) {
 
 function WorkspaceSelector() {
   const { workspaces, current, setCurrentId, loading } = useWorkspace();
-  if (loading) return <div className="h-9 w-full animate-pulse rounded-md bg-slate-100" />;
+  if (loading) return <div className="h-10 w-full animate-pulse rounded-lg bg-slate-100" />;
   if (!current) return null;
   return (
     <select
       value={current.id}
       onChange={event => setCurrentId(event.target.value)}
-      className="w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+      className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-700 shadow-sm hover:border-slate-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-400 focus:ring-offset-1 transition-colors duration-200"
       aria-label="Current workspace"
     >
       {workspaces.map(workspace => (
@@ -92,7 +95,7 @@ export function AppLayout() {
           <button
             type="button"
             onClick={() => { void logout(); }}
-            className="mt-2 w-full rounded-md px-3 py-2 text-left text-sm font-medium text-slate-600 hover:bg-slate-100"
+            className="mt-2 w-full rounded-lg px-3.5 py-2.5 text-left text-sm font-medium text-slate-600 hover:bg-slate-100 hover:shadow-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
           >
             Log out
           </button>
@@ -108,7 +111,7 @@ export function AppLayout() {
           <button
             type="button"
             onClick={() => { void logout(); }}
-            className="text-sm font-medium text-slate-600"
+            className="rounded-lg px-3.5 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:shadow-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
           >
             Log out
           </button>
