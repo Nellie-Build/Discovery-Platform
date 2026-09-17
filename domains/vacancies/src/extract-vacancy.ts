@@ -297,14 +297,17 @@ function extractDescriptionDom($: CheerioAPI): string | null {
   return value.length > 40 ? value.slice(0, 10_000) : null;
 }
 
-// Never the source of a description on its own — only used to strip clearly-irrelevant regions
-// (navigation, footer, forms, cookie notices, "related vacancies" widgets) out of whatever
-// main/article content remains, so the fallback below never mistakes site chrome for the job's
-// own text. Generic structural tags plus a handful of universal, purpose-describing class/id
-// substrings — never one site's own class name.
+// Clearly-irrelevant regions — navigation, footer, forms, cookie notices, and "related/relevant/
+// similar vacancies" widgets (a real vacancy detail page very commonly ends with a "you might
+// also like" section previewing a few *other* jobs; that section is not this page's own subject).
+// Used to strip these out of a description fallback (below) and to keep them from ever counting
+// as evidence that the page itself is an overview (see looksLikeOverviewPage). Generic structural
+// tags plus a handful of universal, purpose-describing class/id substrings — never one site's own
+// class name.
 const NON_CONTENT_SELECTOR =
   'nav, footer, header, form, script, style, noscript, ' +
-  '[class*="cookie" i], [id*="cookie" i], [class*="menu" i], [class*="related" i], [class*="similar" i]';
+  '[class*="cookie" i], [id*="cookie" i], [class*="menu" i], ' +
+  '[class*="related" i], [class*="similar" i], [class*="relevant" i]';
 const DESCRIPTION_FALLBACK_MIN_LENGTH = 150;
 
 /**
@@ -467,15 +470,23 @@ export function extractJobPostingJsonLd($: CheerioAPI): Partial<VacancyFacts>[] 
  * icon+value, or an application link) — proof each heading is its own separate mini-vacancy
  * teaser, not just an unrelated subheading from one single job's own body copy (e.g. "Wat ga je
  * doen" / "Wat bieden wij"). Never based on a class name, hostname or any one site's own markup.
+ *
+ * Headings inside a `NON_CONTENT_SELECTOR` region are never counted — in particular a "related/
+ * relevant/similar vacancies" widget, the real regression this exclusion exists for: a genuine
+ * single-vacancy detail page very commonly ends with a small "you might also like" section
+ * previewing a few *other* jobs as their own card+heading+icon teasers, which otherwise looks
+ * structurally identical to a real overview page's own listing. That appended widget is not the
+ * page's own subject and must never make an otherwise perfectly good detail page get rejected.
  */
 function looksLikeOverviewPage($: CheerioAPI): boolean {
-  const headingTexts = $('h2, h3, h4').toArray()
+  const headings = $('h2, h3, h4').toArray().filter(el => $(el).closest(NON_CONTENT_SELECTOR).length === 0);
+  const headingTexts = headings
     .map(el => text($(el).text(), 200)?.toLowerCase())
     .filter((v): v is string => Boolean(v));
   if (new Set(headingTexts).size < 2) return false;
 
   let cardLikeHeadings = 0;
-  for (const el of $('h2, h3, h4').toArray()) {
+  for (const el of headings) {
     if (!text($(el).text(), 200)) continue;
     const container = $(el).parent();
     const hasMetadataIcon = container.find('[aria-label], [title]').toArray()

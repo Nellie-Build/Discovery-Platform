@@ -333,6 +333,44 @@ test('title + a substantial description + a direct contact — with no explicit 
   assert.equal(results[0].salary, null);
 });
 
+// ─── Real production regression: a genuine single-vacancy detail page (Werken bij de Overheid's
+// own aria-icon metadata pattern, no JobPosting JSON-LD) that ends with a "Relevante vacatures"
+// widget — 2-3 *other* jobs, each their own card+heading+icon teaser — was wrongly rejected as an
+// overview page, because that appended widget looked structurally identical to a genuine listing.
+// Reproduced with a minimal, generic fixture (never the real site's own HTML), see
+// fixtures/job-detail-with-related-widget.html. ─────────────────────────────────────────────────
+
+test('a real detail page with title/company/location/hours/salary/description, plus an appended "related vacancies" widget, is still accepted — the widget must never make it look like an overview', async () => {
+  const page = await loadPage('job-detail-with-related-widget.html', 'https://werkenbijdeoverheid.example/vacatures/adviseur-meldpunt-BD-1');
+  const results = extractVacancy(page);
+  assert.notEqual(results, undefined, 'the related-vacancies widget must never cause the whole page to be rejected as an overview');
+  assert.equal(results.length, 1);
+});
+
+test('company, location, hours and salary are all read correctly on that same fixture, unaffected by the related widget', async () => {
+  const page = await loadPage('job-detail-with-related-widget.html', 'https://werkenbijdeoverheid.example/vacatures/adviseur-meldpunt-BD-1');
+  const [facts] = extractVacancy(page);
+  assert.equal(facts.company, 'Belastingdienst');
+  assert.equal(facts.location, 'Den Haag');
+  assert.equal(facts.hours, '32 - 36 uur');
+  assert.equal(facts.salary, '€3.579 - €4.999 (bruto)');
+});
+
+test('a substantial description is found on that same fixture', async () => {
+  const page = await loadPage('job-detail-with-related-widget.html', 'https://werkenbijdeoverheid.example/vacatures/adviseur-meldpunt-BD-1');
+  const [facts] = extractVacancy(page);
+  assert.ok(facts.description && facts.description.length > 150);
+});
+
+test('a real vacancy with title + employer + location + hours/salary metadata + description is accepted with NO direct contact at all — direct contact is never required for a genuine vacancy', async () => {
+  const page = await loadPage('job-detail-with-related-widget.html', 'https://werkenbijdeoverheid.example/vacatures/adviseur-meldpunt-BD-1');
+  const [facts] = extractVacancy(page);
+  assert.equal(facts.phone, null);
+  assert.equal(facts.email, null);
+  assert.equal(facts.contactPerson, null);
+  // Already asserted accepted above (results.length === 1) — restated here for clarity of intent.
+});
+
 test('a bare mention of an hours-shaped or contract-type-shaped value elsewhere on the page (not near the vacancy heading) is never picked up', async () => {
   const page = pageFromHtml(
     '<html><head><title>Vacature - ACME</title><meta property="og:site_name" content="ACME"/></head><body>\n' +
