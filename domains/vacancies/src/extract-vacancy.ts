@@ -554,7 +554,14 @@ function diagnose($: CheerioAPI, url: string, r: VacancyFacts, hasJsonLd: boolea
     return { url, titleFound, metadataFieldsFound: 0, descriptionFound: false, directContactFound: false, signalScore: 0, accepted: false, rejectionReason: 'overview_page' };
   }
   const { score, metadataFieldsFound, directContactFound, descriptionFound } = scoreVacancyDetailEvidence($, r);
-  const hasJobSpecificEvidence = metadataFieldsFound > 0 || descriptionFound;
+  // A single "soft" signal (just a description, or just someone to contact) is never enough on
+  // its own — a real production false positive on a /contact page proved a substantial paragraph
+  // alone (a web form's own instructions, title + description, no actual metadata or contact
+  // info) already reached the raw score threshold. Either a real employment-metadata field
+  // (location/salary/hours/contractType — virtually every genuine vacancy states at least one),
+  // or the exact "title + description + contact" combination the brief this shipped with names
+  // explicitly, is required — never description alone, never contact alone.
+  const hasJobSpecificEvidence = metadataFieldsFound > 0 || (descriptionFound && directContactFound);
   const accepted = score >= PLAUSIBILITY_ACCEPT_THRESHOLD && hasJobSpecificEvidence;
   let rejectionReason: VacancyPageDiagnostic['rejectionReason'] = null;
   if (!accepted) rejectionReason = !titleFound ? 'no_title' : !hasJobSpecificEvidence ? 'insufficient_description' : 'insufficient_signals';

@@ -301,6 +301,38 @@ test('a company contact/staff page (title + a named person\'s phone/e-mail, but 
   assert.equal(extractVacancy(page), undefined);
 });
 
+test('a contact-form page (title + a substantial instructional paragraph, but no employment metadata and no actual contact details) is rejected, not saved as a vacancy', () => {
+  const page = pageFromHtml(
+    '<html><head><title>Contact - Overheid</title><meta property="og:site_name" content="Overheid"/></head><body>\n' +
+    '<h1>Contact</h1>\n' +
+    '<main>\n' +
+    '<p>Vul hier je gegevens in, dan nemen we contact met je op. Een kopie van het bericht wordt naar het opgegeven e-mailadres verzonden. Alle invoervelden zijn verplicht.</p>\n' +
+    '<form><input name="email"/><input name="message"/></form>\n' +
+    '</main>\n' +
+    '</body></html>',
+    'https://overheid.example/contact',
+  );
+  assert.equal(extractVacancy(page), undefined);
+});
+
+test('title + a substantial description + a direct contact — with no explicit employment metadata field at all — is still accepted, exactly the combination the brief itself names as sufficient', () => {
+  const page = pageFromHtml(
+    '<html><head><title>Vacature - Acme</title><meta property="og:site_name" content="Acme"/></head><body>\n' +
+    '<h1>Beleidsmedewerker</h1>\n' +
+    '<main>\n' +
+    '<p>Als beleidsmedewerker werk je aan complexe vraagstukken binnen onze organisatie. Je analyseert ontwikkelingen, adviseert het management en schrijft heldere beleidsstukken die direct bijdragen aan onze strategie en dagelijkse besluitvorming.</p>\n' +
+    '</main>\n' +
+    '<p>Contactpersoon: Petra Smit</p>\n' +
+    '<a href="mailto:petra.smit@acme.example">Mail Petra</a>\n' +
+    '</body></html>',
+    'https://acme.example/vacatures/beleidsmedewerker',
+  );
+  const results = extractVacancy(page);
+  assert.notEqual(results, undefined);
+  assert.equal(results[0].location, null);
+  assert.equal(results[0].salary, null);
+});
+
 test('a bare mention of an hours-shaped or contract-type-shaped value elsewhere on the page (not near the vacancy heading) is never picked up', async () => {
   const page = pageFromHtml(
     '<html><head><title>Vacature - ACME</title><meta property="og:site_name" content="ACME"/></head><body>\n' +
