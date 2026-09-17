@@ -520,6 +520,13 @@ const PLAUSIBILITY_ACCEPT_THRESHOLD = 3;
  * at a score of 3 means e.g. title + a named employer + one metadata item passes, but a title with
  * only one bare metadata item (score 2) does not — the exact "Onderzoeker" + "Locatie: Nijmegen"
  * case this rule exists to keep rejecting.
+ *
+ * One extra guard on top of the raw score: `title + direct contact` alone (with zero employment
+ * metadata and no description) is never enough, even though that combination alone already
+ * reaches the threshold — a real production false positive (a company's own `/contact` staff
+ * page: a page title, plus a named employee's own phone/e-mail, but nothing else job-specific at
+ * all). A genuine vacancy detail page always has *some* job-specific evidence beyond "there is a
+ * person to contact" — at least one metadata field or a real description.
  */
 function scoreVacancyDetailEvidence($: CheerioAPI, r: VacancyFacts): { score: number; metadataFieldsFound: number; directContactFound: boolean; descriptionFound: boolean } {
   let score = 0;
@@ -547,9 +554,10 @@ function diagnose($: CheerioAPI, url: string, r: VacancyFacts, hasJsonLd: boolea
     return { url, titleFound, metadataFieldsFound: 0, descriptionFound: false, directContactFound: false, signalScore: 0, accepted: false, rejectionReason: 'overview_page' };
   }
   const { score, metadataFieldsFound, directContactFound, descriptionFound } = scoreVacancyDetailEvidence($, r);
-  const accepted = score >= PLAUSIBILITY_ACCEPT_THRESHOLD;
+  const hasJobSpecificEvidence = metadataFieldsFound > 0 || descriptionFound;
+  const accepted = score >= PLAUSIBILITY_ACCEPT_THRESHOLD && hasJobSpecificEvidence;
   let rejectionReason: VacancyPageDiagnostic['rejectionReason'] = null;
-  if (!accepted) rejectionReason = !titleFound ? 'no_title' : !descriptionFound && metadataFieldsFound === 0 ? 'insufficient_description' : 'insufficient_signals';
+  if (!accepted) rejectionReason = !titleFound ? 'no_title' : !hasJobSpecificEvidence ? 'insufficient_description' : 'insufficient_signals';
   return { url, titleFound, metadataFieldsFound, descriptionFound, directContactFound, signalScore: score, accepted, rejectionReason };
 }
 

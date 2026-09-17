@@ -285,6 +285,22 @@ test('a vacancy overview page whose <main> contains a filter/facet sidebar (many
   assert.equal(extractVacancy(page), undefined);
 });
 
+// ─── Real production false positive: a company's own /contact staff page — a page title plus a
+// named employee's own phone/e-mail, but nothing else job-specific at all — must never be
+// mistaken for a vacancy just because "title + direct contact" alone reaches the score threshold.
+test('a company contact/staff page (title + a named person\'s phone/e-mail, but no employment metadata and no description) is rejected, not saved as a vacancy', () => {
+  const page = pageFromHtml(
+    '<html><head><title>Contact - Acme</title><meta property="og:site_name" content="Acme"/></head><body>\n' +
+    '<h1>Contact</h1>\n' +
+    '<p>Neem contact op met Jan de Vries</p>\n' +
+    '<a href="tel:0612345678">Bel Jan</a>\n' +
+    '<a href="mailto:jan.devries@acme.example">Mail Jan</a>\n' +
+    '</body></html>',
+    'https://acme.example/contact',
+  );
+  assert.equal(extractVacancy(page), undefined);
+});
+
 test('a bare mention of an hours-shaped or contract-type-shaped value elsewhere on the page (not near the vacancy heading) is never picked up', async () => {
   const page = pageFromHtml(
     '<html><head><title>Vacature - ACME</title><meta property="og:site_name" content="ACME"/></head><body>\n' +
