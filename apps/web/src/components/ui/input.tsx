@@ -8,9 +8,10 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
     <input
       ref={ref}
       className={clsx(
-        'block w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400',
-        'focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500',
-        'disabled:bg-slate-50 disabled:text-slate-500',
+        'block w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-500 transition-colors duration-200',
+        'focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-400 focus:ring-offset-1',
+        'hover:border-slate-400',
+        'disabled:bg-slate-50 disabled:text-slate-500 disabled:cursor-not-allowed',
         className,
       )}
       {...props}
@@ -19,7 +20,7 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
 });
 
 export function Label({ className, ...props }: LabelHTMLAttributes<HTMLLabelElement>) {
-  return <label className={clsx('mb-1.5 block text-sm font-medium text-slate-700', className)} {...props} />;
+  return <label className={clsx('mb-2 block text-sm font-semibold text-slate-700', className)} {...props} />;
 }
 
 export function FieldError({ children }: { children?: string | null }) {
