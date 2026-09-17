@@ -3,10 +3,16 @@
 // Firestore (see tests/dependency-boundary.test.mjs).
 import type { DomainConfig } from '@discovery-platform/core';
 import { VACANCY_LINK_TIER, vacanciesCrawlerConfig } from './config.js';
-import { extractVacancy, extractVacancyText, normalizeVacancyFacts, extractJobPostingJsonLd, type VacancyFacts } from './extract-vacancy.js';
+import {
+  extractVacancy, extractVacancyText, normalizeVacancyFacts, extractJobPostingJsonLd,
+  extractVacancyWithDiagnostic, type VacancyFacts, type VacancyPageDiagnostic,
+} from './extract-vacancy.js';
 
 export { VACANCY_LINK_TIER, vacanciesCrawlerConfig };
-export { extractVacancy, extractVacancyText, normalizeVacancyFacts, extractJobPostingJsonLd, type VacancyFacts };
+export {
+  extractVacancy, extractVacancyText, normalizeVacancyFacts, extractJobPostingJsonLd,
+  extractVacancyWithDiagnostic, type VacancyFacts, type VacancyPageDiagnostic,
+};
 export { vacancyCompletenessScore, type VacancyCompletenessResult } from './scoring/completeness.js';
 export {
   findVacancyDuplicates,

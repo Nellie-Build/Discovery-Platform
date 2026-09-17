@@ -237,7 +237,14 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
     }
   }
   try {
-    let next: string | undefined = scope.homepage;
+    // The caller's own requested URL (its own path, not just the site's origin) is always
+    // fetched first — see websiteScope's own doc comment on `requestedPage`. A direct deep link
+    // (e.g. one specific vacancy detail page) must never be silently discarded down to a
+    // homepage-only crawl before extraction ever gets a chance to run on it. The site's real
+    // homepage is still queued as a normal candidate (unless it *is* the requested page) so it
+    // stays available as a rich source of further navigation links, exactly as before.
+    if (scope.requestedPage !== scope.homepage) add(scope.homepage, scope.homepage);
+    let next: string | undefined = scope.requestedPage;
     let handled = 0;
     while (next && !stopped && pages < CRAWL_POLICY.maxPages && handled < CRAWL_POLICY.maxPages) {
       await crawlPage(next);

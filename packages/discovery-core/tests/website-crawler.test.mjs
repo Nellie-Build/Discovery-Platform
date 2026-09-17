@@ -52,6 +52,37 @@ test('crawls the homepage first, stays on-domain, prioritizes contact/about/rese
   assert.ok(result.extractedPages.every(p => p.data.title === 'T'));
 });
 
+test('a direct deep URL is fetched first, as page 1 — never discarded down to just the homepage before the crawl even starts', async () => {
+  const pages = {
+    '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nAllow: /' },
+    '/sitemap.xml': { contentType: 'application/xml', body: '<urlset></urlset>' },
+    // No link anywhere on the homepage points at this deep page — the only way to ever reach it
+    // is by fetching the literal URL the caller asked for, not by discovering it via link-following.
+    '/': { body: html([['/about']]) },
+    '/vacatures/commercie-en-advies/tender-manager-hengelo-1': { body: html([]) },
+    '/about': {},
+  };
+  const result = await crawlWebsite('https://example.com/vacatures/commercie-en-advies/tender-manager-hengelo-1', {
+    transport: site(pages), clock: fakeClock(), contactNormalizers, extract: titleExtract,
+  });
+  assert.equal(pageUrls(result)[0], '/vacatures/commercie-en-advies/tender-manager-hengelo-1');
+  // The site's real homepage is still queued as a normal candidate afterwards, so its own
+  // navigation links stay discoverable within the remaining page budget.
+  assert.ok(pageUrls(result).includes('/'));
+  assert.ok(pageUrls(result).includes('/about'));
+});
+
+test('a bare origin URL (no path) behaves exactly as before — the homepage is still page 1, never duplicated as its own separate candidate', async () => {
+  const pages = {
+    '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nAllow: /' },
+    '/sitemap.xml': { contentType: 'application/xml', body: '<urlset></urlset>' },
+    '/': { body: html([['/about']]) },
+    '/about': {},
+  };
+  const result = await crawlWebsite('https://example.com', { transport: site(pages), clock: fakeClock(), contactNormalizers, extract: titleExtract });
+  assert.deepEqual(pageUrls(result), ['/', '/about']);
+});
+
 test('linkPriorityExtraTiers changes which candidate page the crawler visits next, without this package defining the category itself', async () => {
   const pages = {
     '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nAllow: /' },

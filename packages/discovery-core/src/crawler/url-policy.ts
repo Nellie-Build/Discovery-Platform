@@ -1,7 +1,8 @@
 const binary = /\.(?:pdf|jpe?g|png|gif|webp|svg|ico|zip|gz|mp[34]|avi|woff2?|ttf|css|js|xml|txt)$/i;
 
 export function websiteScope(website: string) {
-  const start = new URL(website.includes('://') ? website.trim() : `https://${website.trim()}`);
+  const qualified = website.includes('://') ? website.trim() : `https://${website.trim()}`;
+  const start = new URL(qualified);
   if (!['http:', 'https:'].includes(start.protocol) || start.username || start.password) throw new Error('Ongeldige HTTP(S)-website.');
   const host = (url: URL) => url.hostname.toLowerCase().replace(/\.$/, '').replace(/^www\./, '');
   const domain = host(start);
@@ -19,7 +20,15 @@ export function websiteScope(website: string) {
       return url.href;
     } catch { return null; }
   }
-  return { homepage: start.href, domain, normalize };
+  // The caller's own literal URL (its own path/query, not stripped down to the site's origin),
+  // normalized through the exact same rules as any other candidate link. This is what the
+  // crawler actually fetches first (see website-crawler.ts's own main loop) — a direct deep link
+  // (e.g. one specific vacancy detail page) is never silently discarded down to just its
+  // homepage before the crawl even starts. `qualified` (not the raw, possibly protocol-less
+  // `website` argument) is passed to `normalize` so a bare "example.com/path" input resolves the
+  // same way `start` itself already did above, never as a relative reference against `start.href`.
+  const requestedPage = normalize(qualified, undefined, true) ?? start.href;
+  return { homepage: start.href, domain, normalize, requestedPage };
 }
 
 /** One extra priority tier a caller can splice into the ranking below — this is how a domain

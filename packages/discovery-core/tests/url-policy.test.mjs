@@ -11,6 +11,19 @@ test('websiteScope derives the homepage and bare domain, rejecting non-HTTP(S) i
   assert.throws(() => websiteScope('http://localhost'), /publiek websitedomein/);
 });
 
+test('requestedPage is the caller\'s own literal URL, normalized — not silently collapsed down to the bare homepage', () => {
+  const deep = websiteScope('https://www.werkenbijspie.nl/vacatures/commercie-en-advies/tender-manager-hengelo-1');
+  assert.equal(deep.requestedPage, 'https://www.werkenbijspie.nl/vacatures/commercie-en-advies/tender-manager-hengelo-1');
+  assert.equal(deep.homepage, 'https://www.werkenbijspie.nl/');
+
+  const bare = websiteScope('https://example.com');
+  assert.equal(bare.requestedPage, bare.homepage);
+
+  // A protocol-less bare hostname is qualified with https:// first, exactly like `homepage` is.
+  const noProtocol = websiteScope('example.com/rooms');
+  assert.equal(noProtocol.requestedPage, 'https://example.com/rooms');
+});
+
 test('normalize keeps only same-domain, same-port HTTP(S) links and strips tracking noise', () => {
   const scope = websiteScope('https://example.com');
   assert.equal(scope.normalize('/contact', scope.homepage), 'https://example.com/contact');

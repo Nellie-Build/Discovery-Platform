@@ -30,10 +30,11 @@ import {
   type CrawlOptions, type SourceSearchProvider,
 } from '@discovery-platform/core';
 import {
-  extractVacancy, vacanciesCrawlerConfig, vacancyCompletenessScore, findVacancyDuplicates,
+  extractVacancy, extractVacancyWithDiagnostic, vacanciesCrawlerConfig, vacancyCompletenessScore, findVacancyDuplicates,
   buildBranchSearchQuery, buildJobBoardSearchTerm, createTsJobSpySourceProvider, scoreVacancyRelevance,
   createVacancySourceProviderRegistry, isSearchBreadth, DEFAULT_SEARCH_BREADTH, SEARCH_BREADTH_LIMITS,
   type VacancyFacts, type VacancySourceProvider, type VacancySourceCandidate, type VacancySourceMeta, type SearchBreadth,
+  type VacancyPageDiagnostic,
 } from '@discovery-platform/domain-vacancies';
 import type { DomainAdapter, ExistingRecordSnapshot, DiscoveryRunInput, DiscoveryRunOutcome } from '../domain-registry.js';
 
@@ -213,8 +214,18 @@ async function runWebsiteDiscovery(
   input: Extract<DiscoveryRunInput, { mode: 'website' }>,
   overrides: VacanciesCrawlOverrides,
 ): Promise<DiscoveryRunOutcome> {
+  // Every crawled HTML page's own extraction diagnostic is collected here as a byproduct of the
+  // `extract` callback below — never the page's own HTML or any personal data, just counts/
+  // booleans/a reason code (see VacancyPageDiagnostic's own doc comment). This is what makes it
+  // observable *why* a given page did or didn't become a record, without changing
+  // discovery-core's own generic `extract` contract (still just returns facts).
+  const diagnostics: VacancyPageDiagnostic[] = [];
   const crawl = await crawlWebsite(input.sourceUrl, {
-    extract: extractVacancy,
+    extract: page => {
+      const { facts, diagnostic } = extractVacancyWithDiagnostic(page);
+      diagnostics.push(diagnostic);
+      return facts;
+    },
     linkPriorityExtraTiers: vacanciesCrawlerConfig.linkPriorityExtraTiers,
     contactNormalizers,
     transport: overrides.transport,
@@ -222,6 +233,15 @@ async function runWebsiteDiscovery(
   });
   const freshFacts = crawl.extractedPages.map(page => page.data);
   const { records, collapsed, duplicatesAgainstExisting } = buildRecordsFromFacts(freshFacts, input.existingRecords);
+
+  const rejectionReasons: Record<string, number> = {};
+  let pagesAccepted = 0, pagesWithVacancySignals = 0;
+  for (const d of diagnostics) {
+    if (d.accepted) pagesAccepted++;
+    if (d.titleFound || d.metadataFieldsFound > 0 || d.descriptionFound || d.directContactFound) pagesWithVacancySignals++;
+    if (!d.accepted && d.rejectionReason) rejectionReasons[d.rejectionReason] = (rejectionReasons[d.rejectionReason] ?? 0) + 1;
+  }
+
   return {
     records,
     stats: {
@@ -232,6 +252,11 @@ async function runWebsiteDiscovery(
       duplicatesWithinCrawl: collapsed,
       duplicatesAgainstExisting,
       recordsCreated: records.length,
+      pagesWithVacancySignals,
+      pagesAccepted,
+      pagesRejected: diagnostics.length - pagesAccepted,
+      rejectionReasons,
+      pageDiagnostics: diagnostics,
     },
   };
 }

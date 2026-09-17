@@ -230,3 +230,72 @@ test('JobPosting JSON-LD alone is still accepted outright, with no other signal 
   const [facts] = extractVacancy(page);
   assert.equal(facts.title, 'Minimal Vacancy');
 });
+
+// ─── Generic metadata from repetitive/unlabeled structures — the real werkenbijspie.nl-shaped
+// regression: a modern vacancy detail page with title/metadata/description/contact but no literal
+// "Label: value" text and no itemprop="description" — reproduced with a minimal, generic fixture
+// (never the real site's own HTML), see fixtures/job-metadata-block.html. ─────────────────────────
+
+test('a real detail page shaped like this (title + unlabeled metadata block + DOM description + recruiter contact) is accepted', async () => {
+  const page = await loadPage('job-metadata-block.html', 'https://acme-careers.example/vacatures/commercie-en-advies/tender-manager-hengelo-1');
+  const results = extractVacancy(page);
+  assert.notEqual(results, undefined);
+  assert.equal(results.length, 1);
+});
+
+test('location "Hengelo" is read from the structural metadata block via its data-field hint, with no literal "Locatie:" label anywhere', async () => {
+  const page = await loadPage('job-metadata-block.html', 'https://acme-careers.example/vacatures/commercie-en-advies/tender-manager-hengelo-1');
+  const [facts] = extractVacancy(page);
+  assert.equal(facts.location, 'Hengelo');
+});
+
+test('"40 uur" is recognized as hours purely by its own value shape, with no label at all', async () => {
+  const page = await loadPage('job-metadata-block.html', 'https://acme-careers.example/vacatures/commercie-en-advies/tender-manager-hengelo-1');
+  const [facts] = extractVacancy(page);
+  assert.equal(facts.hours, '40 uur');
+});
+
+test('a substantial description is recognized from main/article content even without itemprop="description"', async () => {
+  const page = await loadPage('job-metadata-block.html', 'https://acme-careers.example/vacatures/commercie-en-advies/tender-manager-hengelo-1');
+  const [facts] = extractVacancy(page);
+  assert.ok(facts.description && facts.description.length > 150);
+  assert.ok(facts.description.includes('Tendermanager'));
+  // Never leaks the surrounding page chrome (nav/header/apply link) into the description.
+  assert.ok(!facts.description.includes('ACME Careers'));
+  assert.ok(!facts.description.includes('Solliciteer'));
+});
+
+test('phone and e-mail keep working unchanged alongside the new metadata-block extraction', async () => {
+  const page = await loadPage('job-metadata-block.html', 'https://acme-careers.example/vacatures/commercie-en-advies/tender-manager-hengelo-1');
+  const [facts] = extractVacancy(page);
+  assert.equal(facts.phone, '0651361393');
+  assert.equal(facts.email, 'jeroen.koster@acme-careers.example');
+  assert.equal(facts.contactPerson, 'Jeroen Koster');
+});
+
+// ─── Real production regression: a vacancy *overview* page's own filter/facet sidebar (many
+// short <label>/<li> checkbox options: "Vakgebied", "ICT", "Wo", "Hbo", ...) lives inside <main>
+// too, right alongside one short instructional <p>. The DOM description fallback must never treat
+// that sidebar as "the description" — it is not wrapped in <p> tags the way real authored prose
+// is, unlike a genuine job description. Reproduced with a minimal fixture (never the real site's
+// own HTML), see fixtures/job-overview-filter-panel.html. ─────────────────────────────────────────
+
+test('a vacancy overview page whose <main> contains a filter/facet sidebar (many short <label>/<li> options, no real <p> prose) is never mistaken for a vacancy description', async () => {
+  const page = await loadPage('job-overview-filter-panel.html', 'https://careersite.example/vacatures');
+  assert.equal(extractVacancy(page), undefined);
+});
+
+test('a bare mention of an hours-shaped or contract-type-shaped value elsewhere on the page (not near the vacancy heading) is never picked up', async () => {
+  const page = pageFromHtml(
+    '<html><head><title>Vacature - ACME</title><meta property="og:site_name" content="ACME"/></head><body>\n' +
+    '<h1>Consultant</h1>\n' +
+    '<p>Salaris: €3.000 per maand</p>\n' +
+    '<p>Contactpersoon: Anna Jansen</p>\n' +
+    '<footer><p>Ons kantoor is 40 uur per week bereikbaar. Fulltime support.</p></footer>\n' +
+    '</body></html>',
+    'https://example.test/vacatures/consultant',
+  );
+  const [facts] = extractVacancy(page);
+  assert.equal(facts.hours, null);
+  assert.equal(facts.contractType, null);
+});

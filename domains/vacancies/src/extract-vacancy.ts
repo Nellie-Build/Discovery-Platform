@@ -1,6 +1,11 @@
 import type { CheerioAPI } from 'cheerio';
 import type { CrawlPage } from '@discovery-platform/core';
 
+/** A cheerio-wrapped node selection — `cheerio` itself doesn't export this as a bare type, and
+ * this package's own dependency boundary (see tests/dependency-boundary.test.mjs) never imports
+ * `domhandler` directly to get at it, so it is derived from `CheerioAPI`'s own return type. */
+type CheerioSelection = ReturnType<CheerioAPI>;
+
 /** Only explicit source facts — a field stays `null` rather than being guessed. No AI, no
  * inference beyond "this exact structured field, label or contact pattern was actually there". */
 export interface VacancyFacts {
@@ -72,6 +77,12 @@ const LABEL_GROUPS: Record<'location' | 'salary' | 'hours' | 'contractType' | 'c
   contactPerson: ['contactpersoon', 'contact person'],
   company: ['werkgever', 'organisatie', 'employer', 'company'],
 };
+
+/** Generic `data-*` attribute names a machine-readable metadata hook might use to name its own
+ * field — never one site's own bespoke attribute, only the handful of conventional names widely
+ * used for this purpose (component/test/analytics hooks). */
+const DATA_LABEL_ATTRS = ['data-field', 'data-type', 'data-label', 'data-name', 'data-testid', 'data-meta'];
+const DATA_LABEL_SELECTOR = DATA_LABEL_ATTRS.map(attr => `[${attr}]`).join(', ');
 
 export function extractVacancyText(pageText: string): Partial<VacancyFacts> {
   const facts: Partial<VacancyFacts> = {};
@@ -164,6 +175,21 @@ function extractLabelValueDom($: CheerioAPI): Partial<VacancyFacts> {
     if (field) setOnce(field, nextValue(el));
   });
 
+  // A label can also live in a plain `data-*` attribute naming the field, with the value as that
+  // same element's own text — e.g. `<span data-field="location">Hengelo</span>`, a common
+  // machine-readable hook modern "vacancy widget" components emit for their own client-side
+  // filtering/search (never a next-sibling pattern here, since label and value are one element).
+  // Generic across any site using this convention — never one site's own attribute name/class.
+  $(DATA_LABEL_SELECTOR).slice(0, 500).each((_i, el) => {
+    const $el = $(el);
+    let field: keyof typeof LABEL_GROUPS | null = null;
+    for (const attr of DATA_LABEL_ATTRS) {
+      field = matchLabelElement($el.attr(attr) ?? '');
+      if (field) break;
+    }
+    if (field) setOnce(field, $el.text());
+  });
+
   return facts;
 }
 
@@ -197,6 +223,64 @@ function extractMicrodata($: CheerioAPI): Partial<VacancyFacts> {
   return facts;
 }
 
+// A bare value's own *shape* can identify its field without any label at all — "40 uur" only
+// ever means hours, regardless of what site it came from; "Fulltime"/"Parttime" (and their Dutch
+// equivalents) are a small, universal, closed employment-type vocabulary, not any one site's own
+// wording. Never used for `location` or `salary` — recognizing an arbitrary bare word as a place
+// name, or a bare number as money, would mean inventing geography/currency knowledge this package
+// deliberately has none of (see docs/architecture.md).
+const HOURS_VALUE_SHAPE = /^\d{1,3}(?:[.,]\d{1,2})?\s*-?\s*\d{0,3}\s*(?:uur|u|hours?|hrs?)(?:\s*\/?\s*(?:per\s*)?(?:week|wk))?$/i;
+const CONTRACT_TYPE_VALUES = new Set(['fulltime', 'full-time', 'full time', 'parttime', 'part-time', 'part time', 'voltijd', 'deeltijd']);
+
+function matchValueShape(value: string): 'hours' | 'contractType' | null {
+  const trimmed = value.trim();
+  if (HOURS_VALUE_SHAPE.test(trimmed)) return 'hours';
+  if (CONTRACT_TYPE_VALUES.has(trimmed.toLowerCase())) return 'contractType';
+  return null;
+}
+
+/** A bounded "near the vacancy heading" DOM region — the heading's own parent, plus up to three
+ * of that parent's next siblings — where a label-free metadata item (see matchValueShape) is
+ * trusted as belonging to *this* vacancy. The same bare value found elsewhere on the page (e.g.
+ * mentioned in passing within running body copy) is not — nothing marks it as this vacancy's own
+ * metadata there. Never a site-specific selector, only DOM proximity to whichever heading
+ * resolveDomTitle already chose. */
+function metadataBlockScope($: CheerioAPI, headingEl: CheerioSelection | null): CheerioSelection {
+  if (!headingEl || !headingEl.length) return $([]);
+  const parent = headingEl.parent();
+  if (!parent.length) return $([]);
+  const region = [parent];
+  let sibling = parent.next();
+  for (let i = 0; i < 3 && sibling.length; i++) {
+    region.push(sibling);
+    sibling = sibling.next();
+  }
+  return $(region.map(node => node.toArray()).flat());
+}
+
+/**
+ * Generic, label-free vacancy metadata — repeated short "leaf" values (no element children of
+ * their own) structurally grouped near the vacancy heading, the classic modern pattern of
+ * several short metadata items ("Tender Manager" / "Hengelo" / "40 uur" / "HBO") stacked with no
+ * literal "Label: value" text anywhere. Only ever assigns a field when the *value's own shape*
+ * unambiguously identifies it (see matchValueShape) — never a positional guess ("the second item
+ * must be the location"), since that would risk misreading an unrelated short value (a
+ * department, a seniority level, ...) as a place name.
+ */
+function extractMetadataBlockDom($: CheerioAPI, headingEl: CheerioSelection | null): Partial<VacancyFacts> {
+  const facts: Partial<VacancyFacts> = {};
+  const scope = metadataBlockScope($, headingEl);
+  if (!scope.length) return facts;
+  const leaves = scope.find('*').filter((_i, el) => $(el).children().length === 0);
+  leaves.slice(0, 100).each((_i, el) => {
+    const value = text($(el).text(), 40);
+    if (!value) return;
+    const field = matchValueShape(value);
+    if (field && !(field in facts)) facts[field] = value;
+  });
+  return facts;
+}
+
 /**
  * A duly semantic, standards-based description block only — schema.org microdata's own
  * `itemprop="description"` hook (the microdata sibling of the JSON-LD `JobPosting.description`
@@ -211,6 +295,49 @@ function extractDescriptionDom($: CheerioAPI): string | null {
   if (!html) return null;
   const value = stripHtml(html);
   return value.length > 40 ? value.slice(0, 10_000) : null;
+}
+
+// Never the source of a description on its own — only used to strip clearly-irrelevant regions
+// (navigation, footer, forms, cookie notices, "related vacancies" widgets) out of whatever
+// main/article content remains, so the fallback below never mistakes site chrome for the job's
+// own text. Generic structural tags plus a handful of universal, purpose-describing class/id
+// substrings — never one site's own class name.
+const NON_CONTENT_SELECTOR =
+  'nav, footer, header, form, script, style, noscript, ' +
+  '[class*="cookie" i], [id*="cookie" i], [class*="menu" i], [class*="related" i], [class*="similar" i]';
+const DESCRIPTION_FALLBACK_MIN_LENGTH = 150;
+
+/**
+ * A generic DOM description fallback for pages with real body copy but no `itemprop="description"`
+ * marker — modern practice for many "werken-bij" sites. Scoped to a semantic `<main>` or
+ * `<article>` element only (never a bare guess across the whole `<body>`, which would just as
+ * easily capture navigation and unrelated page chrome on a page with no such container); within
+ * that scope, known non-content regions are stripped first. Requires a substantial result
+ * (`DESCRIPTION_FALLBACK_MIN_LENGTH`) — a short leftover fragment is not "the description", it is
+ * simply not confidently found here and stays `null`.
+ */
+/**
+ * Only text from `<p>` elements counts — never every remaining word inside `<main>`/`<article>`
+ * after excluding a fixed list of chrome selectors, which real production content proved too
+ * permissive: a vacancy *overview* page's own filter/facet sidebar (many short `<label>`/`<li>`
+ * checkbox options, e.g. "Vakgebied", "ICT", "Wo", "Hbo", ...) lives right inside `<main>` too and
+ * is not excluded by any generic chrome selector, but is never wrapped in `<p>` tags the way real
+ * authored prose almost always is — restricting to `<p>` text is what keeps that sidebar out
+ * without hardcoding anything about this one site's own filter widget.
+ */
+function extractDescriptionDomFallback($: CheerioAPI): string | null {
+  const scope = $('main, article').first();
+  if (!scope.length) return null;
+  const clone = scope.clone();
+  clone.find(NON_CONTENT_SELECTOR).remove();
+  // An application call-to-action link ("Solliciteer nu") is not part of the job's own text —
+  // strip it the same way a whole application *form* is already excluded above.
+  clone.find('a').filter((_i, el) => /solliciteer|apply|bekijk\s*vacature/i.test(text($(el).text(), 100) ?? '')).remove();
+  const paragraphs = clone.find('p').toArray()
+    .map(el => text($(el).text(), 2000))
+    .filter((v): v is string => Boolean(v));
+  const value = paragraphs.join(' ');
+  return value.length >= DESCRIPTION_FALLBACK_MIN_LENGTH ? value.slice(0, 10_000) : null;
 }
 
 /**
@@ -249,18 +376,33 @@ function isGenericHeading($: CheerioAPI, candidate: string): boolean {
  * proved unreliable in production (a site-wide header/logo heading was picked up as the job
  * title), so it never outranks the page's own <title>.
  */
-function resolveDomTitle($: CheerioAPI): string | null {
-  const semantic = text($('[itemprop="title"]').first().text());
-  if (semantic && !isGenericHeading($, semantic)) return semantic;
+interface ResolvedDomTitle {
+  text: string | null;
+  /** The heading element the title text actually came from (or, failing that, the first
+   * non-generic `<h1>` if any exists) — used only as an anchor for `extractMetadataBlockDom`'s
+   * "near the heading" scope, never for the title text itself once a better source outranks it. */
+  el: CheerioSelection | null;
+}
 
-  const titleTag = text($('title').first().text());
-  if (titleTag) return titleTag;
-
+function firstNonGenericH1($: CheerioAPI): CheerioSelection | null {
   for (const el of $('h1').toArray()) {
     const candidate = text($(el).text());
-    if (candidate && !isGenericHeading($, candidate)) return candidate;
+    if (candidate && !isGenericHeading($, candidate)) return $(el);
   }
   return null;
+}
+
+function resolveDomTitle($: CheerioAPI): ResolvedDomTitle {
+  const semanticEl = $('[itemprop="title"]').first();
+  const semantic = text(semanticEl.text());
+  if (semantic && !isGenericHeading($, semantic)) return { text: semantic, el: semanticEl };
+
+  const titleTag = text($('title').first().text());
+  if (titleTag) return { text: titleTag, el: firstNonGenericH1($) };
+
+  const h1 = firstNonGenericH1($);
+  if (h1) return { text: text(h1.text()), el: h1 };
+  return { text: null, el: null };
 }
 
 /**
@@ -318,32 +460,128 @@ export function extractJobPostingJsonLd($: CheerioAPI): Partial<VacancyFacts>[] 
 }
 
 /**
- * One crawled page → zero or more VacancyFacts. Composes, in order of trust: structured
- * JobPosting data (page-level, needs the DOM — never routed through DomainConfig.extractText,
- * since that seam only ever sees plain text, not the DOM), then schema.org microdata, then the
- * plain-text label fallback, then the generic DOM label/value fallback, then generic contact
- * details discovery-core's own crawler already extracted for this page. Without JobPosting
- * JSON-LD, a page needs at least two independent vacancy-specific signal groups to be reported at
- * all — see `isPlausibleVacancyPage` below for why a single group (e.g. just location/salary/
- * hours/contractType) is not enough on its own.
+ * True when the page looks like a listing of several *different* vacancies rather than one
+ * detail page's own content — the classic "card" pattern a vacancy overview or careers landing
+ * page uses to preview several jobs at once: two or more distinct headings, each sitting inside
+ * its own small subtree that also carries its own job-metadata-shaped signal (a location/salary
+ * icon+value, or an application link) — proof each heading is its own separate mini-vacancy
+ * teaser, not just an unrelated subheading from one single job's own body copy (e.g. "Wat ga je
+ * doen" / "Wat bieden wij"). Never based on a class name, hostname or any one site's own markup.
  */
-export function extractVacancy(page: CrawlPage): VacancyFacts[] | undefined {
+function looksLikeOverviewPage($: CheerioAPI): boolean {
+  const headingTexts = $('h2, h3, h4').toArray()
+    .map(el => text($(el).text(), 200)?.toLowerCase())
+    .filter((v): v is string => Boolean(v));
+  if (new Set(headingTexts).size < 2) return false;
+
+  let cardLikeHeadings = 0;
+  for (const el of $('h2, h3, h4').toArray()) {
+    if (!text($(el).text(), 200)) continue;
+    const container = $(el).parent();
+    const hasMetadataIcon = container.find('[aria-label], [title]').toArray()
+      .some(icon => matchLabelElement($(icon).attr('aria-label') ?? '') ?? matchLabelElement($(icon).attr('title') ?? ''));
+    const hasApplyLink = container.find('a').toArray()
+      .some(a => /solliciteer|apply|bekijk\s*vacature|meer\s*informatie/i.test(text($(a).text(), 100) ?? ''));
+    if (hasMetadataIcon || hasApplyLink) cardLikeHeadings++;
+    if (cardLikeHeadings >= 2) return true;
+  }
+  return false;
+}
+
+/** Per-page extraction diagnostics — deliberately just counts/booleans/a reason code, never the
+ * page's own HTML or any personal data (see extract-vacancy's own doc comments on this file never
+ * logging more than it needs to). Used by apps/api's website-mode run stats (see
+ * vacancies-adapter.ts) to make it observable *why* a crawled page did or didn't become a record. */
+export interface VacancyPageDiagnostic {
+  url: string;
+  titleFound: boolean;
+  metadataFieldsFound: number;
+  descriptionFound: boolean;
+  directContactFound: boolean;
+  signalScore: number;
+  accepted: boolean;
+  rejectionReason: 'no_title' | 'insufficient_signals' | 'overview_page' | 'insufficient_description' | null;
+}
+
+const PLAUSIBILITY_ACCEPT_THRESHOLD = 3;
+
+/**
+ * Evidence-based vacancy-detail classifier — replaces the old flat "≥2 groups, title never
+ * counts" rule with a weighted combination of STRONG and SUPPORTING signals (see the brief this
+ * shipped with). Only reached when there is no JobPosting JSON-LD (structured data is definitive
+ * on its own — see extractVacancy). `looksLikeOverviewPage` is checked first and unconditionally
+ * rejects: no combination of other evidence overrides "this page previews several different
+ * vacancies", since that is a direct, structural sign the page's own subject is *not* one job.
+ *
+ * Weights: a meaningful, non-generic title (1), a named employer (1), a detail metadata block —
+ * up to 2 of location/salary/hours/contractType, capped at 2 points so a single bare item never
+ * outweighs everything else (max 2), a substantial description ≥150 chars (2, "strong"), a direct
+ * contact — contactPerson/phone/email (2, "strong"), an application call-to-action (1). Accepting
+ * at a score of 3 means e.g. title + a named employer + one metadata item passes, but a title with
+ * only one bare metadata item (score 2) does not — the exact "Onderzoeker" + "Locatie: Nijmegen"
+ * case this rule exists to keep rejecting.
+ */
+function scoreVacancyDetailEvidence($: CheerioAPI, r: VacancyFacts): { score: number; metadataFieldsFound: number; directContactFound: boolean; descriptionFound: boolean } {
+  let score = 0;
+  if (r.title && !isGenericHeading($, r.title)) score += 1;
+  if (r.company) score += 1;
+  const metadataFieldsFound = [r.location, r.salary, r.hours, r.contractType].filter(Boolean).length;
+  score += Math.min(2, metadataFieldsFound);
+  const descriptionFound = Boolean(r.description && r.description.length >= DESCRIPTION_FALLBACK_MIN_LENGTH);
+  if (descriptionFound) score += 2;
+  const directContactFound = Boolean(r.contactPerson || r.phone || r.email);
+  if (directContactFound) score += 2;
+  const hasApplyCta = $('a, button').toArray()
+    .some(el => /solliciteer|apply|bekijk\s*vacature/i.test(text($(el).text(), 100) ?? ''));
+  if (hasApplyCta) score += 1;
+  return { score, metadataFieldsFound, directContactFound, descriptionFound };
+}
+
+function diagnose($: CheerioAPI, url: string, r: VacancyFacts, hasJsonLd: boolean): VacancyPageDiagnostic {
+  const titleFound = Boolean(r.title);
+  if (hasJsonLd) {
+    const { metadataFieldsFound, directContactFound, descriptionFound } = scoreVacancyDetailEvidence($, r);
+    return { url, titleFound, metadataFieldsFound, descriptionFound, directContactFound, signalScore: PLAUSIBILITY_ACCEPT_THRESHOLD, accepted: true, rejectionReason: null };
+  }
+  if (looksLikeOverviewPage($)) {
+    return { url, titleFound, metadataFieldsFound: 0, descriptionFound: false, directContactFound: false, signalScore: 0, accepted: false, rejectionReason: 'overview_page' };
+  }
+  const { score, metadataFieldsFound, directContactFound, descriptionFound } = scoreVacancyDetailEvidence($, r);
+  const accepted = score >= PLAUSIBILITY_ACCEPT_THRESHOLD;
+  let rejectionReason: VacancyPageDiagnostic['rejectionReason'] = null;
+  if (!accepted) rejectionReason = !titleFound ? 'no_title' : !descriptionFound && metadataFieldsFound === 0 ? 'insufficient_description' : 'insufficient_signals';
+  return { url, titleFound, metadataFieldsFound, descriptionFound, directContactFound, signalScore: score, accepted, rejectionReason };
+}
+
+/**
+ * One crawled page → zero or more VacancyFacts, plus a diagnostic explaining the (single, primary)
+ * acceptance decision for this page — see `extractVacancy` below for the plain, backward-compatible
+ * wrapper every existing caller/test uses. Composes, in order of trust: structured JobPosting data
+ * (page-level, needs the DOM — never routed through DomainConfig.extractText, since that seam only
+ * ever sees plain text, not the DOM), then schema.org microdata, then the plain-text label
+ * fallback, then the generic DOM label/value fallback (including data-* hints and label-free
+ * value-shape metadata near the heading), then generic contact details discovery-core's own
+ * crawler already extracted for this page. Without JobPosting JSON-LD, a page must pass
+ * `scoreVacancyDetailEvidence`'s evidence-based threshold — see its own doc comment.
+ */
+export function extractVacancyWithDiagnostic(page: CrawlPage): { facts: VacancyFacts[] | undefined; diagnostic: VacancyPageDiagnostic } {
   const bodyText = page.$('body').clone().find('script, style, noscript').remove().end().text();
   const textFacts = normalizeVacancyFacts(extractVacancyText(bodyText));
   const domLabelFacts = normalizeVacancyFacts(extractLabelValueDom(page.$));
   const microdata = normalizeVacancyFacts(extractMicrodata(page.$));
-  const domDescription = extractDescriptionDom(page.$);
   const domTitle = resolveDomTitle(page.$);
+  const metadataBlockFacts = normalizeVacancyFacts(extractMetadataBlockDom(page.$, domTitle.el));
+  const domDescription = extractDescriptionDom(page.$) ?? extractDescriptionDomFallback(page.$);
   const jsonLdFacts = extractJobPostingJsonLd(page.$);
 
   function build(structured: Partial<VacancyFacts>): VacancyFacts {
     return {
-      title: structured.title ?? domTitle ?? null,
+      title: structured.title ?? domTitle.text ?? null,
       company: structured.company ?? microdata.company ?? textFacts.company ?? domLabelFacts.company ?? null,
       location: structured.location ?? microdata.location ?? textFacts.location ?? domLabelFacts.location ?? null,
       salary: structured.salary ?? textFacts.salary ?? domLabelFacts.salary ?? null,
-      hours: textFacts.hours ?? domLabelFacts.hours ?? null,
-      contractType: structured.contractType ?? textFacts.contractType ?? domLabelFacts.contractType ?? null,
+      hours: textFacts.hours ?? domLabelFacts.hours ?? metadataBlockFacts.hours ?? null,
+      contractType: structured.contractType ?? textFacts.contractType ?? domLabelFacts.contractType ?? metadataBlockFacts.contractType ?? null,
       description: structured.description ?? domDescription ?? null,
       contactPerson: textFacts.contactPerson ?? domLabelFacts.contactPerson ?? null,
       phone: page.contacts.phone ?? null,
@@ -354,28 +592,16 @@ export function extractVacancy(page: CrawlPage): VacancyFacts[] | undefined {
 
   const hasJsonLd = jsonLdFacts.length > 0;
   const results = (hasJsonLd ? jsonLdFacts : [{}]).map(build);
-  const plausible = results.filter(r => hasJsonLd || isPlausibleVacancyPage(r));
-  return plausible.length ? plausible : undefined;
+  const primary = results[0] ?? build({});
+  const diagnostic = diagnose(page.$, page.url, primary, hasJsonLd);
+
+  const plausible = results.filter(r => hasJsonLd || diagnostic.accepted);
+  return { facts: plausible.length ? plausible : undefined, diagnostic };
 }
 
-/**
- * Without JobPosting JSON-LD (structured data is definitive on its own), a page is only accepted
- * as a real vacancy record when at least two *independent* vacancy-specific signal groups are
- * present — never just one. This is what a vacancy overview or a careers landing page can get
- * wrong: such a page routinely embeds several *other* vacancies' own teaser/preview widgets (the
- * same location/salary/hours/contract-type icon group real detail pages use for their own job),
- * so location/salary/hours/contractType alone is exactly as "rich-looking" on an overview page as
- * on a real one — it is evidence of *a* job info widget being present on the page, not evidence
- * that the page's own subject is a specific vacancy. A second, independently-sourced signal
- * (a named contact person, a direct phone/email, a named employer, or an explicit description
- * block) is required before the page counts as a genuine vacancy detail page.
- */
-function isPlausibleVacancyPage(r: VacancyFacts): boolean {
-  let groups = 0;
-  if (r.location || r.salary || r.hours || r.contractType) groups++;
-  if (r.company) groups++;
-  if (r.contactPerson) groups++;
-  if (r.phone || r.email) groups++;
-  if (r.description) groups++;
-  return groups >= 2;
+/** The plain, backward-compatible entry point every existing caller/test uses — identical
+ * behavior to before, just without the diagnostic. See extractVacancyWithDiagnostic above for
+ * the one place the actual logic lives. */
+export function extractVacancy(page: CrawlPage): VacancyFacts[] | undefined {
+  return extractVacancyWithDiagnostic(page).facts;
 }
