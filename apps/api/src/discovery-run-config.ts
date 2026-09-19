@@ -12,6 +12,7 @@ export interface DiscoveryRunConfig {
   /** How many *accepted, deduplicated* records a run should try to find — never a candidate or
    * page count. A run stops once it has this many, or another stop condition is reached first. */
   targetRecords: number;
+  budgetSource: 'adaptive' | 'advanced';
   /** A domain-defined tier id ("focused" | "standard" | "broad" | "advanced" for vacancies today)
    * — apps/api never hardcodes what a tier means; an unrecognized value is the domain's own
    * business to fall back on sensibly. */
@@ -40,9 +41,8 @@ export const ABSOLUTE_MAX_CANDIDATES = 500;
 export const ABSOLUTE_MAX_DURATION_MS = 240_000;
 export const ABSOLUTE_MAX_ENRICHMENTS = 150;
 
-const DEFAULT_RUN_CONFIG: DiscoveryRunConfig = {
-  targetRecords: 50, searchBreadth: 'standard', maxPages: 25, maxCandidates: 100,
-  maxDurationMs: 180_000, maxEnrichments: 30, onlyNewRecords: true,
+const DEFAULT_RUN_CONFIG = {
+  targetRecords: 50, searchBreadth: 'standard', maxEnrichments: 30, onlyNewRecords: true,
 };
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
@@ -54,14 +54,19 @@ function clampNumber(value: unknown, fallback: number, min: number, max: number)
  * absolute ceiling above, and an invalid/missing field silently falls back to a sensible default
  * rather than rejecting the whole request. Never skipped: routes/runs.ts calls this on every run,
  * whether or not the client sent a `runConfig` at all. */
-export function resolveDiscoveryRunConfig(input: Partial<DiscoveryRunConfig> | null | undefined): DiscoveryRunConfig {
+export function resolveDiscoveryRunConfig(input: Partial<DiscoveryRunConfig> | null | undefined, module = 'vacancies'): DiscoveryRunConfig {
   const raw = input ?? {};
+  const targetRecords = clampNumber(raw.targetRecords, DEFAULT_RUN_CONFIG.targetRecords, 1, ABSOLUTE_MAX_TARGET_RECORDS);
+  const searchBreadth = typeof raw.searchBreadth === 'string' && raw.searchBreadth.trim() ? raw.searchBreadth.trim() : DEFAULT_RUN_CONFIG.searchBreadth;
+  const breadth = searchBreadth === 'focused' ? 0.75 : searchBreadth === 'broad' ? 1.5 : 1;
+  const effort = targetRecords * breadth * (module === 'vacancies' ? 2.5 : 2);
+  const advanced = [raw.maxPages, raw.maxCandidates, raw.maxDurationMs, raw.maxEnrichments]
+    .some(value => typeof value === 'number' && Number.isFinite(value));
   return {
-    targetRecords: clampNumber(raw.targetRecords, DEFAULT_RUN_CONFIG.targetRecords, 1, ABSOLUTE_MAX_TARGET_RECORDS),
-    searchBreadth: typeof raw.searchBreadth === 'string' && raw.searchBreadth.trim() ? raw.searchBreadth.trim() : DEFAULT_RUN_CONFIG.searchBreadth,
-    maxPages: clampNumber(raw.maxPages, DEFAULT_RUN_CONFIG.maxPages, 1, ABSOLUTE_MAX_PAGES),
-    maxCandidates: clampNumber(raw.maxCandidates, DEFAULT_RUN_CONFIG.maxCandidates, 1, ABSOLUTE_MAX_CANDIDATES),
-    maxDurationMs: clampNumber(raw.maxDurationMs, DEFAULT_RUN_CONFIG.maxDurationMs, 1_000, ABSOLUTE_MAX_DURATION_MS),
+    targetRecords, searchBreadth, budgetSource: advanced ? 'advanced' : 'adaptive',
+    maxPages: clampNumber(raw.maxPages, Math.ceil(5 + effort), 1, ABSOLUTE_MAX_PAGES),
+    maxCandidates: clampNumber(raw.maxCandidates, Math.ceil(20 + effort * 4), 1, ABSOLUTE_MAX_CANDIDATES),
+    maxDurationMs: clampNumber(raw.maxDurationMs, Math.ceil(30_000 + effort * 2000), 1_000, ABSOLUTE_MAX_DURATION_MS),
     maxEnrichments: clampNumber(raw.maxEnrichments, DEFAULT_RUN_CONFIG.maxEnrichments, 0, ABSOLUTE_MAX_ENRICHMENTS),
     onlyNewRecords: typeof raw.onlyNewRecords === 'boolean' ? raw.onlyNewRecords : DEFAULT_RUN_CONFIG.onlyNewRecords,
   };

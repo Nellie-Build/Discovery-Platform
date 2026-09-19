@@ -16,6 +16,7 @@ import { fetchPublicUrl, type HttpTransport, type HttpResult } from './http.js';
 import { websiteScope, linkPriority, type PriorityTier } from './url-policy.js';
 import { extractContacts, mergeContacts, type ExtractedContacts, type ContactNormalizers } from '../extract/contacts.js';
 import type { CrawlRecord, CrawlResult, CrawlStopReason, ExtractedPage } from './types.js';
+import { CandidateQueue, type CandidateEvidence, type CandidateRank, type CrawlCandidate } from './candidate-ranking.js';
 
 export const CRAWL_POLICY = {
   userAgent: 'DiscoveryCoreBot/1.0', maxPages: 10, maxMetadataRequests: 8,
@@ -44,6 +45,9 @@ export interface CrawlPage {
 }
 
 export interface CrawlOptions<TFacts> {
+  rankCandidate?: (evidence: CandidateEvidence) => CandidateRank;
+  /** Optional prior-run evidence; absence never means a URL was unchanged. */
+  knownCandidates?: ReadonlyMap<string, string | null>;
   /**
    * The one seam that makes this crawler domain-neutral: called once per successfully fetched
    * HTML page, with everything above already computed. Returns whatever facts the domain cares
@@ -97,6 +101,7 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
   if (!Number.isFinite(maxDurationMs) || maxDurationMs <= 0) throw new Error('Ongeldige crawl-tijdslimiet.');
   const maxPages = Math.min(CRAWL_POLICY.absoluteMaxPages, Math.max(1, Math.floor(options.maxPages ?? CRAWL_POLICY.maxPages)));
   const maxCandidates = Math.min(CRAWL_POLICY.absoluteMaxCandidates, Math.max(1, Math.floor(options.maxCandidates ?? 500)));
+  if (!Number.isFinite(maxPages) || !Number.isFinite(maxCandidates)) throw new Error('Ongeldige crawl-limiet.');
   let lastRequest = -Infinity, delay = CRAWL_POLICY.minDelayMs;
   let pages = 0, metadata = 0, stopped: string | null = null;
   let stopReasonCode: CrawlStopReason | null = null;
@@ -105,7 +110,12 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
   const records: CrawlRecord[] = [], visited = new Set<string>();
   const contactPages: { url: string; contacts: ExtractedContacts }[] = [];
   const extractedPages: ExtractedPage<TFacts>[] = [];
-  const candidates = new Map<string, number>();
+  const candidates = new CandidateQueue(maxCandidates);
+  const candidateEvidence = new Map<string, CrawlCandidate>();
+  let activeCandidate: CrawlCandidate | undefined;
+  let urlsDiscovered = 0, sitemapUrlsFound = 0, listingUrlsFound = 0, candidatesProcessed = 0;
+  let sitemapCandidatesAccepted = 0, sitemapCandidatesRejected = 0;
+  const unchanged = new Set<string>();
   /** Every distinct, in-scope URL ever discovered via a link or sitemap entry — never shrinks,
    * unlike `candidates` (which loses an entry once visited/dequeued). Powers `candidatesDiscovered`
    * in the final result. */
@@ -115,7 +125,10 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
   const errors: string[] = [];
 
   async function record(value: Omit<CrawlRecord, 'sequence'>) {
-    const entry = { ...value, sequence: records.length + 1 };
+    const entry = { ...value, ...(value.kind === 'page' && activeCandidate ? {
+      candidateScore: activeCandidate.candidateScore, candidateReasons: activeCandidate.candidateReasons,
+    } : {}), sequence: records.length + 1 };
+    if (value.kind === 'page' && value.sha256 && options.knownCandidates?.get(value.url) === value.sha256) unchanged.add(value.url);
     records.push(entry);
     await options.onRecord?.(entry);
   }
@@ -128,13 +141,27 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
     await record({ ...blank(url, kind), error });
     if (kind === 'page') errors.push(error);
   }
-  function add(input: string, base: string, label = '') {
+  function add(input: string, base: string, label = '', source: CandidateEvidence['source'] = 'link'): boolean {
+    urlsDiscovered++;
+    if (source === 'sitemap') sitemapUrlsFound++;
+    if (source === 'listing') listingUrlsFound++;
     const url = scope.normalize(input, base);
-    if (!url || visited.has(url)) return;
+    if (!url) { if (source === 'sitemap') sitemapCandidatesRejected++; return false; }
     discoveredUrls.add(url);
-    if (!candidates.has(url) && candidates.size >= maxCandidates) { candidateLimitReached = true; return; }
-    const priority = linkPriority(url, label, linkPriorityExtraTiers);
-    candidates.set(url, Math.min(candidates.get(url) ?? Infinity, priority));
+    const evidence = { url, source, label, discoveredFrom: base };
+    const rank = options.rankCandidate?.(evidence) ?? {
+      score: 100 - linkPriority(url, label, linkPriorityExtraTiers) * 10,
+      reasons: ['link_priority'], classification: 'general' as const,
+    };
+    const candidate: CrawlCandidate = { ...evidence, canonicalUrl: url, candidateScore: rank.score,
+      candidateReasons: rank.reasons, classification: rank.classification };
+    const previous = candidateEvidence.get(url);
+    if (!previous || previous.candidateScore < candidate.candidateScore) candidateEvidence.set(url, candidate);
+    if (visited.has(url)) { if (source === 'sitemap') sitemapCandidatesAccepted++; return true; }
+    const accepted = candidates.offer(candidateEvidence.get(url)!);
+    candidateLimitReached = candidates.limitReached;
+    if (source === 'sitemap') { if (accepted) sitemapCandidatesAccepted++; else sitemapCandidatesRejected++; }
+    return accepted;
   }
 
   async function policy(url: string) {
@@ -229,7 +256,7 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
     pending.push(...rule.parser.getSitemaps());
     const done = new Set<string>();
     const parser = new XMLParser({ ignoreAttributes: true, processEntities: false, parseTagValue: false, removeNSPrefix: true });
-    while (pending.length && done.size < 3 && !stopped) {
+    while (pending.length && metadata < CRAWL_POLICY.maxMetadataRequests && !stopped) {
       const url = scope.normalize(pending.shift()!, home, false);
       if (!url || done.has(url)) continue;
       done.add(url);
@@ -239,7 +266,7 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
       if (/<!DOCTYPE|<!ENTITY/i.test(xml) || XMLValidator.validate(xml) !== true) continue;
       const data = parser.parse(xml);
       const list = (value: unknown): { loc?: unknown }[] => Array.isArray(value) ? value : value ? [value] as { loc?: unknown }[] : [];
-      for (const item of list(data.urlset?.url).slice(0, 1000)) if (typeof item.loc === 'string') add(item.loc, result.url);
+      for (const item of list(data.urlset?.url).slice(0, 50_000)) if (typeof item.loc === 'string') add(item.loc, result.url, '', 'sitemap');
       for (const item of list(data.sitemapindex?.sitemap).slice(0, 10)) if (typeof item.loc === 'string') pending.push(item.loc);
     }
   }
@@ -260,7 +287,13 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
         const base = $('base[href]').first().attr('href');
         let baseUrl = result.url;
         try { if (base) baseUrl = new URL(base, result.url).href; } catch { /* Use document URL for malformed base. */ }
-        for (const anchor of $('a[href]').toArray().slice(0, 2000)) add($(anchor).attr('href')!, baseUrl, $(anchor).text());
+        const anchors = $('a[href]').toArray().slice(0, 2000);
+        const details = anchors.filter(anchor => {
+          const url = scope.normalize($(anchor).attr('href')!, baseUrl);
+          return url && options.rankCandidate?.({ url, label: $(anchor).text(), source: 'link', discoveredFrom: result.url }).classification === 'detail';
+        }).length;
+        const source = details >= 3 ? 'listing' : 'link';
+        for (const anchor of anchors) add($(anchor).attr('href')!, baseUrl, $(anchor).text(), source);
         const isHomepage = result.url === scope.homepage;
         const priority = linkPriority(result.url, '', linkPriorityExtraTiers);
         const contacts = extractContacts($, scope.domain, options.contactNormalizers);
@@ -270,7 +303,6 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
           for (const data of Array.isArray(extracted) ? extracted : [extracted]) extractedPages.push({ url: result.url, data, isHomepage });
         }
       } else errors.push(`Geen HTML-pagina: ${result.url}`);
-      if (!checkedSitemap) { checkedSitemap = true; await sitemap(result.url); }
     }
   }
   try {
@@ -280,16 +312,18 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
     // homepage-only crawl before extraction ever gets a chance to run on it. The site's real
     // homepage is still queued as a normal candidate (unless it *is* the requested page) so it
     // stays available as a rich source of further navigation links, exactly as before.
-    discoveredUrls.add(scope.requestedPage);
-    if (scope.requestedPage !== scope.homepage) add(scope.homepage, scope.homepage);
+    add(scope.requestedPage, scope.requestedPage, '', 'requested');
+    activeCandidate = candidates.take(visited);
+    if (scope.requestedPage !== scope.homepage) add(scope.homepage, scope.homepage, '', 'homepage');
     let next: string | undefined = scope.requestedPage;
-    let handled = 0;
-    while (next && !stopped && pages < maxPages && handled < maxPages) {
+    while (next && !stopped && pages < maxPages) {
       await crawlPage(next);
-      handled++;
+      candidatesProcessed++;
       if (options.shouldContinue && !options.shouldContinue(extractedPages)) { stopReasonCode = 'target_reached'; break; }
-      next = [...candidates].filter(([url]) => !visited.has(url)).sort((a, b) => a[1] - b[1])[0]?.[0];
-      if (next) candidates.delete(next);
+      if (!checkedSitemap && !stopped && pages < maxPages) { checkedSitemap = true; await sitemap(next); }
+      if (pages >= maxPages || stopped) break;
+      activeCandidate = candidates.take(visited);
+      next = activeCandidate?.url;
     }
   } catch (error) {
     stopped = error instanceof Error ? error.message : String(error);
@@ -307,7 +341,19 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
   // simply "ran out of candidates to try", the natural-completion case.
   const stopReason: CrawlStopReason = homepageBlocked ? 'robots_blocked'
     : stopReasonCode ?? (pages >= maxPages ? 'page_limit' : candidateLimitReached ? 'candidate_limit' : 'no_more_candidates');
+  const evidence = [...candidateEvidence.values()];
+  const knownCandidates = evidence.filter(candidate => options.knownCandidates?.has(candidate.canonicalUrl)).length;
   return { homepage: scope.homepage, domain: scope.domain, pagesVisited: pages, httpStatus: homepageStatus,
+    candidates: evidence,
+    discoveryStats: {
+      urlsDiscovered, uniqueUrlsDiscovered: discoveredUrls.size, sitemapUrlsFound, listingUrlsFound,
+      sitemapCandidatesAccepted, sitemapCandidatesRejected, candidateUrlsFound: evidence.length,
+      highConfidenceCandidates: evidence.filter(candidate => candidate.candidateScore >= 60).length,
+      mediumConfidenceCandidates: evidence.filter(candidate => candidate.candidateScore >= 20 && candidate.candidateScore < 60).length,
+      lowConfidenceCandidates: evidence.filter(candidate => candidate.candidateScore < 20).length,
+      candidatesProcessed, candidatesRemaining: candidates.remaining(visited), knownCandidates,
+      newCandidates: evidence.length - knownCandidates, unchangedCandidates: unchanged.size,
+    },
     status: homepageBlocked ? 'blocked' : !successful ? 'failed' : errors.length ? 'partial' : 'succeeded',
     error: errors.length ? [...new Set(errors)].join('; ').slice(0, 4000) : null, records,
     contacts: mergeContacts(contactPages), extractedPages, stopReason,

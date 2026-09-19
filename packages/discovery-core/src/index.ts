@@ -9,6 +9,7 @@
 
 export { fetchPublicUrl, isPublicAddress, type HttpResult, type HttpTransport } from './crawler/http.js';
 export { websiteScope, linkPriority, type PriorityTier } from './crawler/url-policy.js';
+export { CandidateQueue, type CandidateEvidence, type CandidateRank, type CrawlCandidate } from './crawler/candidate-ranking.js';
 export {
   crawlWebsite, CRAWL_POLICY,
   type CrawlOptions, type CrawlPage,

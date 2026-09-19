@@ -229,6 +229,58 @@ test('maxPages is caller-configurable — no longer hardcoded to 10 — and repo
   assert.equal(result.stopReason, 'page_limit');
 });
 
+test('robots-denied candidates do not consume the page request budget or hide allowed candidates', async () => {
+  const pages = {
+    '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nDisallow: /contact' },
+    '/sitemap.xml': { contentType: 'application/xml', body: '<urlset></urlset>' },
+    '/': { body: html([['/contact-one'], ['/contact-two'], ['/about']]) },
+    '/about': {},
+  };
+  const result = await crawlWebsite('https://example.com', {
+    transport: site(pages), clock: fakeClock(), contactNormalizers, extract: titleExtract,
+    maxPages: 2, shouldContinue: facts => facts.length < 2,
+  });
+  assert.equal(result.stopReason, 'target_reached');
+  assert.equal(result.pagesVisited, 2);
+  assert.equal(result.discoveryStats.candidatesProcessed, 4);
+  assert.ok(result.extractedPages.some(page => page.url.endsWith('/about')));
+});
+
+test('rediscovered evicted candidates retain their strongest previous ranking evidence', async () => {
+  const result = await crawlWebsite('https://example.com/start', {
+    transport: site({
+      '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nAllow: /' },
+      '/sitemap.xml': { contentType: 'application/xml', body: '<urlset><url><loc>https://example.com/a</loc></url><url><loc>https://example.com/c</loc></url></urlset>' },
+      '/start': { body: html([['/a'], ['/b']]) },
+      '/b': { body: html([['/a'], ['/d']]) }, '/a': {}, '/c': {}, '/d': {},
+    }), clock: fakeClock(), contactNormalizers, extract: titleExtract, maxCandidates: 2, maxPages: 4,
+    rankCandidate: evidence => ({
+      score: evidence.url.endsWith('/a') ? evidence.source === 'sitemap' ? 50 : 10 : ({ '/b': 100, '/c': 75, '/d': 40 }[new URL(evidence.url).pathname] ?? 0),
+      reasons: [evidence.source], classification: 'general',
+    }),
+  });
+  assert.deepEqual(pageUrls(result), ['/start', '/b', '/c', '/a']);
+  assert.equal(result.records.find(record => record.url.endsWith('/a')).candidateScore, 50);
+});
+
+test('sitemap indexes discover beyond the waiting budget within the shared metadata request cap', async () => {
+  const children = Array.from({ length: 10 }, (_, i) => `/child${i}.xml`);
+  const pages = {
+    '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nAllow: /' }, '/': {},
+    '/sitemap.xml': { contentType: 'application/xml', body: `<sitemapindex>${children.map(path => `<sitemap><loc>https://example.com${path}</loc></sitemap>`).join('')}</sitemapindex>` },
+  };
+  children.forEach((path, i) => { pages[path] = { contentType: 'application/xml', body: `<urlset>${Array.from({ length: 10 }, (_, j) => `<url><loc>https://example.com/detail-${i}-${j}</loc></url>`).join('')}</urlset>` }; });
+  const result = await crawlWebsite('https://example.com', {
+    transport: site(pages), clock: fakeClock(), contactNormalizers, extract: titleExtract,
+    maxCandidates: 3, maxPages: 10,
+  });
+  assert.equal(result.records.filter(record => record.kind !== 'page' && record.attempted).length, CRAWL_POLICY.maxMetadataRequests);
+  assert.equal(result.discoveryStats.sitemapUrlsFound, 60);
+  assert.equal(result.discoveryStats.sitemapCandidatesAccepted, 3);
+  assert.equal(result.discoveryStats.sitemapCandidatesRejected, 57);
+  assert.equal(result.pagesVisited, 4);
+});
+
 test('maxPages can be raised well past the old hardcoded 10 — a caller asking for 25 pages can get up to 25 when enough candidates exist', async () => {
   const result = await crawlWebsite('https://example.com', {
     transport: site(manyPages(40)), clock: fakeClock(), contactNormalizers, extract: titleExtract, maxPages: 25,

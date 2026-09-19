@@ -26,7 +26,7 @@
  *     itself; scoring; dedupe) is the exact same pipeline website mode already uses.
  */
 import {
-  crawlWebsite, fetchAndExtractPage, normalizeCandidateUrls, createBraveSearchProvider,
+  crawlWebsite, fetchAndExtractPage, normalizeCandidateUrls, createBraveSearchProvider, websiteScope,
   type CrawlOptions, type SourceSearchProvider,
 } from '@discovery-platform/core';
 import {
@@ -250,7 +250,18 @@ async function runWebsiteDiscovery(
   // observable *why* a given page did or didn't become a record, without changing
   // discovery-core's own generic `extract` contract (still just returns facts).
   const diagnostics: VacancyPageDiagnostic[] = [];
+  let evaluatedFacts = -1;
+  let acceptedCount = 0;
+  const knownCandidates = new Map<string, string | null>();
+  for (const record of input.existingRecords) {
+    const url = record.domainData.sourceUrl;
+    if (typeof url === 'string') {
+      try { const canonical = websiteScope(input.sourceUrl).normalize(url); if (canonical) knownCandidates.set(canonical, null); } catch { /* Ignore old malformed evidence. */ }
+    }
+  }
   const crawl = await crawlWebsite(input.sourceUrl, {
+    rankCandidate: vacanciesCrawlerConfig.rankCandidate,
+    knownCandidates,
     extract: page => {
       const { facts, diagnostic } = extractVacancyWithDiagnostic(page);
       diagnostics.push(diagnostic);
@@ -268,13 +279,17 @@ async function runWebsiteDiscovery(
     // version of the same dedupe logic, and cheap enough at the page counts a real run reaches.
     // Stops the crawl the moment enough *accepted* records exist, never merely enough candidates.
     shouldContinue: extractedSoFar => {
-      const soFarFacts = extractedSoFar.map(page => page.data);
-      const { records } = buildRecordsFromFacts(soFarFacts, input.existingRecords, recordOptions);
-      return records.length < config.targetRecords;
+      if (evaluatedFacts !== extractedSoFar.length) {
+        evaluatedFacts = extractedSoFar.length;
+        acceptedCount = buildRecordsFromFacts(extractedSoFar.map(page => page.data), input.existingRecords, recordOptions).records.length;
+      }
+      return acceptedCount < config.targetRecords;
     },
   });
   const freshFacts = crawl.extractedPages.map(page => page.data);
-  const { records, collapsed, duplicatesAgainstExisting, dateFilteredCount } = buildRecordsFromFacts(freshFacts, input.existingRecords, recordOptions);
+  const built = buildRecordsFromFacts(freshFacts, input.existingRecords, recordOptions);
+  const { collapsed, duplicatesAgainstExisting, dateFilteredCount } = built;
+  const records = built.records.slice(0, config.targetRecords);
 
   const rejectionReasons: Record<string, number> = {};
   let pagesAccepted = 0, pagesWithVacancySignals = 0;
@@ -305,10 +320,11 @@ async function runWebsiteDiscovery(
       targetRecords: config.targetRecords,
       recordsAccepted: records.length,
       candidatesDiscovered: crawl.candidatesDiscovered,
-      candidatesProcessed: crawl.pagesVisited,
-      candidatesRemaining: Math.max(0, crawl.candidatesDiscovered - crawl.pagesVisited),
+      ...crawl.discoveryStats,
+      candidateDiagnostics: crawl.candidates,
       dateFilteredCount,
       maxPages: config.maxPages,
+      budgetSource: config.budgetSource,
       maxCandidates: config.maxCandidates,
       maxDurationMs: config.maxDurationMs,
       durationMs: Date.now() - runStart,
@@ -515,7 +531,9 @@ async function runBranchDiscovery(
   const relevanceAccepted = relevantFacts.length;
   const relevanceRejected = candidatesReceived - relevanceAccepted;
 
-  const { records, collapsed, duplicatesAgainstExisting, dateFilteredCount } = buildRecordsFromFacts(relevantFacts, input.existingRecords, recordOptions);
+  const built = buildRecordsFromFacts(relevantFacts, input.existingRecords, recordOptions);
+  const { collapsed, duplicatesAgainstExisting, dateFilteredCount } = built;
+  const records = built.records.slice(0, config.targetRecords);
   return {
     records,
     stats: {
@@ -546,6 +564,7 @@ async function runBranchDiscovery(
       candidatesRemaining: Math.max(0, candidatesFound - candidatesCrawled),
       dateFilteredCount,
       maxPages: config.maxPages,
+      budgetSource: config.budgetSource,
       maxCandidates: config.maxCandidates,
       maxDurationMs: config.maxDurationMs,
       durationMs: Date.now() - runStart,

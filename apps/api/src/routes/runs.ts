@@ -30,6 +30,7 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
     // module-owned data apps/api never inspects — passed straight through to the adapter.
     const runConfig: DiscoveryRunConfig = resolveDiscoveryRunConfig(
       body.runConfig && typeof body.runConfig === 'object' ? body.runConfig : undefined,
+      project.domain,
     );
     const filters: Record<string, unknown> = body.filters && typeof body.filters === 'object' && !Array.isArray(body.filters) ? body.filters : {};
     // Two request shapes, both backwards compatible with the original: { sourceUrl } (unchanged)

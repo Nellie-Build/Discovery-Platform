@@ -102,7 +102,7 @@ export function RunStatusCard({ run }: { run: DiscoveryRun }) {
         <Badge tone={statusBadgeTone(run.status)}>{run.status}</Badge>
       </CardHeader>
       <CardContent>
-        <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+        {(!stats.budgetSource || isBranchSearch) && <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
           <Field label="Started" value={run.started_at ? new Date(run.started_at).toLocaleString() : null} />
           <Field label="Duur" value={duration} />
           {isBranchSearch && <Field label="Branche" value={typeof stats.branch === 'string' ? stats.branch : null} />}
@@ -112,7 +112,7 @@ export function RunStatusCard({ run }: { run: DiscoveryRun }) {
           <Field label="Records found" value={typeof stats.factsFound === 'number' ? stats.factsFound : null} />
           <Field label="New records" value={typeof stats.recordsCreated === 'number' ? stats.recordsCreated : null} />
           <Field label="Duplicates" value={duplicates} />
-        </dl>
+        </dl>}
         {/* The run's own configured target and how it actually progressed — see
             DiscoveryRunConfig/`stats.stopReason`. Shown separately from the crawl-detail fields
             above so both "target reached" and "target not reached" read clearly at a glance. */}
@@ -121,11 +121,25 @@ export function RunStatusCard({ run }: { run: DiscoveryRun }) {
           <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
             <Field label="Doel" value={typeof stats.targetRecords === 'number' ? stats.targetRecords : null} />
             <Field label="Gevonden" value={typeof stats.recordsAccepted === 'number' ? stats.recordsAccepted : null} />
-            <Field label="Kandidaten" value={typeof stats.candidatesDiscovered === 'number' ? stats.candidatesDiscovered : null} />
+            <Field label="URLs ontdekt" value={typeof stats.urlsDiscovered === 'number' ? stats.urlsDiscovered : null} />
+            <Field label="Kandidaten" value={typeof stats.candidateUrlsFound === 'number' ? stats.candidateUrlsFound : typeof stats.candidatesDiscovered === 'number' ? stats.candidatesDiscovered : null} />
             <Field label="Verwerkt" value={typeof stats.candidatesProcessed === 'number' ? stats.candidatesProcessed : null} />
+            {typeof stats.budgetSource === 'string' && !isBranchSearch && <Field label="Duplicates" value={duplicates} />}
+            {typeof stats.budgetSource === 'string' && !isBranchSearch && <Field label="Duur" value={duration} />}
             <Field label="Gestopt omdat" value={stopReasonLabel(stats.stopReason)} />
           </dl>
         </div>
+        {typeof stats.budgetSource === 'string' && (
+          <details className="mt-4 border-t border-slate-100 pt-4">
+            <summary className="cursor-pointer text-sm font-medium">Technische details</summary>
+            <dl className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-3">
+              <Field label="Budget" value={stats.budgetSource === 'adaptive' ? 'Automatisch' : 'Geavanceerd'} />
+              {(['maxPages', 'maxCandidates', 'maxDurationMs', 'pagesVisited', 'pagesAccepted', 'pagesRejected', 'recordsCreated', 'uniqueUrlsDiscovered', 'sitemapUrlsFound', 'sitemapCandidatesAccepted', 'sitemapCandidatesRejected', 'listingUrlsFound', 'highConfidenceCandidates', 'mediumConfidenceCandidates', 'lowConfidenceCandidates', 'candidatesRemaining', 'knownCandidates', 'newCandidates', 'unchangedCandidates'] as const).map(key => (
+                <Field key={key} label={key} value={typeof stats[key] === 'number' ? stats[key] : null} />
+              ))}
+            </dl>
+          </details>
+        )}
         {isBranchSearch && Array.isArray(stats.sources) && <SourcesSection sources={stats.sources as SourceMeta[]} />}
         {run.status === 'failed' && run.error && (
           <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 shadow-sm">

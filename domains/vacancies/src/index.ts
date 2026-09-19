@@ -9,6 +9,7 @@ import {
 } from './extract-vacancy.js';
 
 export { VACANCY_LINK_TIER, vacanciesCrawlerConfig };
+export { rankVacancyCandidate } from './config.js';
 export {
   extractVacancy, extractVacancyText, normalizeVacancyFacts, extractJobPostingJsonLd,
   extractVacancyWithDiagnostic, type VacancyFacts, type VacancyPageDiagnostic,

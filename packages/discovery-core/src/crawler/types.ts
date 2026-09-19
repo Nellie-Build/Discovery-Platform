@@ -31,6 +31,8 @@ export interface CrawlRecord {
   sha256: string | null;
   redirectTo: string | null;
   error: string | null;
+  candidateScore?: number;
+  candidateReasons?: string[];
 }
 
 /** One page's domain-specific facts, exactly as the caller's own `extract` callback returned
@@ -47,6 +49,24 @@ export interface ExtractedPage<TFacts> {
  * that belongs to the domain calling this, never to the generic crawler.
  */
 export interface CrawlResult<TFacts> {
+  discoveryStats: {
+    urlsDiscovered: number;
+    uniqueUrlsDiscovered: number;
+    sitemapUrlsFound: number;
+    sitemapCandidatesAccepted: number;
+    sitemapCandidatesRejected: number;
+    listingUrlsFound: number;
+    candidateUrlsFound: number;
+    highConfidenceCandidates: number;
+    mediumConfidenceCandidates: number;
+    lowConfidenceCandidates: number;
+    candidatesProcessed: number;
+    candidatesRemaining: number;
+    knownCandidates: number;
+    newCandidates: number;
+    unchangedCandidates: number;
+  };
+  candidates: import('./candidate-ranking.js').CrawlCandidate[];
   status: CrawlStatus;
   homepage: string;
   domain: string;
