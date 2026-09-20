@@ -42,6 +42,7 @@ import type { DomainAdapter, ExistingRecordSnapshot, DiscoveryRunInput, Discover
 // imports this adapter (for the `vacanciesAdapter` constant), so importing back through it here
 // would create an ESM circular import (domain-registry.js <-> vacancies-adapter.js).
 import { resolveDiscoveryRunConfig } from '../discovery-run-config.js';
+import { computeBranchBreakdown, type FactOutcome, type SiteProgress } from './run-breakdown.js';
 
 /** Only the crawler internals a test ever legitimately needs to override (see
  * domains/vacancies's own tests for the same `transport`/`clock` injection pattern) — never
@@ -172,6 +173,11 @@ function buildRecordsFromFacts(
     : freshFacts;
 
   const { survivors, collapsed } = collapseDuplicatesWithinCrawl(dated);
+  // What happened to each fact — one exclusive outcome per fact, used for the run breakdown.
+  const outcomes = new Map<VacancyFacts, FactOutcome>();
+  for (const fact of dateFiltered) outcomes.set(fact, 'date_rejected');
+  const survivorSet = new Set(survivors);
+  for (const fact of dated) if (!survivorSet.has(fact)) outcomes.set(fact, 'duplicate_in_run');
   const existingFacts = existingRecords.map(record => record.domainData as unknown as VacancyFacts);
   let duplicatesAgainstExisting = 0;
   const records: DiscoveredRecord[] = [];
@@ -191,10 +197,12 @@ function buildRecordsFromFacts(
       contacts: buildContacts(fact),
     };
     if (existingRecordId) { observedRecords.push(record); duplicatesAgainstExisting++; }
-    if (options.onlyNewRecords && isDuplicateOfExisting(fact, existingFacts)) { if (!existingRecordId) duplicatesAgainstExisting++; continue; }
+    const duplicateOfExisting = options.onlyNewRecords && isDuplicateOfExisting(fact, existingFacts);
+    outcomes.set(fact, existingRecordId || duplicateOfExisting ? 'already_known' : 'new');
+    if (duplicateOfExisting) { if (!existingRecordId) duplicatesAgainstExisting++; continue; }
     records.push(record);
   }
-  return { records, observedRecords, collapsed, duplicatesAgainstExisting, dateFilteredCount: dateFiltered.length };
+  return { records, observedRecords, collapsed, duplicatesAgainstExisting, dateFilteredCount: dateFiltered.length, outcomes };
 }
 
 function resolveSearchProvider(overrides: VacanciesCrawlOverrides): SourceSearchProvider | undefined {
@@ -429,6 +437,14 @@ async function runBranchDiscovery(
   const jobBoardSearchTerm = buildJobBoardSearchTerm({ branch: input.branch, keywords: input.keywords });
   const sources: VacancySourceMeta[] = [];
   const freshFacts: VacancyFacts[] = [];
+  // Per-provider funnel bookkeeping for stats.breakdown (see run-breakdown.ts).
+  const perSite = new Map<string, SiteProgress>();
+  const factSite = new Map<VacancyFacts, string>();
+  const siteProgress = (site: string): SiteProgress => {
+    let progress = perSite.get(site);
+    if (!progress) perSite.set(site, progress = { discovered: 0, attempted: 0, withData: 0 });
+    return progress;
+  };
   let candidatesFound = 0;
   let candidatesCrawled = 0;
   let stopReason: string = 'provider_exhausted';
@@ -466,12 +482,18 @@ async function runBranchDiscovery(
       );
       sources.push(...jobBoardResult.meta);
       candidatesFound += jobBoardResult.candidates.length;
+      for (const candidate of jobBoardResult.candidates) siteProgress(candidate.site ?? 'ts-jobspy').discovered++;
       for (const candidate of jobBoardResult.candidates) {
         if (targetReached()) { stopReason = 'target_reached'; break; }
         if (timeUp()) { stopReason = 'time_limit'; break; }
         if (remainingCandidateBudget() <= 0) { stopReason = 'candidate_limit'; break; }
         totalCandidatesUsed++;
-        freshFacts.push(await completeJobBoardCandidate(candidate, overrides, enrichmentBudget));
+        const progress = siteProgress(candidate.site ?? 'ts-jobspy');
+        progress.attempted++;
+        const fact = await completeJobBoardCandidate(candidate, overrides, enrichmentBudget);
+        freshFacts.push(fact);
+        factSite.set(fact, candidate.site ?? 'ts-jobspy');
+        progress.withData++;
         candidatesCrawled++;
       }
     } catch (error) {
@@ -496,6 +518,7 @@ async function runBranchDiscovery(
       );
       const candidates = normalizeCandidateUrls(rawCandidates, { maxCandidates: searchCap });
       candidatesFound += candidates.length;
+      siteProgress('brave').discovered += candidates.length;
       let braveCrawled = 0;
       for (const candidate of candidates) {
         if (targetReached()) { stopReason = 'target_reached'; break; }
@@ -503,6 +526,7 @@ async function runBranchDiscovery(
         if (remainingCandidateBudget() <= 0 || enrichmentBudget.remaining <= 0) { stopReason = 'candidate_limit'; break; }
         totalCandidatesUsed++;
         enrichmentBudget.remaining--;
+        siteProgress('brave').attempted++;
         const result = await fetchAndExtractPage(candidate.url, {
           extract: extractVacancy,
           contactNormalizers,
@@ -512,7 +536,11 @@ async function runBranchDiscovery(
         if (result.status !== 'succeeded') continue;
         braveCrawled++;
         candidatesCrawled++;
-        if (result.data) freshFacts.push(...result.data);
+        if (result.data?.length) {
+          freshFacts.push(...result.data);
+          for (const fact of result.data) factSite.set(fact, 'brave');
+          siteProgress('brave').withData++;
+        }
       }
       sources.push({
         provider: 'brave', site: 'brave', status: candidates.length === 0 ? 'empty' : 'ok',
@@ -537,12 +565,18 @@ async function runBranchDiscovery(
   for (const fact of freshFacts) {
     if (scoreVacancyRelevance(fact, { branch: input.branch, keywords: input.keywords }).accepted) relevantFacts.push(fact);
   }
+  const relevantSet = new Set(relevantFacts);
   const relevanceAccepted = relevantFacts.length;
   const relevanceRejected = candidatesReceived - relevanceAccepted;
 
   const built = buildRecordsFromFacts(relevantFacts, input.existingRecords, recordOptions);
   const { collapsed, duplicatesAgainstExisting, dateFilteredCount } = built;
   const records = built.records.slice(0, config.targetRecords);
+  const storedFacts = new Set(records.filter(record => !record.existingRecordId).map(record => record.domainData as unknown as VacancyFacts));
+  const breakdown = computeBranchBreakdown({
+    perSite, freshFacts, factSite, relevant: relevantSet, outcomes: built.outcomes, stored: storedFacts,
+    reseenRecords: records.filter(record => record.existingRecordId).length,
+  });
   const relevanceQuery = { branch: input.branch, keywords: input.keywords, region: input.region };
   for (const record of [...records, ...built.observedRecords]) record.classification = { ...record.classification, relevance: scoreVacancyRelevance(record.domainData as unknown as VacancyFacts, relevanceQuery) };
   for (const site of ['indeed', 'linkedin', 'brave']) {
@@ -563,6 +597,7 @@ async function runBranchDiscovery(
         .map(source => [source.site, source.site === 'brave' ? webSearchQuery : jobBoardSearchTerm])),
       candidatesRelevant: relevanceAccepted,
       candidatesRejectedByRelevance: relevanceRejected,
+      breakdown,
       relevanceDiagnostics: freshFacts.map(fact => ({ sourceUrl: fact.sourceUrl, ...scoreVacancyRelevance(fact, relevanceQuery) })),
       searchMode: 'branch',
       searchBreadth: breadth,

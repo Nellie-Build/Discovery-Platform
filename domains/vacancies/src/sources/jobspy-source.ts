@@ -131,7 +131,7 @@ export function createTsJobSpySourceProvider(options: TsJobSpySourceProviderOpti
               hoursOld: query.hoursOld ?? undefined,
               isRemote: query.remote ?? undefined,
             });
-            candidates = result.jobs.filter(job => job.site === site).map(mapJobToCandidate);
+            candidates = result.jobs.filter(job => job.site === site).map(job => ({ ...mapJobToCandidate(job), site }));
             const reported = result.meta.sites.find(item => item.site === site);
             meta = reported ? mapSiteMeta(reported) : { provider: 'ts-jobspy', site, status: 'unavailable', candidates: candidates.length, durationMs: Date.now() - started, error: 'Bron rapporteerde geen status.', errorType: 'provider_error' };
           } catch (error) {

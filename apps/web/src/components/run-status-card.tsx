@@ -82,6 +82,69 @@ function SourcesSection({ sources }: { sources: SourceMeta[] }) {
   );
 }
 
+interface BreakdownBucket {
+  discovered: number; notProcessed: number; noUsableData: number; rejectedByRelevance: number; relevant: number;
+  rejectedByDate: number; duplicatesInRun: number; alreadyKnown: number; cutByTarget: number; newRecords: number; multiRecordExtra: number;
+}
+interface RunBreakdown extends BreakdownBucket { reseenRecords?: number; byProvider?: Record<string, BreakdownBucket> }
+
+function isBreakdown(value: unknown): value is RunBreakdown {
+  const v = value as Partial<RunBreakdown> | null;
+  return Boolean(v) && typeof v === 'object' && typeof v?.discovered === 'number' && typeof v.newRecords === 'number';
+}
+
+/** What happened to every discovered candidate. The rows are mutually exclusive and add up to
+ * "Kandidaten ontdekt" (plus, rarely, extra vacancies from a page that held several) — "Relevant"
+ * is a subtotal of the rows below it, not an extra row. See apps/api's run-breakdown.ts. */
+function BreakdownRows({ bucket, compact = false }: { bucket: BreakdownBucket; compact?: boolean }) {
+  const rows: [string, number][] = [
+    ['Niet verwerkt (doel of limiet eerder bereikt)', bucket.notProcessed],
+    ['Geen bruikbare gegevens', bucket.noUsableData],
+    ['Afgewezen op relevance', bucket.rejectedByRelevance],
+    ['Afgewezen op datumfilter', bucket.rejectedByDate],
+    ['Duplicaten binnen de run', bucket.duplicatesInRun],
+    ['Al bekend in het project', bucket.alreadyKnown],
+    ['Niet opgeslagen (boven het doel)', bucket.cutByTarget],
+    ['Nieuwe records', bucket.newRecords],
+  ];
+  return (
+    <ul className={compact ? 'text-xs' : 'text-sm'}>
+      <li className="flex justify-between font-medium"><span>Kandidaten ontdekt</span><span>{bucket.discovered}</span></li>
+      {rows.map(([label, value]) => (
+        <li key={label} className="flex justify-between text-slate-600"><span>− {label}</span><span>{value}</span></li>
+      ))}
+      {bucket.multiRecordExtra > 0 && <li className="flex justify-between text-slate-600"><span>+ extra vacatures van pagina's met meerdere vacatures</span><span>{bucket.multiRecordExtra}</span></li>}
+      <li className="mt-1 flex justify-between text-slate-500"><span>Waarvan relevant (subtotaal van de rijen vanaf datumfilter)</span><span>{bucket.relevant}</span></li>
+    </ul>
+  );
+}
+
+function BreakdownSection({ breakdown }: { breakdown: RunBreakdown }) {
+  const providers = Object.entries(breakdown.byProvider ?? {}).filter(([, bucket]) => bucket.discovered > 0 || bucket.multiRecordExtra > 0);
+  return (
+    <div className="mt-4" data-testid="run-breakdown">
+      <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Uitsplitsing kandidaten</h3>
+      <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+        <BreakdownRows bucket={breakdown} />
+        <p className="mt-2 text-xs text-slate-500">Elke kandidaat valt in precies één categorie; de rijen tellen op tot het aantal ontdekte kandidaten.{breakdown.reseenRecords ? ` Daarnaast zijn ${breakdown.reseenRecords} bekende records opnieuw vastgelegd.` : ''}</p>
+      </div>
+      {providers.length > 0 && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-sm font-medium">Per bron</summary>
+          <div className="mt-2 grid gap-3 sm:grid-cols-2">
+            {providers.map(([site, bucket]) => (
+              <div key={site} className="rounded-lg border border-slate-100 p-3">
+                <p className="mb-1 text-sm font-semibold">{sourceLabel(site)}</p>
+                <BreakdownRows bucket={bucket} compact />
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
@@ -134,6 +197,7 @@ export function RunStatusCard({ run }: { run: DiscoveryRun }) {
             <p>Kandidaten: {Number(stats.candidatesDiscovered ?? 0)} · Relevant: {Number(stats.candidatesRelevant ?? 0)} · Afgewezen: {Number(stats.candidatesRejectedByRelevance ?? 0)} · Geaccepteerd: {Number(stats.recordsAccepted ?? 0)}</p>
           </div>
         )}
+        {isBranchSearch && isBreakdown(stats.breakdown) && <BreakdownSection breakdown={stats.breakdown} />}
         {(!stats.budgetSource || isBranchSearch) && <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
           <Field label="Started" value={run.started_at ? new Date(run.started_at).toLocaleString() : null} />
           <Field label="Duur" value={duration} />

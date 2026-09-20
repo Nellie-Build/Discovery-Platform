@@ -31,6 +31,9 @@ export interface VacancySourceCandidate {
   facts: Partial<VacancyFacts>;
   sourceUrl: string;
   needsEnrichment: boolean;
+  /** Which origin within the provider produced this candidate (e.g. "indeed"), for per-source
+   * reporting only. */
+  site?: string;
 }
 
 /** Per-origin reporting — the same "ok/empty/partial/error, count, duration, reason" shape

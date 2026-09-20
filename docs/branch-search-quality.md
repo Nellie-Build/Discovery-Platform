@@ -156,3 +156,29 @@ security both count). The review did not change any code or relevance rule.
   crawler engine has been introduced.
 
 The test project and test account created by the verification remain on the test environment.
+
+## Candidate breakdown (`stats.breakdown`)
+
+Branch runs report what happened to every discovered candidate, in total and per provider
+(`stats.breakdown` and `stats.breakdown.byProvider.<site>`; see `apps/api/src/domains/run-breakdown.ts`).
+Every candidate ends in exactly one of these buckets, so they never overlap:
+
+```
+discovered (+ multiRecordExtra) =
+    notProcessed          target, time or candidate limit reached before it was looked at
+  + noUsableData          attempted, but no vacancy data could be obtained (e.g. a failed page fetch)
+  + rejectedByRelevance   no evidence for the user's branch/keywords
+  + rejectedByDate        outside the "posted within N days" filter
+  + duplicatesInRun       the same vacancy as another candidate in this run
+  + alreadyKnown          already a record in this project
+  + cutByTarget           new, but beyond targetRecords (not stored)
+  + newRecords            stored as new records
+```
+
+`relevant` is a subtotal (everything that survived relevance: the last five buckets), not an
+extra bucket. `multiRecordExtra` is non-zero only when one candidate page yielded several
+vacancies. `reseenRecords` is informational: known records stored again when "only new records"
+is off. The stages run in this order: relevance, date filter, duplicates within the run,
+comparison with existing records, target cut-off. The UI shows the breakdown on the run card
+(per provider under "Per bron"); runs from before this change have no breakdown and show none.
+Website-mode runs are not covered yet: their candidates are crawled URLs with a different funnel.

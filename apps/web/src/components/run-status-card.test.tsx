@@ -108,4 +108,33 @@ describe('RunStatusCard', () => {
     render(<RunStatusCard run={run({ stats: { stopReason: 'something_new' } })} />);
     expect(screen.getByText('something_new')).toBeInTheDocument();
   });
+
+  describe('candidate breakdown', () => {
+    const bucket = { discovered: 61, notProcessed: 0, noUsableData: 0, rejectedByRelevance: 11, relevant: 50, rejectedByDate: 3,
+      duplicatesInRun: 6, alreadyKnown: 18, cutByTarget: 0, newRecords: 4, multiRecordExtra: 0 };
+
+    it('shows how every discovered candidate ended up, and that the rows add up', () => {
+      render(<RunStatusCard run={run({ stats: { searchMode: 'branch', breakdown: { ...bucket, byProvider: { indeed: { ...bucket, discovered: 40, rejectedByRelevance: 7, relevant: 33, rejectedByDate: 2, duplicatesInRun: 4, alreadyKnown: 17, newRecords: 3 } } } } })} />);
+      const section = screen.getByTestId('run-breakdown');
+      expect(section).toHaveTextContent('Kandidaten ontdekt61');
+      expect(section).toHaveTextContent('Afgewezen op relevance11');
+      expect(section).toHaveTextContent('Afgewezen op datumfilter3');
+      expect(section).toHaveTextContent('Duplicaten binnen de run6');
+      expect(section).toHaveTextContent('Al bekend in het project18');
+      expect(section).toHaveTextContent('Nieuwe records4');
+      expect(section).toHaveTextContent('Waarvan relevant (subtotaal van de rijen vanaf datumfilter)50');
+      expect(section).toHaveTextContent('Per bron');
+      expect(section).toHaveTextContent('Indeed');
+    });
+
+    it('is not shown for website runs or runs without a breakdown (older runs)', () => {
+      render(<RunStatusCard run={run({ stats: { searchMode: 'branch' } })} />);
+      expect(screen.queryByTestId('run-breakdown')).not.toBeInTheDocument();
+    });
+
+    it('does not show the breakdown for a website run even if the field were present', () => {
+      render(<RunStatusCard run={run({ stats: { searchMode: 'website', breakdown: bucket } })} />);
+      expect(screen.queryByTestId('run-breakdown')).not.toBeInTheDocument();
+    });
+  });
 });
