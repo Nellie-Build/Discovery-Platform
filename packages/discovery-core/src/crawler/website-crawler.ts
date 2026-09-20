@@ -302,13 +302,24 @@ export function createCrawlSession<TFacts>(website: string, options: CrawlOption
       if (!url || done.has(url)) continue;
       done.add(url);
       const result = await get(url, 'sitemap');
-      if (!result || result.response.status !== 200) continue;
+      if (!result) continue;
+      // A sitemap that redirected is the same document as its destination ("/sitemap.xml" → the index
+      // robots.txt also names): never spend a second request on it.
+      done.add(result.url);
+      if (result.response.status !== 200) continue;
       const xml = result.response.body.toString('utf8');
       if (/<!DOCTYPE|<!ENTITY/i.test(xml) || XMLValidator.validate(xml) !== true) continue;
       const data = parser.parse(xml);
       const list = (value: unknown): { loc?: unknown }[] => Array.isArray(value) ? value : value ? [value] as { loc?: unknown }[] : [];
       for (const item of list(data.urlset?.url).slice(0, 50_000)) if (typeof item.loc === 'string') add(item.loc, result.url, '', 'sitemap');
-      for (const item of list(data.sitemapindex?.sitemap).slice(0, 10)) if (typeof item.loc === 'string') pending.push(item.loc);
+      // The request budget is small and a big site's index can list many child sitemaps (blog, events,
+      // pages, ...). Children whose own address matches a category the caller declared relevant
+      // (`linkPriorityExtraTiers`) are fetched first, so the one that lists the real detail pages is not
+      // the one that runs out of budget. Nothing is dropped and the rest keeps its order.
+      const children = list(data.sitemapindex?.sitemap).slice(0, 10).map(item => item.loc).filter((loc): loc is string => typeof loc === 'string');
+      const relevant = (loc: string) => { try { const path = decodeURI(new URL(loc).pathname).toLowerCase(); return linkPriorityExtraTiers.some(tier => tier.pattern.test(path)); } catch { return false; } };
+      pending.unshift(...children.filter(relevant));
+      pending.push(...children.filter(loc => !relevant(loc)));
     }
   }
 
