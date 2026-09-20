@@ -74,8 +74,8 @@ test('a vacancy is not required to contain every search word — one meaningful 
   assert.equal(result.accepted, true);
 });
 
-test('no branch/keywords at all is treated as no query to be relevant to (nothing to reject against)', () => {
+test('no usable branch/keywords cannot establish relevance', () => {
   const result = scoreVacancyRelevance(vacancy({ title: 'Anything' }), { branch: '   ', keywords: null });
-  assert.equal(result.accepted, true);
+  assert.equal(result.accepted, false);
   assert.equal(result.score, 0);
 });

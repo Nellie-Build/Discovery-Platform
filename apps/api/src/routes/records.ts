@@ -14,7 +14,9 @@ export function createRecordsRouter(pool: TransactionCapable): Router {
     if (!project) throw notFound('Project not found.');
     await assertWorkspaceAccess(pool, req, project.workspace_id);
     const domain = typeof req.query.domain === 'string' ? req.query.domain : undefined;
-    res.json(await records.listRecordsByProject(project.id, { domain }));
+    const runId = typeof req.query.runId === 'string' ? req.query.runId : undefined;
+    if (runId && !/^[0-9a-f-]{36}$/i.test(runId)) throw notFound('Run not found.');
+    res.json(await records.listRecordsByProject(project.id, { domain, runId }));
   }));
 
   // A record id alone is never enough — resolve its project, then that project's workspace,

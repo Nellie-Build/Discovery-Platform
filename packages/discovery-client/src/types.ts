@@ -93,7 +93,7 @@ export interface BranchSearchInput {
 export interface DiscoveryRun {
   id: string;
   project_id: string;
-  status: 'pending' | 'running' | 'succeeded' | 'failed';
+  status: 'pending' | 'running' | 'succeeded' | 'partial' | 'failed';
   started_at: string | null;
   completed_at: string | null;
   stats: Record<string, unknown>;

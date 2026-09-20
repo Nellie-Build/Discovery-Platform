@@ -13,6 +13,8 @@
 import { scrapeJobs, type ScrapeOptions, type Job, type SiteMeta } from 'ts-jobspy';
 import type { VacancyFacts } from '../extract-vacancy.js';
 import { normalizeJobBoardLocation } from './location.js';
+import { sourceFailure } from './outcome.js';
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { VacancySourceProvider, VacancySourceQuery, VacancySourceCandidate, VacancySourceMeta, VacancySourceResult } from './types.js';
 
 /** Only the sites ts-jobspy's own README currently documents as actually working, without a
@@ -68,13 +70,15 @@ function mapJobToCandidate(job: Job): VacancySourceCandidate {
 }
 
 function mapSiteMeta(site: SiteMeta): VacancySourceMeta {
+  const failure = site.status === 'error' || site.status === 'partial' ? sourceFailure(site.error) : null;
   return {
     provider: 'ts-jobspy',
     site: site.site,
-    status: site.status,
+    status: failure?.errorType === 'rate_limited' && site.jobs === 0 ? 'rate_limited' : site.status,
     candidates: site.jobs,
     durationMs: site.durationMs,
-    error: site.status === 'error' || site.status === 'partial' ? `${site.error.name}: ${site.error.message}` : null,
+    error: failure?.error ?? null,
+    ...(failure ?? {}),
   };
 }
 
@@ -94,7 +98,8 @@ export interface TsJobSpySourceProviderOptions {
 
 export function createTsJobSpySourceProvider(options: TsJobSpySourceProviderOptions = {}): VacancySourceProvider {
   const scrape = options.scrapeJobsImpl ?? scrapeJobs;
-  const sites = options.sites?.length ? options.sites : JOB_BOARD_SITES;
+  const configuredSites = options.sites?.length ? options.sites : JOB_BOARD_SITES;
+  const sites = Array.isArray(configuredSites) ? configuredSites : configuredSites ? [configuredSites] : [];
   return {
     id: 'ts-jobspy',
     async findCandidates(query: VacancySourceQuery): Promise<VacancySourceResult> {
@@ -110,19 +115,36 @@ export function createTsJobSpySourceProvider(options: TsJobSpySourceProviderOpti
       // accepted limit of a single free-text "Regio" field with no separate country input, never
       // "fixed" by guessing which country a city belongs to.
       const { location, country } = normalizeJobBoardLocation(query.location);
-      const result = await scrape({
-        sites,
-        searchTerm: query.query,
-        location: location ?? undefined,
-        country: country ?? undefined,
-        resultsWanted: query.resultsWanted ?? options.resultsWanted ?? DEFAULT_RESULTS_WANTED,
-        hoursOld: query.hoursOld ?? undefined,
-        isRemote: query.remote ?? undefined,
-      });
-      return {
-        candidates: result.jobs.map(mapJobToCandidate),
-        meta: result.meta.sites.map(mapSiteMeta),
-      };
+      const outcomes = await Promise.all(sites.map(async site => {
+        const started = Date.now();
+        const timeoutMs = Math.max(500, Math.floor(((query.timeoutMs ?? 18_000) - 500) / 2));
+        for (let attempt = 1; ; attempt++) {
+          let candidates: VacancySourceCandidate[] = [];
+          let meta: VacancySourceMeta;
+          try {
+            const result = await scrape({
+              sites: [site], timeoutMs,
+              searchTerm: query.query,
+              location: location ?? undefined,
+              country: country ?? undefined,
+              resultsWanted: query.resultsWanted ?? options.resultsWanted ?? DEFAULT_RESULTS_WANTED,
+              hoursOld: query.hoursOld ?? undefined,
+              isRemote: query.remote ?? undefined,
+            });
+            candidates = result.jobs.filter(job => job.site === site).map(mapJobToCandidate);
+            const reported = result.meta.sites.find(item => item.site === site);
+            meta = reported ? mapSiteMeta(reported) : { provider: 'ts-jobspy', site, status: 'unavailable', candidates: candidates.length, durationMs: Date.now() - started, error: 'Bron rapporteerde geen status.', errorType: 'provider_error' };
+          } catch (error) {
+            const failure = sourceFailure(error);
+            meta = { provider: 'ts-jobspy', site, status: failure.errorType === 'rate_limited' ? 'rate_limited' : 'error', candidates: 0, durationMs: Date.now() - started, ...failure };
+          }
+          if (attempt === 1 && candidates.length === 0 && ['timeout', 'network'].includes(meta.errorType ?? '')
+            && Date.now() - started + timeoutMs + 250 <= (query.timeoutMs ?? 18_000)) { await sleep(250); continue; }
+          // Never retry 429; any Retry-After is recorded and this source stops for the run.
+          return { candidates, meta: { ...meta, attempts: attempt, durationMs: Date.now() - started } };
+        }
+      }));
+      return { candidates: outcomes.flatMap(result => result.candidates), meta: outcomes.map(result => result.meta) };
     },
   };
 }

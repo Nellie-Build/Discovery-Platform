@@ -31,6 +31,7 @@ export function statusBadgeTone(status: string): BadgeTone {
     case 'succeeded': case 'active': case 'ready': return 'success';
     case 'running': case 'pending': case 'queued': return 'info';
     case 'failed': return 'danger';
+    case 'partial': return 'warning';
     default: return 'neutral';
   }
 }

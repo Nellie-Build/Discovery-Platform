@@ -73,7 +73,7 @@ test('POST /projects/:id/runs with { branch } and a job-board candidate (no Brav
     assert.equal(run.status, 201);
     assert.equal(run.body.status, 'succeeded');
     assert.equal(run.body.recordsCreated, 1);
-    assert.equal(run.body.stats.searchQuery, 'vacature vacatures jobs Security beveiliger security officer Zuid-Holland');
+    assert.equal(run.body.stats.searchQuery, 'Security beveiliger security officer Zuid-Holland');
     assert.ok(run.body.stats.sources.some(s => s.provider === 'ts-jobspy' && s.status === 'ok'));
 
     const records = await request('GET', `/projects/${project.id}/records`);
@@ -130,6 +130,6 @@ test('Brave blijft optioneel: a branch search with no BRAVE_SEARCH_API_KEY and n
     assert.equal(run.status, 201);
     assert.equal(run.body.status, 'succeeded');
     assert.equal(run.body.recordsCreated, 0);
-    assert.ok(!run.body.stats.sources.some(s => s.provider === 'brave'), 'brave was never attempted without a key');
+    assert.equal(run.body.stats.sources.find(s => s.provider === 'brave').status, 'not_configured');
   } finally { await close(); }
 });

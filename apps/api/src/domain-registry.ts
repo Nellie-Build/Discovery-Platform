@@ -18,6 +18,7 @@ export interface ExistingRecordSnapshot {
 }
 
 export interface DiscoveredRecord {
+  existingRecordId?: string;
   displayName: string | null;
   domainData: Record<string, unknown>;
   classification: Record<string, unknown>;
@@ -27,6 +28,8 @@ export interface DiscoveredRecord {
 }
 
 export interface DiscoveryRunOutcome {
+  status?: 'succeeded' | 'partial' | 'failed';
+  observedRecords?: DiscoveredRecord[];
   records: DiscoveredRecord[];
   stats: Record<string, unknown>;
 }

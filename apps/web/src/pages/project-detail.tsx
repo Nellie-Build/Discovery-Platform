@@ -53,7 +53,7 @@ function DeleteProjectButton({ projectId, projectName }: { projectId: string; pr
   );
 }
 
-const RUN_TERMINAL_STATUSES = new Set(['succeeded', 'failed']);
+const RUN_TERMINAL_STATUSES = new Set(['succeeded', 'partial', 'failed']);
 
 /**
  * True when `candidate` is allowed to replace `current` as "the run this page shows" — never an
@@ -349,6 +349,8 @@ export function StartDiscoveryForm({ projectId, onStarted }: { projectId: string
 
 export function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const [selectedRun, setSelectedRun] = useState<DiscoveryRun | null>(null);
+  const [resultTab, setResultTab] = useState<'run' | 'all'>('run');
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   // The newest run this page has actually shown so far, from either handleRunStarted or a poll
   // result — the reference point isNewerRun compares an incoming response against, so a
@@ -364,6 +366,11 @@ export function ProjectDetailPage() {
   const { data: runs, loading: runsLoading, refetch: refetchRuns } = useAsync(
     () => api.runs.listByProject(id!), [id],
   );
+  const selectedId = selectedRun && selectedRun.project_id === id ? selectedRun.id : runs?.find(run => run.project_id === id)?.id;
+  const { data: runRecords, loading: runRecordsLoading, error: runRecordsError, refetch: refetchRunRecords } = useAsync(
+    async () => ({ runId: selectedId, records: selectedId ? await api.records.listByProject(id!, { runId: selectedId }) : [] }), [id, selectedId],
+  );
+  useEffect(() => { setSelectedRun(null); setActiveRunId(null); latestKnownRunRef.current = null; setResultTab('run'); }, [id]);
 
   // Polling is deliberately used here even though today's API completes a run synchronously
   // before responding (see docs/architecture.md) — this keeps the UI correct without changes
@@ -388,7 +395,9 @@ export function ProjectDetailPage() {
     if (!polledRun || activeRunId !== polledRun.id) return;
     if (isNewerRun(polledRun, latestKnownRunRef.current)) latestKnownRunRef.current = polledRun;
     if (RUN_TERMINAL_STATUSES.has(polledRun.status)) {
+      setSelectedRun(current => !current || current.id === polledRun.id ? polledRun : current);
       setActiveRunId(null);
+      refetchRunRecords();
       refetchRecords();
       refetchRuns();
     }
@@ -400,7 +409,7 @@ export function ProjectDetailPage() {
   if (!project) return null;
 
   const renderer = getDomainRenderer(project.domain);
-  const latestRun = polledRun ?? runs?.[0] ?? null;
+  const latestRun = selectedRun?.project_id === id ? selectedRun : runs?.find(run => run.project_id === id) ?? null;
 
   // Guards against a start-run response arriving out of order: if the user starts run A, then
   // (before A's own response comes back) starts run B, and B's response happens to resolve
@@ -409,6 +418,8 @@ export function ProjectDetailPage() {
   function handleRunStarted(run: DiscoveryRun) {
     if (!isNewerRun(run, latestKnownRunRef.current)) return;
     latestKnownRunRef.current = run;
+    setSelectedRun(run);
+    setResultTab('run');
     setActiveRunId(run.id);
     if (RUN_TERMINAL_STATUSES.has(run.status)) {
       refetchRecords();
@@ -434,17 +445,21 @@ export function ProjectDetailPage() {
         </div>
       </div>
 
-      <StartDiscoveryForm projectId={project.id} onStarted={handleRunStarted} />
+      <StartDiscoveryForm key={project.id} projectId={project.id} onStarted={handleRunStarted} />
 
       {latestRun && <RunStatusCard run={latestRun} />}
 
       <div>
-        <h2 className="mb-3 text-lg font-semibold text-slate-900">Recent records</h2>
-        {recordsLoading ? <LoadingState label="Loading records…" /> : (
+        <div role="tablist" aria-label="Resultaten" className="mb-3 flex gap-3">
+          <button role="tab" aria-selected={resultTab === 'run'} onClick={() => setResultTab('run')}>Deze run</button>
+          <button role="tab" aria-selected={resultTab === 'all'} onClick={() => setResultTab('all')}>Alle resultaten</button>
+        </div>
+        {resultTab === 'run' && <p className="mb-3 text-sm text-slate-500">Alleen waarnemingen uit de geselecteerde run. Oudere runs zonder resultaatkoppeling tonen hier geen historische projectrecords.</p>}
+        {resultTab === 'run' && runRecordsError ? <ErrorState message={runRecordsError} onRetry={refetchRunRecords} /> : (resultTab === 'all' ? recordsLoading : runRecordsLoading || runRecords?.runId !== selectedId) ? <LoadingState label="Loading records…" /> : (
           <RecordsTable
-            records={(records ?? []).slice(0, 10)}
-            emptyTitle="No records yet"
-            emptyDescription="Start a Discovery run above to find your first records."
+            records={resultTab === 'all' ? records ?? [] : runRecords?.records ?? []}
+            emptyTitle={resultTab === 'run' ? 'Geen resultaten voor deze run' : 'No records yet'}
+            emptyDescription="Alle resultaten toont de volledige projecthistorie."
           />
         )}
       </div>
@@ -467,7 +482,7 @@ export function ProjectDetailPage() {
                 <tbody className="divide-y divide-slate-100">
                   {(runs ?? []).map(run => (
                     <tr key={run.id}>
-                      <td className="px-4 py-3 text-slate-700">{run.started_at ? new Date(run.started_at).toLocaleString() : '—'}</td>
+                      <td className="px-4 py-3 text-slate-700"><button aria-pressed={latestRun?.id === run.id} onClick={() => { setSelectedRun(run); setResultTab('run'); }}>{run.started_at ? new Date(run.started_at).toLocaleString() : '—'} · Bekijk run</button></td>
                       <td className="px-4 py-3"><Badge tone={statusBadgeTone(run.status)}>{run.status}</Badge></td>
                       <td className="px-4 py-3 text-slate-700">{typeof run.stats?.recordsCreated === 'number' ? run.stats.recordsCreated : '—'}</td>
                     </tr>

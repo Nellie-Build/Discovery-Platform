@@ -121,7 +121,7 @@ test('"Security" + "Zuid-Holland" (Security + Zuid-Holland) is turned into the r
   assert.equal(outcome.stats.keywords, 'beveiliger security officer');
   assert.equal(outcome.stats.jobBoardSearchTerm, 'Security beveiliger security officer');
   // The web-search (Brave) query, kept separate, still gets the discovery hints + region.
-  assert.equal(outcome.stats.searchQuery, 'vacature vacatures jobs Security beveiliger security officer Zuid-Holland');
+  assert.equal(outcome.stats.searchQuery, 'Security beveiliger security officer Zuid-Holland');
 });
 
 test('Beveiliging + Zuid-Holland + Nederland: the job board receives country="netherlands" and an English location, never the raw Dutch region text', async () => {
@@ -196,8 +196,8 @@ test('één bron error, andere bron blijft behouden: the job board throwing enti
   assert.equal(outcome.records.length, 1);
   assert.equal(outcome.records[0].displayName, 'IT Security Specialist');
   const jobBoardMeta = outcome.stats.sources.find(s => s.provider === 'ts-jobspy');
-  assert.equal(jobBoardMeta.status, 'error');
-  assert.match(jobBoardMeta.error, /LinkedIn rate limited/);
+  assert.equal(jobBoardMeta.status, 'rate_limited');
+  assert.equal(jobBoardMeta.errorType, 'rate_limited');
 });
 
 test('één bron error, andere bron blijft behouden (omgekeerd): Brave throwing entirely does not discard the job board\'s own candidates', async () => {
@@ -212,7 +212,7 @@ test('één bron error, andere bron blijft behouden (omgekeerd): Brave throwing 
   assert.equal(outcome.records[0].displayName, 'Security Officer');
   const braveMeta = outcome.stats.sources.find(s => s.provider === 'brave');
   assert.equal(braveMeta.status, 'error');
-  assert.match(braveMeta.error, /Brave Search-aanroep mislukt/);
+  assert.equal(braveMeta.errorType, 'provider_error');
 });
 
 // ─── Brave stays optional ────────────────────────────────────────────────────────────────────
@@ -229,7 +229,7 @@ test('Brave blijft optioneel: no BRAVE_SEARCH_API_KEY and no searchProvider over
     const outcome = await adapter.runDiscovery(branchInput());
     assert.equal(outcome.records.length, 1);
     assert.equal(outcome.stats.searchMode, 'branch');
-    assert.ok(!outcome.stats.sources.some(s => s.provider === 'brave'), 'brave was never attempted at all, not even as a failure');
+    assert.equal(outcome.stats.sources.find(s => s.provider === 'brave').status, 'not_configured');
   } finally {
     if (originalKey !== undefined) process.env.BRAVE_SEARCH_API_KEY = originalKey;
   }
@@ -368,7 +368,7 @@ test('focused breadth: web search is never attempted even when a searchProvider 
   const adapter = createVacanciesAdapter({ jobBoardProvider: jobBoard.provider, searchProvider: braveProvider });
   const outcome = await adapter.runDiscovery(branchInput({ runConfig: { searchBreadth: 'focused' } }));
   assert.equal(calls.length, 0, 'brave must never be called at all for focused breadth');
-  assert.ok(!outcome.stats.sources.some(s => s.provider === 'brave'));
+  assert.equal(outcome.stats.sources.find(s => s.provider === 'brave').status, 'user_disabled');
   assert.equal(outcome.stats.searchBreadth, 'focused');
   assert.equal(outcome.records.length, 1);
 });

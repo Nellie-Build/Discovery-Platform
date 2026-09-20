@@ -33,10 +33,11 @@ import {
   extractVacancy, extractVacancyWithDiagnostic, vacanciesCrawlerConfig, vacancyCompletenessScore, findVacancyDuplicates,
   buildBranchSearchQuery, buildJobBoardSearchTerm, createTsJobSpySourceProvider, scoreVacancyRelevance, isWithinPostedWindow,
   isSearchBreadth, DEFAULT_SEARCH_BREADTH, SEARCH_BREADTH_LIMITS,
+  summarizeSources, sourceFailure,
   type VacancyFacts, type VacancySourceProvider, type VacancySourceCandidate, type VacancySourceMeta, type SearchBreadth,
   type VacancyPageDiagnostic,
 } from '@discovery-platform/domain-vacancies';
-import type { DomainAdapter, ExistingRecordSnapshot, DiscoveryRunInput, DiscoveryRunOutcome } from '../domain-registry.js';
+import type { DomainAdapter, ExistingRecordSnapshot, DiscoveryRunInput, DiscoveryRunOutcome, DiscoveredRecord } from '../domain-registry.js';
 // Imported directly from its own module, never through domain-registry.js — that file itself
 // imports this adapter (for the `vacanciesAdapter` constant), so importing back through it here
 // would create an ESM circular import (domain-registry.js <-> vacancies-adapter.js).
@@ -173,20 +174,27 @@ function buildRecordsFromFacts(
   const { survivors, collapsed } = collapseDuplicatesWithinCrawl(dated);
   const existingFacts = existingRecords.map(record => record.domainData as unknown as VacancyFacts);
   let duplicatesAgainstExisting = 0;
-  const records = [];
+  const records: DiscoveredRecord[] = [];
+  const observedRecords: DiscoveredRecord[] = [];
   for (const fact of survivors) {
-    if (options.onlyNewRecords && isDuplicateOfExisting(fact, existingFacts)) { duplicatesAgainstExisting++; continue; }
+    const matching = findVacancyDuplicates([...existingFacts, fact]).find(c => c.decision === 'duplicate' && (c.vacancyA === fact || c.vacancyB === fact));
+    const existingIndex = matching ? existingFacts.indexOf(matching.vacancyA === fact ? matching.vacancyB : matching.vacancyA) : -1;
+    const existingRecordId = existingIndex >= 0 ? existingRecords[existingIndex].id : undefined;
     const completeness = vacancyCompletenessScore(fact);
-    records.push({
+    const record: DiscoveredRecord = {
+      existingRecordId,
       displayName: fact.title ?? fact.company ?? null,
       domainData: fact as unknown as Record<string, unknown>,
       classification: { presentSignals: completeness.presentSignals, missingSignals: completeness.missingSignals },
       score: completeness.score,
       sources: [{ sourceType: 'website', sourceUrl: fact.sourceUrl, sourceLabel: null, sourceData: {} }],
       contacts: buildContacts(fact),
-    });
+    };
+    if (existingRecordId) { observedRecords.push(record); duplicatesAgainstExisting++; }
+    if (options.onlyNewRecords && isDuplicateOfExisting(fact, existingFacts)) { if (!existingRecordId) duplicatesAgainstExisting++; continue; }
+    records.push(record);
   }
-  return { records, collapsed, duplicatesAgainstExisting, dateFilteredCount: dateFiltered.length };
+  return { records, observedRecords, collapsed, duplicatesAgainstExisting, dateFilteredCount: dateFiltered.length };
 }
 
 function resolveSearchProvider(overrides: VacanciesCrawlOverrides): SourceSearchProvider | undefined {
@@ -301,6 +309,7 @@ async function runWebsiteDiscovery(
 
   return {
     records,
+    observedRecords: built.observedRecords,
     stats: {
       searchMode: 'website',
       crawlStatus: crawl.status,
@@ -337,7 +346,7 @@ async function runWebsiteDiscovery(
 // given — 'focused' is job boards only (see SEARCH_BREADTH_LIMITS's own doc comment). Always
 // additionally gated on actually being configured (see resolveSearchProvider) — an unconfigured
 // optional source is never attempted, explicitly requested or not (see resolveSourceSelection).
-const WEB_SEARCH_BREADTH_TIERS: SearchBreadth[] = ['standard', 'broad'];
+const WEB_SEARCH_BREADTH_TIERS: SearchBreadth[] = ['standard', 'broad', 'advanced'];
 
 /** Every vacancy source id this module knows how to select — what "enabled providers" means for
  * `filters.sources` validation (see resolveSourceSelection). Indeed and LinkedIn are two
@@ -370,7 +379,7 @@ interface ResolvedSourceSelection {
  * requesting only `["web_search"]` means indeed/linkedin are deliberately excluded, not "use the
  * tier's default anyway". */
 function resolveSourceSelection(sources: string[] | undefined, breadth: SearchBreadth): ResolvedSourceSelection {
-  if (!sources || sources.length === 0) {
+  if (!sources) {
     return {
       jobBoardSites: ['indeed', 'linkedin'], useWebSearch: WEB_SEARCH_BREADTH_TIERS.includes(breadth),
       webSearchExplicitlyRequested: false, unknownSources: [],
@@ -414,22 +423,18 @@ async function runBranchDiscovery(
   // tier's own sensible minimum, and never more than the overall candidate budget allows.
   const perProviderRequestSize = Math.max(1, Math.min(config.maxCandidates, Math.max(limits.maxCandidatesPerProvider, config.targetRecords)));
 
-  // Two distinct queries, never one string reused for both: a web-search engine (Brave) gets the
-  // generic "vacature vacatures jobs" discovery hints plus region folded into the query text (it
-  // has no separate location parameter); a job board (ts-jobspy) gets only the user's own branch
-  // + keywords, verbatim — no hints, no region (region goes through its own dedicated location/
-  // country parameters instead — see sources/location.ts). Neither ever rewords/translates the
-  // user's branch ("Beveiliging" must never silently become "Security").
+  // Both queries preserve user branch and keywords. Web Search also receives the region;
+  // job boards receive it as a separate location/country parameter. No hidden expansion.
   const webSearchQuery = buildBranchSearchQuery({ branch: input.branch, region: input.region, keywords: input.keywords });
   const jobBoardSearchTerm = buildJobBoardSearchTerm({ branch: input.branch, keywords: input.keywords });
   const sources: VacancySourceMeta[] = [];
   const freshFacts: VacancyFacts[] = [];
   let candidatesFound = 0;
   let candidatesCrawled = 0;
-  let stopReason: 'target_reached' | 'provider_exhausted' | 'candidate_limit' | 'time_limit' = 'provider_exhausted';
+  let stopReason: string = 'provider_exhausted';
 
   for (const id of unknownSources) {
-    sources.push({ provider: id, site: id, status: 'error', candidates: 0, durationMs: 0, error: `Unknown or unavailable source "${id}".` });
+    sources.push({ provider: id, site: id, status: 'unavailable', candidates: 0, durationMs: 0, error: 'Onbekende of niet beschikbare bron.', errorType: 'source_unavailable' });
   }
 
   /** Applies relevance (query-specific, branch mode only) + date filtering + dedupe to everything
@@ -454,8 +459,10 @@ async function runBranchDiscovery(
     try {
       const jobBoard = overrides.jobBoardProvider ?? createTsJobSpySourceProvider({ sites: jobBoardSites });
       const jobBoardResult = await withTimeout(
-        () => jobBoard.findCandidates({ query: jobBoardSearchTerm, location: input.region, resultsWanted: perProviderRequestSize }),
-        limits.providerTimeoutMs,
+        () => jobBoard.findCandidates({ query: jobBoardSearchTerm, location: input.region, resultsWanted: perProviderRequestSize,
+          hoursOld: filters.postedWithinDays ? filters.postedWithinDays * 24 : undefined,
+          timeoutMs: Math.min(limits.providerTimeoutMs - 500, config.maxDurationMs - (Date.now() - runStart) - 500) }),
+        Math.min(limits.providerTimeoutMs, config.maxDurationMs - (Date.now() - runStart)),
       );
       sources.push(...jobBoardResult.meta);
       candidatesFound += jobBoardResult.candidates.length;
@@ -468,15 +475,16 @@ async function runBranchDiscovery(
         candidatesCrawled++;
       }
     } catch (error) {
-      sources.push({ provider: 'ts-jobspy', site: 'ts-jobspy', status: 'error', candidates: 0, durationMs: 0, error: error instanceof Error ? error.message : String(error) });
+      const failure = sourceFailure(error);
+      sources.push(...jobBoardSites.map(site => ({ provider: 'ts-jobspy', site, status: failure.errorType === 'rate_limited' ? 'rate_limited' as const : 'error' as const, candidates: 0, durationMs: Date.now() - runStart, ...failure })));
     }
   }
 
   // Web search (Brave) — optional: no key configured means no attempt at all, it simply
   // contributes nothing, never a run failure (see resolveSearchProvider's own doc comment).
   const searchProvider = useWebSearch ? resolveSearchProvider(overrides) : undefined;
-  if (webSearchExplicitlyRequested && !searchProvider) {
-    sources.push({ provider: 'brave', site: 'brave', status: 'error', candidates: 0, durationMs: 0, error: 'Web Search was requested but is not configured (no BRAVE_SEARCH_API_KEY).' });
+  if (!searchProvider) {
+    sources.push({ provider: 'brave', site: 'brave', status: useWebSearch ? 'not_configured' : 'user_disabled', candidates: 0, durationMs: 0, error: null });
   }
   if (searchProvider && !targetReached() && !timeUp()) {
     const start = Date.now();
@@ -484,7 +492,7 @@ async function runBranchDiscovery(
       const searchCap = Math.min(perProviderRequestSize, remainingCandidateBudget());
       const rawCandidates = await withTimeout(
         () => searchProvider.search({ query: webSearchQuery, country: BRANCH_SEARCH_COUNTRY, language: BRANCH_SEARCH_LANGUAGE, count: searchCap }),
-        limits.providerTimeoutMs,
+        Math.min(limits.providerTimeoutMs, config.maxDurationMs - (Date.now() - runStart)),
       );
       const candidates = normalizeCandidateUrls(rawCandidates, { maxCandidates: searchCap });
       candidatesFound += candidates.length;
@@ -508,10 +516,11 @@ async function runBranchDiscovery(
       }
       sources.push({
         provider: 'brave', site: 'brave', status: candidates.length === 0 ? 'empty' : 'ok',
-        candidates: braveCrawled, durationMs: Date.now() - start, error: null,
+        candidates: candidates.length, durationMs: Date.now() - start, error: null,
       });
     } catch (error) {
-      sources.push({ provider: 'brave', site: 'brave', status: 'error', candidates: 0, durationMs: Date.now() - start, error: error instanceof Error ? error.message : String(error) });
+      const failure = sourceFailure(error);
+      sources.push({ provider: 'brave', site: 'brave', status: failure.errorType === 'rate_limited' ? 'rate_limited' : 'error', candidates: 0, durationMs: Date.now() - start, ...failure });
     }
   }
 
@@ -534,9 +543,27 @@ async function runBranchDiscovery(
   const built = buildRecordsFromFacts(relevantFacts, input.existingRecords, recordOptions);
   const { collapsed, duplicatesAgainstExisting, dateFilteredCount } = built;
   const records = built.records.slice(0, config.targetRecords);
+  const relevanceQuery = { branch: input.branch, keywords: input.keywords, region: input.region };
+  for (const record of [...records, ...built.observedRecords]) record.classification = { ...record.classification, relevance: scoreVacancyRelevance(record.domainData as unknown as VacancyFacts, relevanceQuery) };
+  for (const site of ['indeed', 'linkedin', 'brave']) {
+    if (sources.some(source => source.site === site)) continue;
+    const selected = site === 'brave' ? useWebSearch : jobBoardSites.includes(site as 'indeed' | 'linkedin');
+    sources.push({ provider: site === 'brave' ? 'brave' : 'ts-jobspy', site, status: selected ? 'not_run' : 'user_disabled', candidates: 0, durationMs: 0, error: null });
+  }
+  const coverage = summarizeSources(sources);
+  if (coverage.status === 'failed') stopReason = coverage.stopReason ?? 'source_unavailable';
+  else if (stopReason === 'provider_exhausted') stopReason = coverage.stopReason ?? (candidatesFound === 0 ? 'no_results' : 'provider_exhausted');
   return {
     records,
+    status: coverage.status,
+    observedRecords: built.observedRecords,
     stats: {
+      ...coverage,
+      providerQueries: Object.fromEntries(sources.filter(source => ['ok', 'empty', 'partial', 'error', 'rate_limited'].includes(source.status))
+        .map(source => [source.site, source.site === 'brave' ? webSearchQuery : jobBoardSearchTerm])),
+      candidatesRelevant: relevanceAccepted,
+      candidatesRejectedByRelevance: relevanceRejected,
+      relevanceDiagnostics: freshFacts.map(fact => ({ sourceUrl: fact.sourceUrl, ...scoreVacancyRelevance(fact, relevanceQuery) })),
       searchMode: 'branch',
       searchBreadth: breadth,
       searchQuery: webSearchQuery,

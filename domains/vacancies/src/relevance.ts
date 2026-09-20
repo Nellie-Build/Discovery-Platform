@@ -20,6 +20,7 @@ export interface VacancyRelevanceQuery {
   branch: string;
   /** Optional extra free-text terms, e.g. "Project Manager". */
   keywords?: string | null;
+  region?: string | null;
 }
 
 export interface VacancyRelevanceResult {
@@ -29,6 +30,11 @@ export interface VacancyRelevanceResult {
    * (any match at all accepts); kept for future ranking use. */
   score: number;
   matchedTerms: string[];
+  titleMatches: string[];
+  descriptionMatches: string[];
+  companyMatches: string[];
+  locationMatch: boolean | null;
+  relevanceScore: number;
 }
 
 const TITLE_WEIGHT = 3;
@@ -81,7 +87,6 @@ function findMatches(terms: string[], fieldText: string | null | undefined): str
  */
 export function scoreVacancyRelevance(facts: VacancyFacts, query: VacancyRelevanceQuery): VacancyRelevanceResult {
   const terms = queryTerms(query);
-  if (terms.length === 0) return { accepted: true, score: 0, matchedTerms: [] };
 
   const titleMatches = findMatches(terms, facts.title);
   const otherFieldText = [facts.description, facts.company, facts.contractType].filter(Boolean).join(' ');
@@ -89,5 +94,7 @@ export function scoreVacancyRelevance(facts: VacancyFacts, query: VacancyRelevan
 
   const score = titleMatches.length * TITLE_WEIGHT + otherMatches.length * OTHER_FIELD_WEIGHT;
   const matchedTerms = [...new Set([...titleMatches, ...otherMatches])];
-  return { accepted: matchedTerms.length > 0, score, matchedTerms };
+  return { accepted: matchedTerms.length > 0, score, relevanceScore: score, matchedTerms, titleMatches,
+    descriptionMatches: findMatches(terms, facts.description), companyMatches: findMatches(terms, facts.company),
+    locationMatch: query.region && facts.location ? findMatches(tokenize(query.region), facts.location).length > 0 : null };
 }

@@ -56,7 +56,9 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
     if (!adapter) throw badRequest('unknown_domain', `No domain adapter registered for "${project.domain}".`);
     await assertModuleEnabled(pool, project.domain);
 
-    const run = await runs.createRun(project.id);
+    const { runConfig: resolvedConfig, filters: resolvedFilters, ...criteria } = discoveryInput;
+    const initialStats = { criteria: { ...criteria, runConfig: resolvedConfig, filters: resolvedFilters } };
+    const run = await runs.createRun(project.id, initialStats);
     res.locals.runId = run.id;
 
     let outcome;
@@ -65,11 +67,12 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
       const existingRecords = existing.map(record => ({ id: record.id, domainData: record.domain_data }));
       outcome = await adapter.runDiscovery({ ...discoveryInput, existingRecords });
     } catch (error) {
-      const failed = await runs.markFailed(run.id, error instanceof Error ? error.message : String(error));
+      const failed = await runs.markFailed(run.id, 'Discovery kon niet worden uitgevoerd.', initialStats);
       res.status(201).json({ ...failed, recordsCreated: 0 });
       return;
     }
 
+    let recordsCreated = 0;
     try {
       // Every record from this run is persisted in one transaction: if inserting record N fails
       // (a bad value, a lost connection), record 1..N-1 are rolled back too — a run either
@@ -77,22 +80,31 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
       await withTransaction(pool, async client => {
         const recordsInTransaction = new DiscoveryRecordsRepository(client);
         for (const record of outcome!.records) {
-          await recordsInTransaction.createRecordWithDetails({
+          const stored = record.existingRecordId ? await recordsInTransaction.getRecordById(record.existingRecordId) : await recordsInTransaction.createRecordWithDetails({
             projectId: project.id, domain: project.domain,
             displayName: record.displayName, domainData: record.domainData,
             classification: record.classification, score: record.score,
             sources: record.sources, contacts: record.contacts,
           });
+          if (stored && stored.project_id === project.id) {
+            await recordsInTransaction.observeInRun(run.id, { ...stored, domain_data: record.domainData, classification: record.classification });
+            if (!record.existingRecordId) recordsCreated++;
+          }
+        }
+        for (const record of outcome!.observedRecords ?? []) {
+          if (!record.existingRecordId) continue;
+          const stored = await recordsInTransaction.getRecordById(record.existingRecordId);
+          if (stored?.project_id === project.id) await recordsInTransaction.observeInRun(run.id, { ...stored, domain_data: record.domainData, classification: record.classification });
         }
       });
     } catch (error) {
-      const failed = await runs.markFailed(run.id, error instanceof Error ? error.message : String(error), outcome.stats);
+      const failed = await runs.markFailed(run.id, 'Resultaten konden niet worden opgeslagen.', { ...outcome.stats, ...initialStats, recordsCreated: 0 });
       res.status(201).json({ ...failed, recordsCreated: 0 });
       return;
     }
 
-    const succeeded = await runs.markSucceeded(run.id, outcome.stats);
-    res.status(201).json({ ...succeeded, recordsCreated: outcome.records.length });
+    const succeeded = await runs.finish(run.id, outcome.status ?? 'succeeded', { ...outcome.stats, ...initialStats, recordsCreated });
+    res.status(201).json({ ...succeeded, recordsCreated });
   }));
 
   router.get('/projects/:id/runs', asyncHandler(async (req, res) => {

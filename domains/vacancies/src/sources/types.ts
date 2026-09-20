@@ -11,6 +11,7 @@ export interface VacancySourceQuery {
   /** Free-text search term — a branch name, optionally combined with the user's own keywords
    * (see buildBranchSearchQuery). Never an AI-generated synonym. */
   query: string;
+  timeoutMs?: number;
   location?: string | null;
   /** How many results this source should try to return. A source may return fewer. */
   resultsWanted?: number;
@@ -43,7 +44,10 @@ export interface VacancySourceMeta {
   /** Which origin within that provider, e.g. "indeed", "linkedin", or the provider id itself for
    * a single-origin provider. */
   site: string;
-  status: 'ok' | 'empty' | 'partial' | 'error';
+  status: 'ok' | 'empty' | 'partial' | 'error' | 'rate_limited' | 'user_disabled' | 'not_configured' | 'unavailable' | 'not_run';
+  errorType?: string;
+  retryAfterMs?: number;
+  attempts?: number;
   candidates: number;
   durationMs: number;
   error: string | null;

@@ -269,6 +269,27 @@ describe('ProjectDetailPage', () => {
     vi.mocked(api.runs.start).mockReset();
   });
 
+  it('selects historical criteria and run records without presenting project history as failed-run output', async () => {
+    const old = run({ id: 'education', stats: { searchMode: 'branch', branch: 'Onderwijs', criteria: { mode: 'branch', branch: 'Onderwijs', region: 'Nederland' } } });
+    const current = run({ id: 'security', status: 'failed', stats: { searchMode: 'branch', branch: 'Security', stopReason: 'all_sources_failed', criteria: { mode: 'branch', branch: 'Security', region: 'Nederland' } } });
+    const record = { id: 'r1', project_id: 'p1', domain: 'vacancies', status: 'new', display_name: 'Oude docent', domain_data: {}, classification: {}, score: 50, created_at: '', updated_at: '' };
+    vi.mocked(api.projects.get).mockResolvedValue(project({ name: 'Security Agencies' }));
+    vi.mocked(api.runs.listByProject).mockResolvedValue([current, old]);
+    vi.mocked(api.records.listByProject).mockImplementation(async (_id, options) => options?.runId === 'security' ? [] : [record]);
+    renderProjectDetail();
+    await screen.findByText('Alle bronnen mislukt');
+    expect(screen.queryByText('Oude docent')).not.toBeInTheDocument();
+    await userEvent.click(screen.getAllByRole('button', { name: /Bekijk run/ })[1]);
+    await screen.findByText('Oude docent');
+    expect(screen.getByText('Onderwijs')).toBeInTheDocument();
+    expect(api.records.listByProject).toHaveBeenCalledWith('p1', { runId: 'education' });
+    await userEvent.click(screen.getAllByRole('button', { name: /Bekijk run/ })[0]);
+    await screen.findByText('Geen resultaten voor deze run');
+    expect(screen.queryByText('Oude docent')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: 'Alle resultaten' }));
+    await screen.findByText('Oude docent');
+  });
+
   // "New records" appears twice on the page (the status card's own field, and the Run history
   // table's column header) — the status card is always rendered first in the DOM, above Run
   // history, so its own field is reliably the first match.

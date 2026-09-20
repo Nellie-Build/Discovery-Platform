@@ -170,7 +170,8 @@ test('onlyNewRecords: false allows a vacancy that already exists for this projec
     const second = await request('POST', `/projects/${project.id}/runs`, {
       body: { sourceUrl: 'https://acme.example', runConfig: { onlyNewRecords: false } },
     });
-    assert.equal(second.body.recordsCreated, 1, 'with onlyNewRecords off, the same vacancy can be re-discovered and saved again');
+    assert.equal(second.body.recordsCreated, 0, 'a new observation reuses the unique project record');
+    assert.equal(second.body.stats.recordsAccepted, 1);
   } finally { await close(); }
 });
 
@@ -248,10 +249,10 @@ test('an unknown/unavailable requested source produces a clear, isolated error e
       body: { branch: 'Security', filters: { sources: ['glassdoor'] } },
     });
     assert.equal(run.status, 201);
-    assert.equal(run.body.status, 'succeeded');
+    assert.equal(run.body.status, 'failed');
     const unknown = run.body.stats.sources.find(s => s.provider === 'glassdoor');
     assert.ok(unknown, 'an unknown source must be reported, not silently dropped');
-    assert.equal(unknown.status, 'error');
+    assert.equal(unknown.status, 'unavailable');
   } finally { await close(); }
 });
 
@@ -268,8 +269,9 @@ test('web_search explicitly requested but not configured (no Brave key/override)
       assert.equal(run.status, 201);
       const webSearch = run.body.stats.sources.find(s => s.provider === 'brave');
       assert.ok(webSearch, 'a clear notice must appear even though nothing was actually attempted');
-      assert.equal(webSearch.status, 'error');
-      assert.match(webSearch.error, /not configured/i);
+      assert.equal(webSearch.status, 'not_configured');
+      assert.equal(run.body.status, 'failed');
+      assert.equal(webSearch.error, null);
     } finally { await close(); }
   } finally {
     if (originalKey !== undefined) process.env.BRAVE_SEARCH_API_KEY = originalKey;

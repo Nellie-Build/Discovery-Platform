@@ -53,6 +53,13 @@ export interface NewRecordInput {
 export class DiscoveryRecordsRepository {
   constructor(private readonly db: Queryable) {}
 
+  async observeInRun(runId: string, record: DiscoveryRecord): Promise<void> {
+    await this.db.query(`INSERT INTO discovery_run_records (run_id, record_id, snapshot)
+      SELECT u.id, r.id, $3::jsonb FROM discovery_runs u JOIN discovery_records r ON r.project_id = u.project_id
+      WHERE u.id = $1 AND r.id = $2 ON CONFLICT (run_id, record_id) DO NOTHING`,
+      [runId, record.id, JSON.stringify(record)]);
+  }
+
   /** Inserts one record together with its sources and contacts. Callers that need several
    * records to succeed or fail together (a whole discovery run's worth) should construct this
    * repository with a transaction client (see connection.ts's `withTransaction`) and call this
@@ -104,7 +111,15 @@ export class DiscoveryRecordsRepository {
 
   /** Always scoped to one project — see ProjectsRepository.listProjectsByWorkspace for the same
    * isolation reasoning at the workspace level. */
-  async listRecordsByProject(projectId: string, options: { domain?: string } = {}): Promise<DiscoveryRecord[]> {
+  async listRecordsByProject(projectId: string, options: { domain?: string; runId?: string } = {}): Promise<DiscoveryRecord[]> {
+    if (options.runId) {
+      const { rows } = await this.db.query<{ snapshot: DiscoveryRecord }>(
+        `SELECT o.snapshot FROM discovery_run_records o JOIN discovery_records r ON r.id = o.record_id
+         JOIN discovery_runs u ON u.id = o.run_id AND u.project_id = r.project_id
+         WHERE r.project_id = $1 AND o.run_id = $2 AND ($3::text IS NULL OR r.domain = $3) ORDER BY o.seen_at DESC`,
+        [projectId, options.runId, options.domain ?? null]);
+      return rows.map(row => row.snapshot);
+    }
     if (options.domain) {
       const { rows } = await this.db.query<DiscoveryRecord>(
         'SELECT * FROM discovery_records WHERE project_id = $1 AND domain = $2 ORDER BY created_at DESC',

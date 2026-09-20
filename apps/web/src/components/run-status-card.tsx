@@ -24,6 +24,10 @@ const STOP_REASON_LABELS: Record<string, string> = {
   rate_limited: 'Snelheidslimiet van de bron bereikt',
   robots_blocked: 'Geblokkeerd door robots.txt',
   provider_exhausted: 'Bron uitgeput',
+  no_results: 'Geen resultaten bij de beschikbare bronnen',
+  all_sources_failed: 'Alle bronnen mislukt',
+  source_rate_limited: 'Bron tijdelijk begrensd',
+  source_unavailable: 'Geen volledige brontoegang',
 };
 
 function stopReasonLabel(stopReason: unknown): string | null {
@@ -33,7 +37,9 @@ function stopReasonLabel(stopReason: unknown): string | null {
 interface SourceMeta {
   provider: string;
   site: string;
-  status: 'ok' | 'empty' | 'partial' | 'error';
+  status: string;
+  durationMs?: number;
+  errorType?: string;
   candidates: number;
   error: string | null;
 }
@@ -45,8 +51,9 @@ function sourceLabel(site: string): string {
 }
 
 function sourceStatusTone(status: string) {
-  return status === 'ok' ? 'success' : status === 'empty' ? 'neutral' : status === 'partial' ? 'warning' : 'danger';
+  return status === 'ok' ? 'success' : ['empty', 'not_configured', 'user_disabled', 'not_run'].includes(status) ? 'neutral' : status === 'partial' ? 'warning' : 'danger';
 }
+const SOURCE_STATUS_LABELS: Record<string, string> = { not_configured: 'Niet geconfigureerd', user_disabled: 'Uitgeschakeld', not_run: 'Niet uitgevoerd', rate_limited: 'Rate limited', unavailable: 'Niet beschikbaar' };
 
 /** A compact per-provider breakdown for a branch-search run — every source a run *could* use is
  * shown, including one it never attempted at all (e.g. Web Search with no Brave key configured,
@@ -64,7 +71,9 @@ function SourcesSection({ sources }: { sources: SourceMeta[] }) {
             <span className="font-medium text-slate-700">{sourceLabel(source.site)}</span>
             <div className="flex items-center gap-2">
               {source.status !== 'disabled' && <span className="text-slate-500">{source.candidates} results</span>}
-              <Badge tone={source.status === 'disabled' ? 'neutral' : sourceStatusTone(source.status)}>{source.status}</Badge>
+              {typeof source.durationMs === 'number' && <span>{formatSeconds(source.durationMs / 1000)}</span>}
+              {source.errorType && <span>{source.errorType}</span>}
+              <Badge tone={source.status === 'disabled' ? 'neutral' : sourceStatusTone(source.status)}>{SOURCE_STATUS_LABELS[source.status] ?? source.status}</Badge>
             </div>
           </li>
         ))}
@@ -87,6 +96,7 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
  * duplicates), or the error message when it failed. */
 export function RunStatusCard({ run }: { run: DiscoveryRun }) {
   const stats = run.stats ?? {};
+  const criteria = (stats.criteria ?? {}) as { mode?: string; branch?: string; keywords?: string; region?: string; sourceUrl?: string; filters?: { postedWithinDays?: number; sources?: string[] }; runConfig?: { targetRecords?: number } };
   const duration = typeof stats.durationMs === 'number' ? formatSeconds(stats.durationMs / 1000) : formatDuration(run.started_at, run.completed_at);
   const isBranchSearch = stats.searchMode === 'branch';
   const duplicates = typeof stats.duplicates === 'number'
@@ -102,11 +112,31 @@ export function RunStatusCard({ run }: { run: DiscoveryRun }) {
         <Badge tone={statusBadgeTone(run.status)}>{run.status}</Badge>
       </CardHeader>
       <CardContent>
+        <div className="mb-4 rounded-lg bg-slate-50 p-3">
+          <p className="mb-2 text-sm font-semibold">Zoekcriteria van deze run</p>
+          <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {isBranchSearch || criteria.mode === 'branch' ? <>
+              <Field label="Branche" value={criteria.branch ?? (typeof stats.branch === 'string' ? stats.branch : null)} />
+              <Field label="Keywords" value={criteria.keywords ?? (typeof stats.keywords === 'string' ? stats.keywords : 'Geen')} />
+              <Field label="Regio" value={criteria.region ?? (typeof stats.region === 'string' ? stats.region : 'Niet opgegeven')} />
+              <Field label="Gekozen bronnen" value={criteria.filters?.sources?.join(', ') || (criteria.filters?.sources ? 'Geen' : 'Volgens zoekmodus')} />
+            </> : <Field label="Website URL" value={criteria.sourceUrl ?? 'Niet vastgelegd voor deze oudere run'} />}
+            <Field label="Date filter" value={criteria.filters?.postedWithinDays ? `Laatste ${criteria.filters.postedWithinDays} dagen` : stats.criteria ? 'Alle datums' : 'Niet vastgelegd'} />
+            <Field label="Target" value={criteria.runConfig?.targetRecords ?? (typeof stats.targetRecords === 'number' ? stats.targetRecords : null)} />
+          </dl>
+          <p className="mt-2 text-xs text-slate-500">De projectnaam is een label; deze criteria bepalen de zoekopdracht.</p>
+        </div>
+        {typeof stats.sourcesSucceeded === 'number' && typeof stats.sourcesRequested === 'number' && (
+          <div className="mb-4 text-sm">
+            {stats.sourcesSucceeded < 3 && <p className="font-medium text-amber-700">Beperkte brondekking</p>}
+            <p>{stats.sourcesSucceeded} van 3 bronnen leverden een bruikbaar antwoord. Gevraagd: {stats.sourcesRequested}; beschikbaar: {Number(stats.sourcesAvailable ?? 0)}; mislukt: {Number(stats.sourcesFailed ?? 0)}.</p>
+            <p>Het aantal gevonden resultaten beschrijft alleen de beschikbare bronnen.</p>
+            <p>Kandidaten: {Number(stats.candidatesDiscovered ?? 0)} · Relevant: {Number(stats.candidatesRelevant ?? 0)} · Afgewezen: {Number(stats.candidatesRejectedByRelevance ?? 0)} · Geaccepteerd: {Number(stats.recordsAccepted ?? 0)}</p>
+          </div>
+        )}
         {(!stats.budgetSource || isBranchSearch) && <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
           <Field label="Started" value={run.started_at ? new Date(run.started_at).toLocaleString() : null} />
           <Field label="Duur" value={duration} />
-          {isBranchSearch && <Field label="Branche" value={typeof stats.branch === 'string' ? stats.branch : null} />}
-          {isBranchSearch && <Field label="Regio" value={typeof stats.region === 'string' ? stats.region : null} />}
           {isBranchSearch && <Field label="Kandidaatbronnen" value={typeof stats.candidatesFound === 'number' ? stats.candidatesFound : null} />}
           <Field label="Pages visited" value={typeof stats.pagesVisited === 'number' ? stats.pagesVisited : null} />
           <Field label="Records found" value={typeof stats.factsFound === 'number' ? stats.factsFound : null} />

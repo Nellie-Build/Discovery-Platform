@@ -14,10 +14,10 @@ export interface DiscoveryRun {
 export class DiscoveryRunsRepository {
   constructor(private readonly db: Queryable) {}
 
-  async createRun(projectId: string): Promise<DiscoveryRun> {
+  async createRun(projectId: string, stats: Record<string, unknown> = {}): Promise<DiscoveryRun> {
     const { rows } = await this.db.query<DiscoveryRun>(
-      `INSERT INTO discovery_runs (project_id, status, started_at) VALUES ($1, 'running', now()) RETURNING *`,
-      [projectId],
+      `INSERT INTO discovery_runs (project_id, status, started_at, stats) VALUES ($1, 'running', now(), $2::jsonb) RETURNING *`,
+      [projectId, JSON.stringify(stats)],
     );
     return rows[0];
   }
@@ -27,6 +27,13 @@ export class DiscoveryRunsRepository {
       `UPDATE discovery_runs SET status = 'succeeded', stats = $2::jsonb, completed_at = now() WHERE id = $1 RETURNING *`,
       [runId, JSON.stringify(stats)],
     );
+    return rows[0];
+  }
+
+  async finish(runId: string, status: 'succeeded' | 'partial' | 'failed', stats: Record<string, unknown>): Promise<DiscoveryRun> {
+    const { rows } = await this.db.query<DiscoveryRun>(
+      'UPDATE discovery_runs SET status = $2, stats = $3::jsonb, completed_at = now() WHERE id = $1 RETURNING *',
+      [runId, status, JSON.stringify(stats)]);
     return rows[0];
   }
 

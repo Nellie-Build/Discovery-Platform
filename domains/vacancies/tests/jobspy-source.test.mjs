@@ -34,7 +34,7 @@ test('sends searchTerm/location/resultsWanted/hoursOld/isRemote to scrapeJobs, r
   const { impl, calls } = fakeScrapeJobs({ jobs: [], meta: { sites: [siteMetaOk('indeed', 0), siteMetaOk('linkedin', 0)], totalDurationMs: 1, jobsPerSecond: 0, failureRate: 0, duplicatesRemoved: 0 } });
   const provider = createTsJobSpySourceProvider({ scrapeJobsImpl: impl });
   await provider.findCandidates({ query: 'Beveiliging beveiliger security officer', location: 'Zuid-Holland', resultsWanted: 10, hoursOld: 72, remote: false });
-  assert.deepEqual(calls[0].sites, ['indeed', 'linkedin']);
+  assert.deepEqual(calls.map(call => call.sites), [['indeed'], ['linkedin']]);
   assert.equal(calls[0].searchTerm, 'Beveiliging beveiliger security officer');
   assert.equal(calls[0].resultsWanted, 10);
   assert.equal(calls[0].hoursOld, 72);
@@ -133,10 +133,10 @@ test('one site erroring does not discard the other site\'s candidates — per-si
   assert.equal(indeedMeta.status, 'ok');
   assert.equal(indeedMeta.candidates, 1);
   assert.equal(indeedMeta.error, null);
-  assert.equal(linkedinMeta.status, 'error');
+  assert.equal(linkedinMeta.status, 'rate_limited');
   assert.equal(linkedinMeta.candidates, 0);
-  assert.match(linkedinMeta.error, /RateLimitException/);
-  assert.match(linkedinMeta.error, /rate limited/);
+  assert.equal(linkedinMeta.errorType, 'rate_limited');
+  assert.match(linkedinMeta.error, /429/);
 });
 
 test('an empty result for a site is reported as status "empty", not an error', async () => {
@@ -182,7 +182,7 @@ test('defaults to both indeed and linkedin, exactly like before the "sites" opti
   const { impl, calls } = fakeScrapeJobs({ jobs: [], meta: { sites: [], totalDurationMs: 1, jobsPerSecond: 0, failureRate: 0, duplicatesRemoved: 0 } });
   const provider = createTsJobSpySourceProvider({ scrapeJobsImpl: impl });
   await provider.findCandidates({ query: 'Security' });
-  assert.deepEqual(calls[0].sites, ['indeed', 'linkedin']);
+  assert.deepEqual(calls.map(call => call.sites), [['indeed'], ['linkedin']]);
 });
 
 test('a provider constructed with sites: ["indeed"] only ever requests indeed, never linkedin', async () => {

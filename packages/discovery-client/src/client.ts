@@ -67,8 +67,11 @@ export function createApiClient({ baseUrl }: ApiClientOptions) {
       get: (id: string) => req<DiscoveryRun>('GET', `/runs/${id}`),
     },
     records: {
-      listByProject: (projectId: string, options: { domain?: string } = {}) => {
-        const query = options.domain ? `?domain=${encodeURIComponent(options.domain)}` : '';
+      listByProject: (projectId: string, options: { domain?: string; runId?: string } = {}) => {
+        const params = new URLSearchParams();
+        if (options.domain) params.set('domain', options.domain);
+        if (options.runId) params.set('runId', options.runId);
+        const query = params.size ? `?${params}` : '';
         return req<DiscoveryRecord[]>('GET', `/projects/${projectId}/records${query}`);
       },
       get: (id: string) => req<RecordWithDetails>('GET', `/records/${id}`),
