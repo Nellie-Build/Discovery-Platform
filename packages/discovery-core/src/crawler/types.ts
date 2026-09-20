@@ -52,6 +52,10 @@ export interface CrawlResult<TFacts> {
   discoveryStats: {
     urlsDiscovered: number;
     uniqueUrlsDiscovered: number;
+    /** Distinct crawl identities among the unique URLs: variants the domain identifies as one record count once. */
+    uniqueCrawlIdentities: number;
+    /** Unique URLs that are only another address of an already-known identity (`uniqueUrlsDiscovered - uniqueCrawlIdentities`). */
+    candidateIdentityDuplicates: number;
     sitemapUrlsFound: number;
     sitemapCandidatesAccepted: number;
     sitemapCandidatesRejected: number;

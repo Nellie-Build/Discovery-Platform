@@ -40,3 +40,33 @@ were sufficient for all of them: nothing here needs a browser.
 Company/description extraction, the overview classifier, relevance, the candidate queue, concurrency,
 budgets and both crawl engines. Known and left alone: `/vacatures/alle-vacatures` and
 `/vacatures/open-sollicitatie` are still classified as detail by the classic `/vacatures/<x>` rule.
+
+## One vacancy under many addresses (stable job identity)
+
+Live finding: a site publishing every job under a language segment (`/en/…/jobID:966837/`, `/de/…`, 12 variants
+per job) filled a 25-record target with 8 distinct vacancies. Nothing recognised the variants as one vacancy:
+record dedupe needs the same `sourceUrl` or company + title, and the company was null.
+
+* `domains/vacancies/src/job-identity.ts` — `extractVacancyUrlIdentity(url)`: the one implementation of an
+  explicit job identifier (`jobId` / `job_id` / `vacancyId` / `positionId` / `postingId` … query parameter or
+  `jobID:123` path segment, value with at least one digit). The identity is `origin|type|value`
+  (origin without a leading `www.`), so the same id on another site is never the same vacancy. No language,
+  slug, title, page number or tracking parameter ever forms an identity; the URL itself is never rewritten.
+  Ranking (`job_identifier`), candidate dedupe and record dedupe all use it.
+* Candidate level: `CandidateRank.dedupeKey` (optional, supplied by the domain; core never interprets it).
+  `CandidateQueue` keeps at most one waiting URL per key (better score wins, the earlier one on a tie) and
+  keeps the key claimed after `take()`, so a variant discovered while the first is in flight (Crawlee
+  concurrency) or after it finished is never queued. The requested URL still goes first.
+* Record level: new exact dedupe signal `stableJobIdentity` in `findVacancyDuplicates` (same origin + same
+  identifier is a duplicate even with company = null and a different `sourceUrl`), so a record stored
+  earlier via another variant is recognised in later runs (`onlyNewRecords`). Existing signals are unchanged.
+* Target counting already runs on the deduplicated records, so variants no longer fill `targetRecords`.
+* Diagnostics: `uniqueUrlsDiscovered` (unique canonical URLs) stays; `uniqueCrawlIdentities` and
+  `candidateIdentityDuplicates` (= URLs that are only another address of a known identity) are new.
+  Discovery still lists every published URL.
+* Open applications: `open_application` (−50, classification `general`) for clear wording in the URL or link text
+  (`open-sollicitatie`, `open-application`, `spontaneous`, `spontane sollicitatie`, `initiatiefsollicitatie`).
+  A lower crawl priority only: they are still visited with budget left and the extractor decides. Stages,
+  trainee, internship and volunteer wording is not touched.
+* Known limit: two different vacancies on one site that share the same identifier value under different
+  identifier *spaces* (e.g. `what:job/jobID:4041` and `what:spontaneous/jobID:4041`) would count as one.

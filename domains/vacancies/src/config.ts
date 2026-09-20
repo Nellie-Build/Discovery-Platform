@@ -1,20 +1,13 @@
 import type { PriorityTier, CandidateEvidence, CandidateRank } from '@discovery-platform/core';
+import { extractVacancyUrlIdentity } from './job-identity.js';
 
 /** Routes that are a listing, a search or a general page, never one individual posting. */
 const GENERIC_SEGMENT = /^(?:home|index|search|zoeken|zoek|jobs?|vacatures?|vacanc(?:y|ies)|careers?|team|teams|contact|about|about-us|over|over-ons|open-sollicitatie|alle-vacatures|all-jobs|all|overzicht|overview|login|inloggen|account|privacy|cookies|nieuws|news|blog|events?|faq|page|categorie|category|categories|locaties|locations?)$/i;
 /** A route word that names one posting when an identifier follows it ("/position/12345"). */
 const RECORD_ROUTE = /^(?:positions?|posities?|positie|openings?|postings?|opportunit(?:y|ies)|requisitions?)$/i;
-const JOB_ID_KEY = /^(?:job|vacancy|vacature|position|posting|opening|requisition)[-_]?id$/i;
-const JOB_ID_SEGMENT = /^(?:job|vacancy|vacature|position|posting|opening|requisition)[-_]?id[:=](.+)$/i;
-/** An identifier value: short alphanumeric token with at least one digit ("12345", "a7f3-19"). */
-const isIdentifier = (value: string) => /^[\p{L}\p{N}._-]{2,}$/u.test(value) && /\d/.test(value);
-
-/** A stable, explicit job identifier: a "jobId=123"-style parameter or a "jobID:123"-style path segment.
- * The key has to be the whole key/segment prefix, so ordinary words that contain "job" never match. */
-function hasJobIdentifier(url: URL, path: string): boolean {
-  for (const [key, value] of url.searchParams) if (JOB_ID_KEY.test(key) && isIdentifier(value)) return true;
-  return path.split('/').some(segment => { const match = JOB_ID_SEGMENT.exec(segment); return match !== null && !match[1].includes('-') && isIdentifier(match[1]); });
-}
+/** An open or spontaneous application: not a concrete vacancy. Only clear wording in the URL or the link text. */
+const OPEN_APPLICATION_PATH = /(?:^|[/:_.-])(?:open[-_ ]?sollicitaties?|open[-_ ]?applications?|spontaneous(?:[-_ ]?applications?)?|spontane[-_ ]?sollicitaties?|initiatief[-_ ]?sollicitaties?)(?=$|[/:_.?-])/i;
+const OPEN_APPLICATION_LABEL = /\b(?:open(?:e)?\s+sollicitatie|open\s+application|spontane(?:ous)?\s+(?:sollicitatie|application)|initiatiefsollicitatie)/i;
 
 export function rankVacancyCandidate(evidence: CandidateEvidence): CandidateRank {
   const url = new URL(evidence.url);
@@ -32,7 +25,8 @@ export function rankVacancyCandidate(evidence: CandidateEvidence): CandidateRank
   if (detail) { signal(45, 'detail_path'); classification = 'detail'; }
   const segments = path.split('/').filter(Boolean);
   const notASearch = ![...url.searchParams.keys()].some(key => /^(?:q|query|search|filter.*|facet.*)$/i.test(key));
-  if (hasJobIdentifier(url, path)) {
+  const identity = extractVacancyUrlIdentity(url);
+  if (identity) {
     // An explicit job id is strong on its own; on top of a path that already says "detail" it only confirms.
     signal(detail ? 15 : 45, 'job_identifier'); classification = 'detail';
   } else if (!detail && notASearch) {
@@ -56,6 +50,11 @@ export function rankVacancyCandidate(evidence: CandidateEvidence): CandidateRank
   if (classification === 'detail' && /[a-z].*[-_].*(?:\d{3,}|[a-z])/.test(path.split('/').filter(Boolean).at(-1) ?? '')) signal(5, 'unique_detail_slug');
   if (classification === 'detail' && evidence.source === 'sitemap') signal(10, 'sitemap_detail');
   if (classification === 'detail' && evidence.source === 'listing') signal(10, 'listing_detail_link');
+  if (OPEN_APPLICATION_PATH.test(path) || OPEN_APPLICATION_LABEL.test(label)) {
+    // Crawl priority only: it is still visited when the budget allows, the extractor decides what it is.
+    signal(-50, 'open_application');
+    if (classification === 'detail') classification = 'general';
+  }
   if (path === '/') signal(-15, 'homepage');
   if (/(?:^|[\/_-])(?:contact|privacy|voorwaarden|terms|nieuws|news|login|account|cookies|inloggen)(?:[\/_-]|$)/.test(path)) {
     signal(-90, 'non_vacancy_navigation'); classification = 'general';
@@ -65,7 +64,7 @@ export function rankVacancyCandidate(evidence: CandidateEvidence): CandidateRank
   if ([...url.searchParams.keys()].some(key => /^(?:page|pagina|offset|start)$/i.test(key)) || /\/(?:page|pagina)\/\d+/.test(path)) {
     signal(-20, 'pagination'); classification = 'pagination';
   }
-  return { score, reasons, classification };
+  return { score, reasons, classification, ...(identity ? { dedupeKey: identity.key } : {}) };
 }
 
 /**

@@ -10,6 +10,7 @@
 import { findDuplicateCandidates as findDuplicateCandidatesGeneric, type DedupeThresholds } from '@discovery-platform/core';
 import type { VacancyFacts } from '../extract-vacancy.js';
 import { VACANCY_DEDUPLICATION_CONFIG as CONFIG } from './config.js';
+import { extractVacancyUrlIdentity } from '../job-identity.js';
 
 export type VacancyDuplicateDecision = 'duplicate' | 'possible_duplicate' | 'none';
 
@@ -50,6 +51,7 @@ export function findVacancyDuplicates(vacancies: VacancyFacts[]): VacancyDuplica
     idOf: item => item.id,
     exactSignals: [
       { id: 'sourceUrl', points: CONFIG.points.sourceUrl, keyOf: item => item.vacancy.sourceUrl || null },
+      { id: 'stableJobIdentity', points: CONFIG.points.stableJobIdentity, keyOf: item => (item.vacancy.sourceUrl ? extractVacancyUrlIdentity(item.vacancy.sourceUrl)?.key ?? null : null) },
       { id: 'companyTitleLocation', points: CONFIG.points.companyTitleLocation, keyOf: item => companyTitleKey(item.vacancy, true) },
       { id: 'companyTitle', points: CONFIG.points.companyTitle, keyOf: item => companyTitleKey(item.vacancy, false) },
     ],

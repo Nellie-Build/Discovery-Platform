@@ -142,6 +142,8 @@ export function createCrawlSession<TFacts>(website: string, options: CrawlOption
   const extractedPages: ExtractedPage<TFacts>[] = [];
   const candidates = new CandidateQueue(maxCandidates);
   const candidateEvidence = new Map<string, CrawlCandidate>();
+  /** Canonical URL → the domain's identity key, for URLs that have one (never exposed per candidate). */
+  const identities = new Map<string, string>();
   let urlsDiscovered = 0, sitemapUrlsFound = 0, listingUrlsFound = 0, candidatesProcessed = 0;
   let sitemapCandidatesAccepted = 0, sitemapCandidatesRejected = 0;
   const unchanged = new Set<string>();
@@ -187,10 +189,11 @@ export function createCrawlSession<TFacts>(website: string, options: CrawlOption
     };
     const candidate: CrawlCandidate = { ...evidence, canonicalUrl: url, candidateScore: rank.score,
       candidateReasons: rank.reasons, classification: rank.classification };
+    if (rank.dedupeKey) identities.set(url, rank.dedupeKey);
     const previous = candidateEvidence.get(url);
     if (!previous || previous.candidateScore < candidate.candidateScore) candidateEvidence.set(url, candidate);
     if (visited.has(url)) { if (source === 'sitemap') sitemapCandidatesAccepted++; return true; }
-    const accepted = candidates.offer(candidateEvidence.get(url)!);
+    const accepted = candidates.offer(candidateEvidence.get(url)!, identities.get(url));
     candidateLimitReached = candidates.limitReached;
     if (source === 'sitemap') { if (accepted) sitemapCandidatesAccepted++; else sitemapCandidatesRejected++; }
     return accepted;
@@ -414,6 +417,8 @@ export function createCrawlSession<TFacts>(website: string, options: CrawlOption
       const stopReason: CrawlStopReason = homepageBlocked ? 'robots_blocked'
         : stopReasonCode ?? (pages >= maxPages ? 'page_limit' : candidateLimitReached ? 'candidate_limit' : 'no_more_candidates');
       const evidence = [...candidateEvidence.values()];
+      // Distinct things to crawl: URLs the domain says are one record (same identity key) count once.
+      const uniqueCrawlIdentities = new Set(evidence.map(candidate => identities.get(candidate.canonicalUrl) ?? candidate.canonicalUrl)).size;
       const knownCandidates = evidence.filter(candidate => options.knownCandidates?.has(candidate.canonicalUrl)).length;
       const attempted = records.filter(item => item.attempted);
       const crawlerStats: CrawlerRunStats = {
@@ -430,7 +435,8 @@ export function createCrawlSession<TFacts>(website: string, options: CrawlOption
       return { homepage: scope.homepage, domain: scope.domain, pagesVisited: pages, httpStatus: homepageStatus,
         candidates: evidence,
         discoveryStats: {
-          urlsDiscovered, uniqueUrlsDiscovered: discoveredUrls.size, sitemapUrlsFound, listingUrlsFound,
+          urlsDiscovered, uniqueUrlsDiscovered: discoveredUrls.size, uniqueCrawlIdentities, candidateIdentityDuplicates: evidence.length - uniqueCrawlIdentities,
+          sitemapUrlsFound, listingUrlsFound,
           sitemapCandidatesAccepted, sitemapCandidatesRejected, candidateUrlsFound: evidence.length,
           highConfidenceCandidates: evidence.filter(candidate => candidate.candidateScore >= 60).length,
           mediumConfidenceCandidates: evidence.filter(candidate => candidate.candidateScore >= 20 && candidate.candidateScore < 60).length,

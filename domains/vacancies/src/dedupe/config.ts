@@ -9,6 +9,9 @@ export const VACANCY_DEDUPLICATION_CONFIG = {
   points: {
     /** The exact same crawled page — near-certain the same vacancy listing. */
     sourceUrl: 100,
+    /** The same explicit job identifier on the same site ("jobID:123" under another language or
+     * alias address): the same vacancy, even when company and title were not extracted. */
+    stableJobIdentity: 100,
     /** Same company, same normalized title, same location — strong on its own. */
     companyTitleLocation: 95,
     /** Same company and title but no (or a differing) location — weaker; still worth a

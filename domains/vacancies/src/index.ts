@@ -11,6 +11,7 @@ import {
 export { VACANCY_LINK_TIER, vacanciesCrawlerConfig };
 export { sourceFailure, summarizeSources } from './sources/outcome.js';
 export { rankVacancyCandidate } from './config.js';
+export { extractVacancyUrlIdentity, type VacancyUrlIdentity } from './job-identity.js';
 export {
   extractVacancy, extractVacancyText, normalizeVacancyFacts, extractJobPostingJsonLd,
   extractVacancyWithDiagnostic, type VacancyFacts, type VacancyPageDiagnostic,
