@@ -73,9 +73,15 @@ the run card shows them under "Technische details" only when present.
 ## Known considerations
 
 - Crawlee keeps everything in memory (no `storage/` directory) and is loaded only when selected.
-- Crawlee's autoscaling samples memory/CPU with `ps` and `getconf` on Linux. `node:24-slim` has no
-  `ps`, so on Cloud Run each sample fails and is logged (once per 30 s in this setup); it does not
-  stop the crawl. Install `procps` in the runtime image before promoting the engine.
+- **`ps` must exist in the runtime image.** Verified live on Cloud Run (`node:24-slim`, which has no
+  `ps`): with `DISCOVERY_CRAWLER_ENGINE=crawlee`, `crawler.run()` created its AutoscaledPool and then
+  failed *before the first request handler* with `Error: spawn ps ENOENT` (`crawlerFailurePhase: run`,
+  `crawlerRequestHandlerCalls: 0`, no page fetched, on every site). An earlier version of this
+  document claimed a missing `ps` only causes log messages and does not stop the crawl; that was
+  wrong. Crawlee's BasicCrawler takes its system measurements from the AutoscaledPool, and on Linux
+  that needs `ps`. The runtime stage of the `Dockerfile` therefore installs `procps` explicitly and
+  has a build-time guard (`command -v ps && ps -ef`) so the image build fails if `ps` disappears.
+  The legacy engine does not use Crawlee and never needed it.
 - The deliberate behavioural difference between the engines is retrying; results otherwise match
   (see `tests/crawler-contract.test.mjs`, which runs one contract against both engines).
 - Not built yet: browser rendering (Playwright), engine fallback, a queue shared between runs.

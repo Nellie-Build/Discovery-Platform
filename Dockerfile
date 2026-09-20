@@ -44,6 +44,16 @@ ENV PORT=8080
 # this is set, so local development (no WEB_DIST_DIR) is completely unaffected.
 ENV WEB_DIST_DIR=/app/apps/web/dist
 
+# `ps` must exist at runtime: Crawlee's BasicCrawler (the opt-in `crawlee` crawl engine, see
+# docs/crawler-engines.md) starts an AutoscaledPool whose system measurements run `ps` on Linux;
+# node:24-slim ships without it, and crawler.run() then fails with `spawn ps ENOENT` before the
+# first request. Runtime stage only — the build stage does not need it.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends procps \
+    && rm -rf /var/lib/apt/lists/*
+# Build-time guard: fail the image build (not a later crawl) if `ps` ever goes missing again.
+RUN command -v ps >/dev/null && ps -ef >/dev/null
+
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 
