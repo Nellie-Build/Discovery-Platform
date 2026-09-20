@@ -23,7 +23,10 @@ import type { CheerioAPI } from 'cheerio';
  */
 export type CompanySource = 'json_ld' | 'microdata' | 'explicit_label' | 'organization_block' | 'text_fallback' | 'none';
 
-export type CompanyStrength = 'explicit' | 'text';
+/** How much structural evidence stands behind a candidate: `text` is a value from running text (strictest),
+ * `explicit` a value a label or element already marked as the employer, `structured` a name from a
+ * delimited employer block that the page title also confirms. */
+export type CompanyStrength = 'explicit' | 'text' | 'structured';
 
 const collapse = (value: string) => value.replace(/\s+/g, ' ').trim();
 
@@ -36,7 +39,19 @@ const VACANCY_CONTENT = /(?:€|\bfte\b|\buur\b|\buren\b|\bper\s+(?:week|maand|j
 /** Lowercase words that may open a real name ("de Bijenkorf", "van der Valk"). */
 const NAME_PREFIXES = new Set(['de', 'het', 'van', 'von', 'der', 'den', 'ten', 'ter', 'la', 'le', 'the']);
 /** A trailing full stop is fine for an abbreviation ("B.V.", "Inc.", "N.V."), not after a plain word. */
-const ENDS_WITH_ABBREVIATION = /(?:\b[A-Za-z]{1,2}\.[A-Za-z]{1,2}\.|\b(?:inc|ltd|co|corp|bv|nv|gmbh|e\.a|c\.s|a\.o)\.)$/i;
+const ENDS_WITH_ABBREVIATION = /(?:\b[A-Za-z]{1,2}\.[A-Za-z]{1,2}\.|\b(?:inc|ltd|co|corp|bv|nv|gmbh|e\.a|e\.d|o\.a|c\.s|a\.o)\.)$/i;
+/** An abbreviation with more name after it ("Acme Ltd. en Zonen") is not a sentence break. */
+const ABBREVIATION_BEFORE_MORE = /(?:\b[A-Za-z]{1,2}\.[A-Za-z]{1,2}\.|\b(?:inc|ltd|co|corp|bv|nv|gmbh|e\.a|e\.d|o\.a|c\.s|a\.o)\.)(?=\s)/gi;
+/** The upper bound on a structured name, in characters: generous enough for the longest real names
+ * ("Organisatie en Personeel Rijk (Ministerie van Binnenlandse Zaken en Koninkrijksrelaties)" is 88),
+ * far below a paragraph. It replaces the 9-word limit that only free text needs. */
+const STRUCTURED_MAX_LENGTH = 150;
+
+/** Removes one sentence-final full stop ("... Wetenschap.") but keeps the stop of an abbreviation or
+ * legal form ("B.V.", "Inc.", "e.d."). */
+export function stripSentencePeriod(value: string): string {
+  return /\.$/.test(value) && !ENDS_WITH_ABBREVIATION.test(value) ? value.slice(0, -1).trimEnd() : value;
+}
 
 /**
  * Whether `raw` can be an organisation name, and its cleaned form (whitespace collapsed) — or null.
@@ -50,9 +65,18 @@ const ENDS_WITH_ABBREVIATION = /(?:\b[A-Za-z]{1,2}\.[A-Za-z]{1,2}\.|\b(?:inc|ltd
  */
 export function assessCompanyName(raw: string | null | undefined, strength: CompanyStrength): string | null {
   const value = collapse(raw ?? '');
-  if (value.length < 2 || value.length > 150) return null;
+  if (value.length < 2 || value.length > STRUCTURED_MAX_LENGTH) return null;
   if (CTA_OR_NAVIGATION.test(value)) return null;
   const words = value.split(' ');
+  if (strength === 'structured') {
+    // A delimited block confirmed by the page title: no word limit and a sentence-final full stop is
+    // typography, but it still has to look like a name and not like prose, a call to action or a section.
+    const name = stripSentencePeriod(value);
+    if (name.length < 2 || /[:?!]$/.test(name) || /[;?!]/.test(name) || /\.\s+\S/.test(name.replace(ABBREVIATION_BEFORE_MORE, ''))) return null;
+    if (!/[\p{Lu}\p{N}]/u.test(name) || (/^\p{Ll}/u.test(name) && !NAME_PREFIXES.has(name.split(' ')[0].toLowerCase()))) return null;
+    if (ADDRESSES_READER.test(name) || VACANCY_CONTENT.test(name)) return null;
+    return name;
+  }
   if (strength === 'explicit') {
     if (/[:?!]$/.test(value)) return null;
     if (words.length > 12 && /[.!?]/.test(value)) return null;
@@ -82,6 +106,11 @@ export function extractCompanyFromText(pageText: string): string | null {
   return null;
 }
 
+/** Presentation-independent form for comparing an organisation name with the page title. */
+function matchKey(value: string): string {
+  return collapse(value.normalize('NFC')).toLowerCase().replace(/\.(?=\s|$)/g, '');
+}
+
 const NAME_SPECIFIC = [
   'employer-name', 'employer__name', 'employername', 'company-name', 'company__name', 'companyname',
   'organization-name', 'organisation-name', 'organization__name', 'organisation__name', 'hiring-organization', 'hiring-organisation',
@@ -99,19 +128,21 @@ export function extractOrganizationBlock($: CheerioAPI, context: { title: string
   const inContent = (el: unknown) => $(el as never).closest(context.nonContentSelector).length === 0;
   for (const el of $('[itemprop="employer"]').toArray().filter(inContent)) {
     const name = assessCompanyName($(el).find('[itemprop="name"]').first().text() || $(el).text(), 'explicit');
-    if (name) return name;
+    if (name) return stripSentencePeriod(name);
   }
   for (const el of $(NAME_SPECIFIC).toArray().filter(inContent)) {
     const name = assessCompanyName($(el).text(), 'explicit');
-    if (name) return name;
+    if (name) return stripSentencePeriod(name);
   }
-  const title = context.title?.toLowerCase() ?? '';
-  const location = context.location?.toLowerCase() ?? '';
+  const title = matchKey(context.title ?? '');
+  const location = matchKey(context.location ?? '');
   for (const el of $('h2, h3').toArray().filter(inContent)) {
-    const match = /^(?:over|about)\s+(\S.{1,80})$/i.exec(collapse($(el).text()));
+    const match = /^(?:over|about)\s+(\S.{1,140})$/i.exec(collapse($(el).text()));
     if (!match || NOT_A_NAME_AFTER_OVER.test(match[1])) continue;
-    const name = assessCompanyName(match[1], 'text');
-    if (!name || !title.includes(name.toLowerCase()) || location.includes(name.toLowerCase())) continue;
+    const name = assessCompanyName(match[1], 'structured');
+    // The title must name the same organisation: compared after whitespace/Unicode normalisation and
+    // ignoring a sentence-final stop on either side (no fuzzy matching).
+    if (!name || !title.includes(matchKey(name)) || location.includes(matchKey(name))) continue;
     return name;
   }
   return null;

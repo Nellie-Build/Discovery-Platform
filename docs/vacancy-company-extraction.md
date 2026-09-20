@@ -38,6 +38,20 @@ an abbreviation ("B.V.", "Inc."). Length in words or a full stop alone never dis
 "Ministerie van Defensie", "Dienst Justitiële Inrichtingen", "Company & Partners", "de Bijenkorf",
 "TNO", "Bedrijf B.V." stay valid. Normalisation is whitespace only: names are never rewritten.
 
+### Structured "Over <Name>" blocks (source-aware validation)
+
+An "Over/About <Name>" heading that the page title also confirms is delimited, structured evidence, so
+it is validated as `structured` rather than as running text: no word limit (only a generous 150
+character limit, the longest real names being under 100), and one sentence-final full stop is removed
+(`Over Ministerie van Onderwijs, Cultuur en Wetenschap.` gives `Ministerie van Onderwijs, Cultuur en
+Wetenschap`), unless it belongs to an abbreviation or legal form (`B.V.`, `N.V.`, `Inc.`, `Ltd.`,
+`e.d.`). It must still look like a name: no `:`/`;`/`?`/`!`, no sentence break, no words addressed to the
+reader, no employment terms, no call to action. The title comparison uses the cleaned name, after
+whitespace collapse, Unicode NFC normalisation, lowercasing and ignoring a full stop before a space or
+the end (no fuzzy matching), and stays mandatory. Generic headings ("Over Utrecht", "Over ons", "Over de
+functie", "Over arbeidsvoorwaarden", ...) are still refused. The `text_fallback` rules above are
+unchanged: a period-terminated or 10+ word value from running text is still rejected.
+
 ## Known consequence
 
 A company that fails validation is now null instead of a wrong name. The company counts +1 in the
