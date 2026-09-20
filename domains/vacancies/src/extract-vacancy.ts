@@ -1,5 +1,5 @@
 import type { CheerioAPI } from 'cheerio';
-import type { CrawlPage } from '@discovery-platform/core';
+import { websiteScope, type CrawlPage } from '@discovery-platform/core';
 
 /** A cheerio-wrapped node selection — `cheerio` itself doesn't export this as a bare type, and
  * this package's own dependency boundary (see tests/dependency-boundary.test.mjs) never imports
@@ -504,39 +504,51 @@ function extractPostedDateDom($: CheerioAPI): string | null {
   return null;
 }
 
-/**
- * True when the page looks like a listing of several *different* vacancies rather than one
- * detail page's own content — the classic "card" pattern a vacancy overview or careers landing
- * page uses to preview several jobs at once: two or more distinct headings, each sitting inside
- * its own small subtree that also carries its own job-metadata-shaped signal (a location/salary
- * icon+value, or an application link) — proof each heading is its own separate mini-vacancy
- * teaser, not just an unrelated subheading from one single job's own body copy (e.g. "Wat ga je
- * doen" / "Wat bieden wij"). Never based on a class name, hostname or any one site's own markup.
- *
- * Headings inside a `NON_CONTENT_SELECTOR` region are never counted — in particular a "related/
- * relevant/similar vacancies" widget, the real regression this exclusion exists for: a genuine
- * single-vacancy detail page very commonly ends with a small "you might also like" section
- * previewing a few *other* jobs as their own card+heading+icon teasers, which otherwise looks
- * structurally identical to a real overview page's own listing. That appended widget is not the
- * page's own subject and must never make an otherwise perfectly good detail page get rejected.
+/** Require separate local teasers pointing to at least two distinct detail pages.
+ * Metadata or CTA text alone never establishes a teaser. Related widgets stay excluded.
+ * This is DOM analysis only; URL normalization reuses the crawler's existing policy.
  */
-function looksLikeOverviewPage($: CheerioAPI): boolean {
-  const headings = $('h2, h3, h4').toArray().filter(el => $(el).closest(NON_CONTENT_SELECTOR).length === 0);
-  const headingTexts = headings
-    .map(el => text($(el).text(), 200)?.toLowerCase())
-    .filter((v): v is string => Boolean(v));
-  if (new Set(headingTexts).size < 2) return false;
-
-  let cardLikeHeadings = 0;
+function looksLikeOverviewPage($: CheerioAPI, currentUrl: string): boolean {
+  let scope: ReturnType<typeof websiteScope>;
+  try { scope = websiteScope(currentUrl); } catch { return false; }
+  const current = new URL(scope.requestedPage);
+  const identity = (url: URL) => `${url.origin}${url.pathname.replace(/\/+$/, '')}${url.search}`;
+  const detailUrls = new Set<string>();
+  const headings = $('h2, h3, h4').toArray()
+    .filter(el => $(el).closest(NON_CONTENT_SELECTOR).length === 0);
   for (const el of headings) {
-    if (!text($(el).text(), 200)) continue;
-    const container = $(el).parent();
-    const hasMetadataIcon = container.find('[aria-label], [title]').toArray()
-      .some(icon => matchLabelElement($(icon).attr('aria-label') ?? '') ?? matchLabelElement($(icon).attr('title') ?? ''));
-    const hasApplyLink = container.find('a').toArray()
-      .some(a => /solliciteer|apply|bekijk\s*vacature|meer\s*informatie/i.test(text($(a).text(), 100) ?? ''));
-    if (hasMetadataIcon || hasApplyLink) cardLikeHeadings++;
-    if (cardLikeHeadings >= 2) return true;
+    const heading = $(el);
+    if (!text(heading.text(), 200)) continue;
+    // Only the heading's immediate wrapper (or one extra wrapper for a linked title).
+    // Never scan a shared section containing multiple headings as if each were a card.
+    let container = heading.parent();
+    if (container.is('a')) container = container.parent();
+    const local = !container.is('body, main, html') && container.find('h2, h3, h4').length === 1;
+    const anchors = heading.closest('a[href]').toArray().concat(heading.find('a[href]').toArray(),
+      local ? container.find('a[href]').toArray() : []);
+    for (const node of anchors) {
+      const anchor = $(node);
+      if (anchor.closest(NON_CONTENT_SELECTOR).length) continue;
+      const href = anchor.attr('href')?.trim();
+      if (!href || href.startsWith('#')) continue;
+      const normalized = scope.normalize(href, currentUrl);
+      if (!normalized) continue;
+      const url = new URL(normalized);
+      if (url.origin !== current.origin || identity(url) === identity(current)) continue;
+      // Navigation, background information and application endpoints are not job details.
+      if (/(?:^|\/)(?:home|contact|contact-us|about|about-us|over-ons|organisatie|privacy|login|apply|application|solliciteren|solliciteer|arbeidsvoorwaarden|benefits|pensioen|opleiding)(?:\/|\.[a-z]+$|$)/i.test(url.pathname)) continue;
+      const parts = url.pathname.split('/').filter(Boolean);
+      const vacancyPath = /^(?:vacatures?|jobs?|careers?|positions?|opportunities)$/i;
+      if (!parts.length || vacancyPath.test(parts.at(-1)!)) continue;
+      const linkedTitle = anchor.is(heading.closest('a')[0]) || heading.find('a').toArray().some(link => link === node);
+      const detailPath = parts.slice(0, -1).some(part => vacancyPath.test(part));
+      // An unlinked section heading needs a detail-shaped destination; generic "more info"
+      // plus metadata is still insufficient. Linked titles also support opaque job URLs.
+      if (!linkedTitle && !detailPath) continue;
+      detailUrls.add(identity(url));
+      break; // One heading is at most one teaser, even when it has several links.
+    }
+    if (detailUrls.size >= 2) return true;
   }
   return false;
 }
@@ -603,7 +615,7 @@ function diagnose($: CheerioAPI, url: string, r: VacancyFacts, hasJsonLd: boolea
     const { metadataFieldsFound, directContactFound, descriptionFound } = scoreVacancyDetailEvidence($, r);
     return { url, titleFound, metadataFieldsFound, descriptionFound, directContactFound, signalScore: PLAUSIBILITY_ACCEPT_THRESHOLD, accepted: true, rejectionReason: null };
   }
-  if (looksLikeOverviewPage($)) {
+  if (looksLikeOverviewPage($, url)) {
     return { url, titleFound, metadataFieldsFound: 0, descriptionFound: false, directContactFound: false, signalScore: 0, accepted: false, rejectionReason: 'overview_page' };
   }
   const { score, metadataFieldsFound, directContactFound, descriptionFound } = scoreVacancyDetailEvidence($, r);

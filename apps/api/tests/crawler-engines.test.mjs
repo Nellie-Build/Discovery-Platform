@@ -97,6 +97,25 @@ for (const engine of ENGINES) {
     assert.ok(!titles(outcome).includes('Contact'));
   });
 
+  test(`[${engine}] SPIE-shaped 50-record target remains reachable without general pages becoming jobs`, async () => {
+    const pages = spieSite();
+    const cards = Array.from({ length: 55 }, (_, i) => [`Technicus ${i}`, `/vacatures/technicus-${i}`]);
+    pages['/vacatures'] = page(listing('Vacatures', cards));
+    for (const [title, path] of cards) pages[path] = page(jobPosting(title, 'SPIE', 'Utrecht'));
+    for (const path of ['/contact', '/open-sollicitatie', '/organisatie']) {
+      pages[path] = page('<main><h1>Contact en informatie</h1><p>Neem contact op via info@careers.example.</p></main>');
+      const rejected = await runSite(engine, { '/robots.txt': pages['/robots.txt'], [path]: pages[path] }, `${HOST}${path}`);
+      assert.equal(rejected.records.length, 0, path);
+    }
+    const adapter = createVacanciesAdapter({ transport: transportFor(pages), clock: fakeClock(), crawler: createDiscoveryCrawler(engine) });
+    const input = websiteInput(`${HOST}/vacatures`, 50);
+    input.runConfig.maxPages = 80;
+    const outcome = await adapter.runDiscovery(input);
+    assert.equal(outcome.records.length, 50);
+    assert.equal(outcome.stats.stopReason, 'target_reached');
+    assert.equal(outcome.stats.pageDiagnostics.find(p => p.url === `${HOST}/vacatures`).rejectionReason, 'overview_page');
+  });
+
   test(`[${engine}] a direct SPIE detail URL is processed first and saved`, async () => {
     const pages = spieSite();
     const log = [];
@@ -144,18 +163,15 @@ test('both engines make the same decisions for the WBO-shaped site, whatever the
   assert.equal(crawlee.stats.pagesVisited, legacy.stats.pagesVisited);
 });
 
-// Known issue, deliberately NOT changed by the crawler work: looksLikeOverviewPage() still rejects
-// real WBO detail pages, because two headings of the page's own text ("Dit krijg je" with its
-// metadata icons, "Over de functiegroep" with an external "Meer informatie" link) count as
-// teaser cards. The diagnosis is in docs; the fix awaits approval. These are the acceptance
-// tests that fix must turn green, kept as `todo` so they document the expectation without
-// failing the suite.
+// Regression: own metadata and external background links are not vacancy teasers.
 for (const engine of ENGINES) {
-  test(`[${engine}] WBO: a real detail page ("Dit krijg je", external "Meer informatie" link) is accepted, the listing is not`, { todo: 'looksLikeOverviewPage overview false negative — fix not yet approved' }, async () => {
+  test(`[${engine}] WBO: a real detail page ("Dit krijg je", external "Meer informatie" link) is accepted, the listing is not`, async () => {
     const outcome = await runSite(engine, wboSite(), `${HOST}/vacatures`);
-    assert.deepEqual(titles(outcome), ['Adviseur waterveiligheid', 'Data-analist', 'Jurist']);
+    assert.deepEqual(titles(outcome), ['Adviseur waterveiligheid', 'Data-analist', 'Jurist'].map(title => `Vacature: ${title}, Rijkswaterstaat - Werken bij de Overheid`));
+    assert.equal(outcome.stats.pageDiagnostics.filter(p => p.accepted).length, 3);
     const rejected = outcome.stats.pageDiagnostics.filter(page => !page.accepted).map(page => new URL(page.url).pathname);
     assert.ok(rejected.includes('/vacatures'));
+    assert.equal(outcome.stats.pageDiagnostics.find(p => p.url === `${HOST}/vacatures`).rejectionReason, 'overview_page');
   });
 }
 

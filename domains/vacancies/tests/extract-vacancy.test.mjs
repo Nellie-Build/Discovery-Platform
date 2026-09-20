@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { load } from 'cheerio';
 import { extractContacts } from '@discovery-platform/core';
-import { extractVacancy } from '../dist/extract-vacancy.js';
+import { extractVacancy, extractVacancyWithDiagnostic } from '../dist/extract-vacancy.js';
 
 // Deliberately simple and country-agnostic — this domain package owns no phone-numbering-plan
 // knowledge of its own — that logic lives in
@@ -425,3 +425,41 @@ test('a page with no explicit posted-date signal at all leaves postedDate null, 
   const [facts] = extractVacancy(page);
   assert.equal(facts.postedDate, null);
 });
+
+// Structural overview detection: use a plausible detail body so a false overview decision
+// cannot hide behind another rejection reason.
+const overviewDetailUrl = 'https://careers.example/vacatures/current';
+function overviewDecision(sections) {
+  const page = pageFromHtml(`<main><h1>Technisch adviseur</h1><span itemprop="addressLocality">Utrecht</span>
+    <p>${'Je adviseert klanten en werkt samen met collega?s aan technische projecten. '.repeat(4)}</p>${sections}</main>`, overviewDetailUrl);
+  return extractVacancyWithDiagnostic(page).diagnostic;
+}
+const teaser = (title, href, label = 'Lees meer') => `<section><h3>${title}</h3><span aria-label="Locatie">Utrecht</span><a href="${href}">${label}</a></section>`;
+for (const [name, sections] of [
+  ['salary hours and contract section', '<section><h2>Dit krijg je</h2><span aria-label="Salaris">4000</span><span aria-label="Uren">36</span><span aria-label="Contract">Vast</span></section>'],
+  ['external background information', teaser('Over de functie', 'https://background.example/info', 'Meer informatie')],
+  ['multiple metadata sections', '<section><h2>Beloning</h2><span aria-label="Salaris">4000</span></section><section><h2>Werkweek</h2><span aria-label="Uren">36</span></section>'],
+  ['two external links', teaser('Adviseur', 'https://outside.example/jobs/a') + teaser('Analist', 'https://outside.example/jobs/b')],
+  ['same page and fragments', teaser('Adviseur', overviewDetailUrl + '#apply') + teaser('Analist', '#details') + teaser('Manager', overviewDetailUrl + '?utm_source=listing')],
+  ['same destination twice', teaser('Adviseur', '/vacatures/a') + teaser('Analist', '/vacatures/a#apply')],
+  ['related vacancies', '<section class="related">' + teaser('Adviseur', '/vacatures/a') + teaser('Analist', '/vacatures/b') + '</section>'],
+  ['navigation and application links', teaser('Solliciteren', '/solliciteren') + teaser('Contact', '/contact')],
+  ['shared multi-heading section', '<section><h2>Beloning</h2><h2>Werkweek</h2><a href="/vacatures/a">Lees meer</a><a href="/vacatures/b">Lees meer</a></section>'],
+  ['non-http links', teaser('Email', 'mailto:jobs@example.com') + teaser('Telefoon', 'tel:12345') + teaser('Script', 'javascript:void(0)')],
+]) {
+  test(`overview detector preserves detail: ${name}`, () => {
+    const result = overviewDecision(sections);
+    assert.equal(result.accepted, true, JSON.stringify(result));
+    assert.equal(result.rejectionReason, null);
+  });
+}
+for (const [name, sections] of [
+  ['local detail links with Lees meer', teaser('Adviseur', '/vacatures/a') + teaser('Analist', '/vacatures/b')],
+  ['local detail links with Bekijk vacature', teaser('Adviseur', '/vacatures/a', 'Bekijk vacature') + teaser('Analist', '/vacatures/b', 'Bekijk vacature')],
+  ['whole anchor cards', '<a href="/vacatures/a"><h3>Adviseur</h3>Utrecht</a><a href="/vacatures/b"><h3>Analist</h3>Delft</a>'],
+  ['linked titles with opaque URLs', '<section><h3><a href="/123">Adviseur</a></h3></section><section><h3><a href="/456">Analist</a></h3></section>'],
+]) {
+  test(`overview detector rejects listing: ${name}`, () => {
+    assert.equal(overviewDecision(sections).rejectionReason, 'overview_page');
+  });
+}
