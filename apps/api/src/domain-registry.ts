@@ -29,6 +29,8 @@ export interface DiscoveredRecord {
 
 export interface DiscoveryRunOutcome {
   status?: 'succeeded' | 'partial' | 'failed';
+  /** A short, user-facing reason, stored on the run when `status` is `failed`. */
+  error?: string;
   observedRecords?: DiscoveredRecord[];
   records: DiscoveredRecord[];
   stats: Record<string, unknown>;

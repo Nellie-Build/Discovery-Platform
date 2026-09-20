@@ -287,6 +287,14 @@ jobs:
 
           echo "Smoke test passed against ${SERVICE_URL}"
 
+      # Deliberately separate from the smoke test above: it fetches one external page (example.com)
+      # and only runs for an explicit crawlee canary deployment. The smoke test only checks that a
+      # run *finishes*; this proves the crawl engine actually fetched a page (pagesVisited >= 1,
+      # requestsStarted >= 1, crawl not failed) and prints every recorded crawler diagnostic if not.
+      - name: Crawler canary (crawlee deployments only)
+        if: env.CRAWLER_ENGINE == 'crawlee'
+        run: node scripts/verify-crawler-canary.mjs "${SERVICE_URL}" crawlee
+
       - name: Summary
         run: |
           {

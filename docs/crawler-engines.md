@@ -79,3 +79,44 @@ the run card shows them under "Technische details" only when present.
 - The deliberate behavioural difference between the engines is retrying; results otherwise match
   (see `tests/crawler-contract.test.mjs`, which runs one contract against both engines).
 - Not built yet: browser rendering (Playwright), engine fallback, a queue shared between runs.
+
+## Runtime diagnostics and infrastructure failures
+
+The Crawlee engine records how far it got and why it stopped, in the website run statistics (and
+under "Crawler-diagnose" in "Technische details"). Legacy runs have none of these fields.
+
+- `crawlerPhases` (`session_created`, `import_start`, `import_ok`, `configuration_created`,
+  `queue_opened`, `crawler_created`, `run_started`, `request_handler_started`, `run_completed` /
+  `run_failed`, each with milliseconds since the start) and `crawlerPhase` (the last one reached).
+- `crawlerFailurePhase`, the operation that was in progress when something went wrong: `import`,
+  `configuration`, `queue_open`, `crawler_create`, `seed`, `run`, `request_handler`, `request_feed`,
+  `request_failed` (retries exhausted) or `run_no_requests` (`crawler.run()` finished without ever
+  calling the request handler). Only the first failure is kept: later ones are consequences.
+- `crawlerErrorName`, `crawlerErrorMessage` (max 1000 characters), `crawlerErrorCode`,
+  `crawlerErrorCause` (max 500) and `crawlerErrorStack` (first 8 lines, max 2000 characters). Query
+  strings and fragments of URLs are removed; no environment variables, headers or tokens are ever
+  included.
+- `crawlerQueue` (seed URL/key present, queue opened, request counts before and after the run, from
+  the public `RequestQueue.getInfo()`), `crawlerBasicCrawler` (running/finished flags and whether the
+  autoscaled pool existed, from public properties only) and `crawlerRuntime` (Node version, platform,
+  architecture, booleans for a readable `/proc`, a readable cgroup, a writable temp directory and
+  working directory, an existing `storage/` directory, the total OS memory and the cgroup memory
+  limit if there is one). Nothing runs a shell command.
+- A failure also writes one structured line to the server log:
+  `{"event":"crawlee_run_failed","phase":...,"errorName":...,"errorMessage":...,"errorCode":...}`.
+
+Run status: a website crawl whose engine failed, or that did not fetch a single page while the
+crawl status is `failed`, is a **failed** run (`stopReason: crawler_failed`, the reason on the run)
+and never "succeeded / no_more_candidates". If the engine failed after some pages, the run is
+**partial** and keeps its records. Runs that did reach their pages, sites that answer with errors,
+and a robots.txt block keep their previous status. For crawls that end `failed` or `blocked`, the
+crawler's own error text is kept as `crawlError` in the statistics.
+
+## Crawler canary (separate from the deployment smoke test)
+
+The deployment smoke test only checks that a run *finishes*. `scripts/verify-crawler-canary.mjs
+<service-url> <legacy|crawlee> [probe-url]` runs one website discovery on a simple public page
+(default `https://example.com/`) and requires: the expected `crawlerEngine`, `pagesVisited >= 1`,
+`requestsStarted >= 1`, and a crawl and run status that is not `failed`; if not, it prints every
+recorded crawler diagnostic and exits with 1. Because it depends on an external page it is not part
+of the ordinary smoke test: the deploy workflow runs it only when `crawler_engine=crawlee`.

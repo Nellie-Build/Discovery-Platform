@@ -89,6 +89,8 @@ export interface CrawlResult<TFacts> {
   /** How the crawl engine itself behaved (queueing, requests, retries, concurrency). Both engines
    * report it; optional so results built by older callers remain valid. */
   crawlerStats?: CrawlerRunStats;
+  /** Start-up and failure diagnostics of a queue-driven engine (absent for the legacy engine). */
+  crawlerDiagnostics?: CrawlerDiagnostics;
 }
 
 /** Which crawl engine ran. `legacy` is the original serial HTTP crawler, `crawlee` the
@@ -111,4 +113,62 @@ export interface CrawlerRunStats {
   /** Candidates still waiting when the crawl ended. */
   queueRemaining: number;
   durationMs: number;
+}
+
+/** Facts about the environment a crawl engine runs in — booleans and plain numbers only. */
+export interface CrawlerRuntimeSnapshot {
+  nodeVersion: string;
+  platform: string;
+  arch: string;
+  procReadable: boolean;
+  cgroupReadable: boolean;
+  tmpWritable: boolean;
+  cwdWritable: boolean;
+  storageDirPresent: boolean;
+  osTotalMemoryMb: number;
+  /** The container memory limit from the cgroup files, when one is set and readable. */
+  memoryLimitDetectedMb: number | null;
+}
+
+export interface CrawlerQueueDiagnostics {
+  seedUrlPresent: boolean;
+  seedUniqueKeyPresent: boolean;
+  queueOpened: boolean;
+  totalBefore?: number | null;
+  pendingBefore?: number | null;
+  handledBefore?: number | null;
+  totalAfter?: number | null;
+  pendingAfter?: number | null;
+  handledAfter?: number | null;
+}
+
+export interface CrawlerBasicDiagnostics {
+  runningBeforeRun?: boolean;
+  hasFinishedBefore?: boolean;
+  /** Whether the autoscaled pool existed before `run()` (it is normally created by it). */
+  autoscaledPoolCreated: boolean;
+  autoscaledPoolCreatedAfterRun?: boolean;
+  runningAfterRun?: boolean;
+}
+
+/**
+ * Why (and how far) a queue-driven engine got, kept in the run statistics. `crawlerFailurePhase` is
+ * the operation that was in progress when something went wrong: `import`, `configuration`,
+ * `queue_open`, `crawler_create`, `seed`, `run`, `request_handler`, `request_feed`,
+ * `request_failed` (retries exhausted) or `run_no_requests` (the run finished without ever calling
+ * the request handler). Absent when nothing went wrong.
+ */
+export interface CrawlerDiagnostics {
+  crawlerPhase: string;
+  crawlerPhases: { phase: string; ms: number }[];
+  crawlerRequestHandlerCalls: number;
+  crawlerFailurePhase?: string;
+  crawlerErrorName?: string;
+  crawlerErrorMessage?: string;
+  crawlerErrorCode?: string;
+  crawlerErrorCause?: string;
+  crawlerErrorStack?: string;
+  crawlerQueue?: CrawlerQueueDiagnostics;
+  crawlerBasicCrawler?: CrawlerBasicDiagnostics;
+  crawlerRuntime?: CrawlerRuntimeSnapshot;
 }

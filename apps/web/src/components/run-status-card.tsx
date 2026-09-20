@@ -28,6 +28,7 @@ const STOP_REASON_LABELS: Record<string, string> = {
   all_sources_failed: 'Alle bronnen mislukt',
   source_rate_limited: 'Bron tijdelijk begrensd',
   source_unavailable: 'Geen volledige brontoegang',
+  crawler_failed: 'Crawler kon niet starten',
 };
 
 function stopReasonLabel(stopReason: unknown): string | null {
@@ -187,6 +188,35 @@ function ProviderQueries({ sources, legacyQueries }: { sources: SourceMeta[]; le
   );
 }
 
+/** Why (and how far) a queue-driven crawl engine got — start-up phases, the failure it hit, and a
+ * snapshot of the environment. Shown only when the run recorded any of it. */
+function CrawlerDiagnostics({ stats }: { stats: Record<string, unknown> }) {
+  const phases = Array.isArray(stats.crawlerPhases) ? stats.crawlerPhases as { phase: string; ms: number }[] : [];
+  const failed = typeof stats.crawlerFailurePhase === 'string';
+  if (!failed && phases.length === 0 && typeof stats.crawlError !== 'string') return null;
+  const text = (key: string) => typeof stats[key] === 'string' || typeof stats[key] === 'number' ? String(stats[key]) : null;
+  return (
+    <div className="mt-4 rounded-lg border border-slate-100 p-3" data-testid="crawler-diagnostics">
+      <p className="mb-2 text-sm font-semibold">Crawler-diagnose</p>
+      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <Field label="Laatste fase" value={text('crawlerPhase')} />
+        <Field label="Foutfase" value={text('crawlerFailurePhase')} />
+        <Field label="Fout" value={text('crawlerErrorName')} />
+        <Field label="Foutcode" value={text('crawlerErrorCode')} />
+        <Field label="Handler aangeroepen" value={text('crawlerRequestHandlerCalls')} />
+      </dl>
+      {text('crawlerErrorMessage') && <p className="mt-2 break-words text-sm text-red-800">{text('crawlerErrorMessage')}</p>}
+      {text('crawlError') && !text('crawlerErrorMessage') && <p className="mt-2 break-words text-sm text-red-800">{text('crawlError')}</p>}
+      {text('crawlerErrorCause') && <p className="mt-1 break-words text-xs text-slate-600">Oorzaak: {text('crawlerErrorCause')}</p>}
+      {phases.length > 0 && <p className="mt-2 text-xs text-slate-600">Fases: {phases.map(item => `${item.phase} (${item.ms} ms)`).join(' → ')}</p>}
+      {['crawlerQueue', 'crawlerBasicCrawler', 'crawlerRuntime'].filter(key => stats[key] && typeof stats[key] === 'object').map(key => (
+        <p key={key} className="mt-1 break-words text-xs text-slate-600">{key.replace('crawler', '')}: {JSON.stringify(stats[key])}</p>
+      ))}
+      {text('crawlerErrorStack') && <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 text-xs text-slate-700">{text('crawlerErrorStack')}</pre>}
+    </div>
+  );
+}
+
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
@@ -305,6 +335,7 @@ export function RunStatusCard({ run }: { run: DiscoveryRun }) {
               {(['requestsQueued', 'requestsStarted', 'requestsSucceeded', 'requestsFailed', 'requestsRetried', 'maxConcurrencyUsed', 'queueRemaining'] as const)
                 .filter(key => typeof stats[key] === 'number').map(key => <Field key={key} label={key} value={stats[key] as number} />)}
             </dl>
+            <CrawlerDiagnostics stats={stats} />
           </details>
         )}
         {isBranchSearch && Array.isArray(stats.sources) && <SourcesSection sources={stats.sources as SourceMeta[]} />}

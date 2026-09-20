@@ -26,7 +26,7 @@
  *     itself; scoring; dedupe) is the exact same pipeline website mode already uses.
  */
 import {
-  createDiscoveryCrawler, parseCrawlerEngine, fetchAndExtractPage, normalizeCandidateUrls, createBraveSearchProvider, websiteScope,
+  createDiscoveryCrawler, parseCrawlerEngine, stripUrlQueries, fetchAndExtractPage, normalizeCandidateUrls, createBraveSearchProvider, websiteScope,
   type CrawlOptions, type SourceSearchProvider, type DiscoveryCrawler,
 } from '@discovery-platform/core';
 import {
@@ -222,6 +222,22 @@ function buildRecordsFromFacts(
   return { records, observedRecords, collapsed, duplicatesAgainstExisting, dateFilteredCount: dateFiltered.length, outcomes };
 }
 
+/** A crawl that never fetched a single page, or whose engine reported a failure, is an
+ * infrastructure problem — never "the website had no candidates". `failed` when not one page was
+ * reached, `partial` when the engine failed after some pages. A site that simply answered with
+ * errors (robots, 404s) is untouched: those runs keep their status. */
+function assessCrawlerHealth(crawl: { status: string; pagesVisited: number; error: string | null; crawlerStats?: { crawlerEngine: string }; crawlerDiagnostics?: { crawlerFailurePhase?: string; crawlerErrorName?: string; crawlerErrorMessage?: string } }):
+  { status?: 'failed' | 'partial'; error?: string; stopReason?: string } {
+  const diagnostics = crawl.crawlerDiagnostics;
+  const engine = crawl.crawlerStats?.crawlerEngine ?? 'legacy';
+  if (diagnostics?.crawlerFailurePhase && crawl.pagesVisited > 0) return { status: 'partial' };
+  if (!diagnostics?.crawlerFailurePhase && !(crawl.status === 'failed' && crawl.pagesVisited === 0)) return {};
+  const reason = diagnostics?.crawlerErrorMessage ?? (crawl.error ? stripUrlQueries(crawl.error) : 'geen pagina kon worden opgehaald');
+  const phase = diagnostics?.crawlerFailurePhase ? `, fase ${diagnostics.crawlerFailurePhase}` : '';
+  return { status: 'failed', stopReason: 'crawler_failed',
+    error: `Crawler (${engine}${phase}) kon geen enkele pagina ophalen: ${reason}`.slice(0, 500) };
+}
+
 function resolveSearchProvider(overrides: VacanciesCrawlOverrides): SourceSearchProvider | undefined {
   if (overrides.searchProvider) return overrides.searchProvider;
   // Read lazily (never at module load) so a missing key is detected at the moment a branch
@@ -323,6 +339,7 @@ async function runWebsiteDiscovery(
   const built = buildRecordsFromFacts(freshFacts, input.existingRecords, recordOptions);
   const { collapsed, duplicatesAgainstExisting, dateFilteredCount } = built;
   const records = built.records.slice(0, config.targetRecords);
+  const crawlerHealth = assessCrawlerHealth(crawl);
 
   const rejectionReasons: Record<string, number> = {};
   let pagesAccepted = 0, pagesWithVacancySignals = 0;
@@ -335,9 +352,14 @@ async function runWebsiteDiscovery(
   return {
     records,
     observedRecords: built.observedRecords,
+    ...(crawlerHealth.status ? { status: crawlerHealth.status } : {}),
+    ...(crawlerHealth.error ? { error: crawlerHealth.error } : {}),
     stats: {
       searchMode: 'website',
       crawlStatus: crawl.status,
+      // Why the crawler itself failed (kept in the statistics; never only in the server log).
+      ...(crawl.status === 'failed' || crawl.status === 'blocked' ? { crawlError: crawl.error ? stripUrlQueries(crawl.error).slice(0, 1000) : null } : {}),
+      ...(crawl.crawlerDiagnostics ?? {}),
       pagesVisited: crawl.pagesVisited,
       factsFound: freshFacts.length,
       duplicatesWithinCrawl: collapsed,
@@ -363,7 +385,7 @@ async function runWebsiteDiscovery(
       maxCandidates: config.maxCandidates,
       maxDurationMs: config.maxDurationMs,
       durationMs: Date.now() - runStart,
-      stopReason: crawl.stopReason,
+      stopReason: crawlerHealth.stopReason ?? crawl.stopReason,
     },
   };
 }

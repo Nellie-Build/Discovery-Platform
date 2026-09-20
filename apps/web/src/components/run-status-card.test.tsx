@@ -216,6 +216,30 @@ describe('RunStatusCard', () => {
     });
   });
 
+  describe('crawler diagnostics on website runs', () => {
+    it('shows the failed phase, the error, the phase timeline and the environment for a crawl that could not start', () => {
+      render(<RunStatusCard run={run({ status: 'failed', error: 'Crawler (crawlee, fase queue_open) kon geen enkele pagina ophalen: queue boom', stats: {
+        searchMode: 'website', budgetSource: 'adaptive', crawlerEngine: 'crawlee', stopReason: 'crawler_failed', pagesVisited: 0, crawlStatus: 'failed',
+        crawlerPhase: 'run_failed', crawlerPhases: [{ phase: 'session_created', ms: 0 }, { phase: 'import_ok', ms: 12 }], crawlerFailurePhase: 'queue_open',
+        crawlerErrorName: 'Error', crawlerErrorMessage: 'queue boom', crawlerErrorCode: 'ECONNRESET', crawlerErrorCause: 'Error: inner', crawlerErrorStack: 'Error: queue boom at open',
+        crawlerRequestHandlerCalls: 0, crawlerRuntime: { nodeVersion: 'v24', platform: 'linux', procReadable: true } } })} />);
+      const block = screen.getByTestId('crawler-diagnostics');
+      expect(block).toHaveTextContent('Foutfasequeue_open');
+      expect(block).toHaveTextContent('queue boom');
+      expect(block).toHaveTextContent('Foutcode');
+      expect(block).toHaveTextContent('Fases: session_created (0 ms) → import_ok (12 ms)');
+      expect(block).toHaveTextContent('Oorzaak: Error: inner');
+      expect(block).toHaveTextContent('"platform":"linux"');
+      expect(screen.getByText('Crawler kon niet starten')).toBeInTheDocument();
+      expect(screen.getByText('Crawler (crawlee, fase queue_open) kon geen enkele pagina ophalen: queue boom')).toBeInTheDocument();
+    });
+
+    it('shows nothing for a run without crawler diagnostics', () => {
+      render(<RunStatusCard run={run({ stats: { searchMode: 'website', budgetSource: 'adaptive', pagesVisited: 4, crawlerEngine: 'legacy' } })} />);
+      expect(screen.queryByTestId('crawler-diagnostics')).not.toBeInTheDocument();
+    });
+  });
+
   describe('crawler figures on website runs', () => {
     const website = (extra: Record<string, unknown>) => run({ stats: { searchMode: 'website', budgetSource: 'adaptive', pagesVisited: 10, targetRecords: 50, recordsAccepted: 3, ...extra } });
 

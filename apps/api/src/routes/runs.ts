@@ -104,6 +104,11 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
       return;
     }
 
+    if (outcome.status === 'failed' && outcome.error) {
+      const failed = await runs.markFailed(run.id, outcome.error, { ...outcome.stats, ...initialStats, recordsCreated });
+      res.status(201).json({ ...failed, recordsCreated });
+      return;
+    }
     const succeeded = await runs.finish(run.id, outcome.status ?? 'succeeded', { ...outcome.stats, ...initialStats, recordsCreated });
     res.status(201).json({ ...succeeded, recordsCreated });
   }));

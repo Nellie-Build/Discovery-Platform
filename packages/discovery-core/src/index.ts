@@ -14,12 +14,13 @@ export {
   crawlWebsite, CRAWL_POLICY,
   type CrawlOptions, type CrawlPage,
 } from './crawler/website-crawler.js';
-export type { CrawlRecord, CrawlResult, CrawlStatus, CrawlStopReason, CrawlerEngineName, CrawlerRunStats, ExtractedPage } from './crawler/types.js';
+export type { CrawlRecord, CrawlResult, CrawlStatus, CrawlStopReason, CrawlerEngineName, CrawlerRunStats, CrawlerDiagnostics, CrawlerRuntimeSnapshot, ExtractedPage } from './crawler/types.js';
 export {
   createDiscoveryCrawler, parseCrawlerEngine, DEFAULT_CRAWLER_ENGINE,
   type DiscoveryCrawler, type DiscoveryCrawlerOptions,
 } from './crawler/discovery-crawler.js';
 export { LegacyHttpCrawler } from './crawler/legacy-http-crawler.js';
+export { stripUrlQueries } from './crawler/crawler-diagnostics.js';
 export { CrawleeCrawler, type CrawleeCrawlerOptions } from './crawler/crawlee-crawler.js';
 export {
   fetchAndExtractPage,
