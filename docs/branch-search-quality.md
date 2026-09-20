@@ -182,3 +182,43 @@ is off. The stages run in this order: relevance, date filter, duplicates within 
 comparison with existing records, target cut-off. The UI shows the breakdown on the run card
 (per provider under "Per bron"); runs from before this change have no breakdown and show none.
 Website-mode runs are not covered yet: their candidates are crawled URLs with a different funnel.
+
+## Tightened relevance (second quality round)
+
+Live finding: for branch `Onderwijs` with keyword `zuid-holland`, carpenters, receptionists and
+cleaners were accepted. The cause was not the location field (it is not used as evidence) but the
+description text: "Middelbaar onderwijs afgerond" (one mention of the branch word in a
+requirements line) plus "Rijswijk, Zuid-Holland" (the keyword split into `zuid` + `holland`).
+
+Rules now (`domains/vacancies/src/relevance.ts`), all generic, no site- or region-specific code:
+
+- A location match, or a region word in the description, is never acceptance evidence. The
+  location is a diagnostic (`locationMatch`) and a +1 ranking bonus for already accepted results.
+- Accepted only with content evidence in title, description or company (`acceptanceReason`):
+  `title_branch_match`, `keyword_phrase_match`, `keyword_title_match`,
+  `description_content_match` (at least 2 mentions and at least 0.7% of the description) or
+  `company_plus_description`. Rejections are `rejected_location_only`, `rejected_weak_evidence`,
+  `rejected_no_match`, `rejected_no_query_terms`. `contentMatch` and `phraseMatches` are new
+  diagnostics next to the existing matchedTerms/titleMatches/descriptionMatches/companyMatches/
+  locationMatch/relevanceScore.
+- A hyphenated keyword is kept as a phrase and as parts, but neither counts as content evidence.
+  Adjacent typed words form phrases ("security officer"), which weigh more than loose words; a
+  word typed next to a branch word ("officer") only qualifies the branch and is not evidence alone.
+- Word matching: whole word, start of a compound ("onderwijs" → "onderwijsassistent") or a shared
+  stem of at least 7 characters and 70% of the term ("beveiliging" → "beveiliger"). Never a suffix
+  ("cybersecurity" is not "security"). Function words (`en`, `of`, `de`, ...) are ignored.
+
+Behaviour change: a single incidental mention in a description no longer accepts a vacancy.
+
+Known limits: matching stays lexical, so a genuine education job that never uses a word from the
+query (for example "Docent Verpleegkunde" at a hogeschool) is rejected, and a facility or IT job
+whose description repeats "security" often enough is still accepted.
+
+## Run card
+
+Branch runs with a breakdown show core figures first (Doel, Gevonden, Nieuw, Duur, Resultaat,
+Bronstatus), then the candidate breakdown, then "Technische details". "Resultaat" is the stop
+reason ("Doel bereikt"); "Bronstatus" says how complete the sources were ("Gedeeltelijk —
+LinkedIn timeout"), so a run can be partial and still have reached its target. Branch runs use
+"Kandidaten ontdekt / Kandidaten verwerkt"; "Pages visited" is only used for website runs. Runs
+without a breakdown and website runs keep their previous layout.

@@ -122,7 +122,9 @@ describe('RunStatusCard', () => {
       expect(section).toHaveTextContent('Duplicaten binnen de run6');
       expect(section).toHaveTextContent('Al bekend in het project18');
       expect(section).toHaveTextContent('Nieuwe records4');
-      expect(section).toHaveTextContent('Waarvan relevant (subtotaal van de rijen vanaf datumfilter)50');
+      expect(section).toHaveTextContent('Subtotaal: relevant na inhoudsfilter (staat al in de rijen hierboven)50');
+      expect(section).not.toHaveTextContent('− Nieuwe records');
+      expect(section).toHaveTextContent('Nieuwe records4');
       expect(section).toHaveTextContent('Per bron');
       expect(section).toHaveTextContent('Indeed');
     });
@@ -135,6 +137,50 @@ describe('RunStatusCard', () => {
     it('does not show the breakdown for a website run even if the field were present', () => {
       render(<RunStatusCard run={run({ stats: { searchMode: 'website', breakdown: bucket } })} />);
       expect(screen.queryByTestId('run-breakdown')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('compact branch card', () => {
+    const bucket = { discovered: 70, notProcessed: 17, noUsableData: 0, rejectedByRelevance: 2, relevant: 51, rejectedByDate: 0,
+      duplicatesInRun: 1, alreadyKnown: 0, cutByTarget: 0, newRecords: 50, multiRecordExtra: 0 };
+    const branchRun = () => run({ status: 'partial', stats: {
+      searchMode: 'branch', targetRecords: 50, recordsAccepted: 50, candidatesFound: 70, candidatesProcessed: 53, factsFound: 53, recordsCreated: 50, duplicates: 1,
+      pagesVisited: 53, stopReason: 'target_reached', breakdown: bucket, durationMs: 15000, sourcesRequested: 3, sourcesAvailable: 2, sourcesSucceeded: 2, sourcesFailed: 1,
+      sources: [
+        { provider: 'ts-jobspy', site: 'indeed', status: 'ok', candidates: 50, error: null },
+        { provider: 'ts-jobspy', site: 'linkedin', status: 'partial', errorType: 'timeout', candidates: 20, error: 'x' },
+        { provider: 'brave', site: 'brave', status: 'not_configured', candidates: 0, error: null },
+      ],
+    } });
+
+    it('shows only the core figures on top, and separates result from source status', () => {
+      render(<RunStatusCard run={branchRun()} />);
+      const core = screen.getByTestId('run-core-figures');
+      expect(core).toHaveTextContent('Doel50');
+      expect(core).toHaveTextContent('Gevonden50');
+      expect(core).toHaveTextContent('Nieuw50');
+      expect(core).toHaveTextContent('Duur15s');
+      expect(core).toHaveTextContent('ResultaatDoel bereikt');
+      expect(core).toHaveTextContent('BronstatusGedeeltelijk — LinkedIn timeout');
+    });
+
+    it('no longer repeats candidate numbers or uses website wording outside the breakdown', () => {
+      render(<RunStatusCard run={branchRun()} />);
+      for (const label of ['Pages visited', 'Records found', 'New records', 'Kandidaatbronnen', 'Voortgang']) expect(screen.queryByText(label)).not.toBeInTheDocument();
+      expect(screen.queryByText(/^Duplicates$/)).not.toBeInTheDocument();
+      expect(screen.getByTestId('run-technical-details')).toHaveTextContent('Kandidaten verwerkt53');
+    });
+
+    it('a branch run without breakdown (older run) still shows its legacy fields', () => {
+      render(<RunStatusCard run={run({ stats: { searchMode: 'branch', candidatesFound: 12, pagesVisited: 5, factsFound: 4, recordsCreated: 3 } })} />);
+      expect(screen.queryByTestId('run-core-figures')).not.toBeInTheDocument();
+      expect(screen.getByText('Kandidaatbronnen')).toBeInTheDocument();
+    });
+
+    it('website runs keep their own fields', () => {
+      render(<RunStatusCard run={run({ stats: { searchMode: 'website', pagesVisited: 10, factsFound: 5, recordsCreated: 3, budgetSource: 'adaptive', targetRecords: 10, recordsAccepted: 3 } })} />);
+      expect(screen.queryByTestId('run-core-figures')).not.toBeInTheDocument();
+      expect(screen.getByText('Verwerkt')).toBeInTheDocument();
     });
   });
 });

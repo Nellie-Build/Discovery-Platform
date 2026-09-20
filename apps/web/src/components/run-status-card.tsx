@@ -105,7 +105,6 @@ function BreakdownRows({ bucket, compact = false }: { bucket: BreakdownBucket; c
     ['Duplicaten binnen de run', bucket.duplicatesInRun],
     ['Al bekend in het project', bucket.alreadyKnown],
     ['Niet opgeslagen (boven het doel)', bucket.cutByTarget],
-    ['Nieuwe records', bucket.newRecords],
   ];
   return (
     <ul className={compact ? 'text-xs' : 'text-sm'}>
@@ -113,8 +112,9 @@ function BreakdownRows({ bucket, compact = false }: { bucket: BreakdownBucket; c
       {rows.map(([label, value]) => (
         <li key={label} className="flex justify-between text-slate-600"><span>− {label}</span><span>{value}</span></li>
       ))}
+      <li className="mt-1 flex justify-between border-t border-slate-200 pt-1 font-semibold text-slate-900"><span>Nieuwe records</span><span>{bucket.newRecords}</span></li>
       {bucket.multiRecordExtra > 0 && <li className="flex justify-between text-slate-600"><span>+ extra vacatures van pagina's met meerdere vacatures</span><span>{bucket.multiRecordExtra}</span></li>}
-      <li className="mt-1 flex justify-between text-slate-500"><span>Waarvan relevant (subtotaal van de rijen vanaf datumfilter)</span><span>{bucket.relevant}</span></li>
+      <li className="mt-2 flex justify-between text-xs italic text-slate-500"><span>Subtotaal: relevant na inhoudsfilter (staat al in de rijen hierboven)</span><span>{bucket.relevant}</span></li>
     </ul>
   );
 }
@@ -145,6 +145,18 @@ function BreakdownSection({ breakdown }: { breakdown: RunBreakdown }) {
   );
 }
 
+const FAILURE_LABELS: Record<string, string> = { timeout: 'timeout', rate_limited: 'rate limited', network: 'netwerkfout', provider_error: 'fout', source_unavailable: 'niet beschikbaar' };
+
+/** One line for how complete the sources were: "Volledig", "Gedeeltelijk — LinkedIn timeout" or "Mislukt". */
+function sourceStatusSummary(sources: SourceMeta[]): string | null {
+  const used = sources.filter(source => !['not_configured', 'user_disabled', 'not_run'].includes(source.status));
+  if (used.length === 0) return null;
+  const failed = used.filter(source => ['partial', 'error', 'rate_limited', 'unavailable'].includes(source.status));
+  if (failed.length === 0) return 'Volledig';
+  const detail = failed.map(source => `${sourceLabel(source.site)} ${FAILURE_LABELS[source.errorType ?? ''] ?? (source.status === 'rate_limited' ? 'rate limited' : 'fout')}`).join(', ');
+  return failed.length === used.length && !used.some(source => source.status === 'partial') ? `Mislukt — ${detail}` : `Gedeeltelijk — ${detail}`;
+}
+
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
@@ -162,6 +174,8 @@ export function RunStatusCard({ run }: { run: DiscoveryRun }) {
   const criteria = (stats.criteria ?? {}) as { mode?: string; branch?: string; keywords?: string; region?: string; sourceUrl?: string; filters?: { postedWithinDays?: number; sources?: string[] }; runConfig?: { targetRecords?: number } };
   const duration = typeof stats.durationMs === 'number' ? formatSeconds(stats.durationMs / 1000) : formatDuration(run.started_at, run.completed_at);
   const isBranchSearch = stats.searchMode === 'branch';
+  const compactBranch = isBranchSearch && isBreakdown(stats.breakdown);
+  const sourceSummary = Array.isArray(stats.sources) ? sourceStatusSummary(stats.sources as SourceMeta[]) : null;
   const duplicates = typeof stats.duplicates === 'number'
     ? stats.duplicates
     : (stats.duplicatesWithinCrawl ?? stats.duplicatesAgainstExisting) !== undefined
@@ -194,11 +208,21 @@ export function RunStatusCard({ run }: { run: DiscoveryRun }) {
             {stats.sourcesSucceeded < 3 && <p className="font-medium text-amber-700">Beperkte brondekking</p>}
             <p>{stats.sourcesSucceeded} van 3 bronnen leverden een bruikbaar antwoord. Gevraagd: {stats.sourcesRequested}; beschikbaar: {Number(stats.sourcesAvailable ?? 0)}; mislukt: {Number(stats.sourcesFailed ?? 0)}.</p>
             <p>Het aantal gevonden resultaten beschrijft alleen de beschikbare bronnen.</p>
-            <p>Kandidaten: {Number(stats.candidatesDiscovered ?? 0)} · Relevant: {Number(stats.candidatesRelevant ?? 0)} · Afgewezen: {Number(stats.candidatesRejectedByRelevance ?? 0)} · Geaccepteerd: {Number(stats.recordsAccepted ?? 0)}</p>
+            {!compactBranch && <p>Kandidaten: {Number(stats.candidatesDiscovered ?? 0)} · Relevant: {Number(stats.candidatesRelevant ?? 0)} · Afgewezen: {Number(stats.candidatesRejectedByRelevance ?? 0)} · Geaccepteerd: {Number(stats.recordsAccepted ?? 0)}</p>}
           </div>
         )}
-        {isBranchSearch && isBreakdown(stats.breakdown) && <BreakdownSection breakdown={stats.breakdown} />}
-        {(!stats.budgetSource || isBranchSearch) && <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+        {compactBranch && isBreakdown(stats.breakdown) && <>
+          <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3" data-testid="run-core-figures">
+            <Field label="Doel" value={typeof stats.targetRecords === 'number' ? stats.targetRecords : null} />
+            <Field label="Gevonden" value={typeof stats.recordsAccepted === 'number' ? stats.recordsAccepted : null} />
+            <Field label="Nieuw" value={stats.breakdown.newRecords} />
+            <Field label="Duur" value={duration} />
+            <Field label="Resultaat" value={stopReasonLabel(stats.stopReason)} />
+            <Field label="Bronstatus" value={sourceSummary} />
+          </dl>
+          <BreakdownSection breakdown={stats.breakdown} />
+        </>}
+        {!compactBranch && (!stats.budgetSource || isBranchSearch) && <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
           <Field label="Started" value={run.started_at ? new Date(run.started_at).toLocaleString() : null} />
           <Field label="Duur" value={duration} />
           {isBranchSearch && <Field label="Kandidaatbronnen" value={typeof stats.candidatesFound === 'number' ? stats.candidatesFound : null} />}
@@ -210,7 +234,7 @@ export function RunStatusCard({ run }: { run: DiscoveryRun }) {
         {/* The run's own configured target and how it actually progressed — see
             DiscoveryRunConfig/`stats.stopReason`. Shown separately from the crawl-detail fields
             above so both "target reached" and "target not reached" read clearly at a glance. */}
-        <div className="mt-4 border-t border-slate-100 pt-4">
+        {!compactBranch && <div className="mt-4 border-t border-slate-100 pt-4">
           <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Voortgang</h3>
           <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
             <Field label="Doel" value={typeof stats.targetRecords === 'number' ? stats.targetRecords : null} />
@@ -222,8 +246,25 @@ export function RunStatusCard({ run }: { run: DiscoveryRun }) {
             {typeof stats.budgetSource === 'string' && !isBranchSearch && <Field label="Duur" value={duration} />}
             <Field label="Gestopt omdat" value={stopReasonLabel(stats.stopReason)} />
           </dl>
-        </div>
-        {typeof stats.budgetSource === 'string' && (
+        </div>}
+        {compactBranch && (
+          <details className="mt-4 border-t border-slate-100 pt-4" data-testid="run-technical-details">
+            <summary className="cursor-pointer text-sm font-medium">Technische details</summary>
+            <dl className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-3">
+              <Field label="Gestart" value={run.started_at ? new Date(run.started_at).toLocaleString() : null} />
+              <Field label="Kandidaten verwerkt" value={typeof stats.candidatesProcessed === 'number' ? stats.candidatesProcessed : null} />
+              <Field label="Records gevonden (voor ontdubbeling)" value={typeof stats.factsFound === 'number' ? stats.factsFound : null} />
+              <Field label="Duplicaten (run + project)" value={duplicates} />
+              <Field label="Budget" value={stats.budgetSource === 'adaptive' ? 'Automatisch' : stats.budgetSource === 'advanced' ? 'Geavanceerd' : null} />
+              <Field label="Max kandidaten" value={typeof stats.maxCandidates === 'number' ? stats.maxCandidates : null} />
+              <Field label="Max duur (ms)" value={typeof stats.maxDurationMs === 'number' ? stats.maxDurationMs : null} />
+              {Object.entries((stats.providerQueries ?? {}) as Record<string, string>).map(([site, query]) => (
+                <Field key={site} label={`Zoekopdracht ${sourceLabel(site)}`} value={query} />
+              ))}
+            </dl>
+          </details>
+        )}
+        {typeof stats.budgetSource === 'string' && !compactBranch && (
           <details className="mt-4 border-t border-slate-100 pt-4">
             <summary className="cursor-pointer text-sm font-medium">Technische details</summary>
             <dl className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-3">
