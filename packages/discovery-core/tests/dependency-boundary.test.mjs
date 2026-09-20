@@ -77,8 +77,8 @@ test('dependency boundary: discovery-core stays product-neutral', async t => {
     assert.deepEqual(offenders, []);
   });
 
-  await t.test('imports only the exact dependencies declared in package.json (cheerio, fast-xml-parser, ipaddr.js, robots-parser, and Node built-ins)', () => {
-    const allowed = new Set(['cheerio', 'fast-xml-parser', 'ipaddr.js', 'robots-parser']);
+  await t.test('imports only the exact dependencies declared in package.json (cheerio, fast-xml-parser, ipaddr.js, robots-parser, @crawlee/basic, and Node built-ins)', () => {
+    const allowed = new Set(['cheerio', 'fast-xml-parser', 'ipaddr.js', 'robots-parser', '@crawlee/basic']);
     const offenders = [];
     for (const [file, source] of sources) {
       for (const spec of importSpecifiers(source)) {

@@ -17,6 +17,7 @@
     "test": "npm run build && node --test tests/*.test.mjs"
   },
   "dependencies": {
+    "@crawlee/basic": "3.18.1",
     "cheerio": "^1.2.0",
     "fast-xml-parser": "^5.11.1",
     "ipaddr.js": "^2.5.0",

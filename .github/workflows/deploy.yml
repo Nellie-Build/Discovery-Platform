@@ -16,6 +16,12 @@ on:
         description: 'GCP region'
         required: true
         default: 'europe-west1'
+      crawler_engine:
+        description: 'Website crawl engine (DISCOVERY_CRAWLER_ENGINE). legacy is the default; crawlee is for controlled comparison runs only.'
+        required: true
+        default: 'legacy'
+        type: choice
+        options: [legacy, crawlee]
 
 jobs:
   deploy:
@@ -32,6 +38,7 @@ jobs:
     env:
       PROJECT_ID: ${{ github.event.inputs.gcp_project_id || 'discovery-platform-508814' }}
       REGION: ${{ github.event.inputs.gcp_region || 'europe-west1' }}
+      CRAWLER_ENGINE: ${{ github.event.inputs.crawler_engine || 'legacy' }}
       AR_REPO: discovery-platform
       SQL_INSTANCE: discovery-platform-db
       DB_NAME: discovery_platform
@@ -229,7 +236,7 @@ jobs:
             --platform=managed --allow-unauthenticated --port=8080 \
             --add-cloudsql-instances="$CONNECTION_NAME" \
             --service-account="$RUN_SA_EMAIL" \
-            --set-env-vars="NODE_ENV=production" \
+            --set-env-vars="NODE_ENV=production,DISCOVERY_CRAWLER_ENGINE=${CRAWLER_ENGINE}" \
             --set-secrets="$SECRET_REFS" \
             --min-instances=0 --max-instances=2
 

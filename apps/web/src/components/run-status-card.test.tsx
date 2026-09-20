@@ -215,4 +215,22 @@ describe('RunStatusCard', () => {
       expect(queries).toHaveTextContent('Tijdslimiet20s');
     });
   });
+
+  describe('crawler figures on website runs', () => {
+    const website = (extra: Record<string, unknown>) => run({ stats: { searchMode: 'website', budgetSource: 'adaptive', pagesVisited: 10, targetRecords: 50, recordsAccepted: 3, ...extra } });
+
+    it('shows the crawl engine and its request figures in the technical details', () => {
+      render(<RunStatusCard run={website({ crawlerEngine: 'crawlee', requestsQueued: 40, requestsStarted: 12, requestsSucceeded: 11, requestsFailed: 1, requestsRetried: 1, maxConcurrencyUsed: 2, queueRemaining: 28 })} />);
+      expect(screen.getByText('Crawler')?.closest('div')?.textContent).toBe('Crawlercrawlee');
+      expect(screen.getByText('requestsStarted')?.closest('div')?.textContent).toBe('requestsStarted12');
+      expect(screen.getByText('maxConcurrencyUsed')?.closest('div')?.textContent).toBe('maxConcurrencyUsed2');
+    });
+
+    it('older runs without these fields render without them and without errors', () => {
+      render(<RunStatusCard run={website({})} />);
+      expect(screen.queryByText('Crawler')).not.toBeInTheDocument();
+      expect(screen.queryByText('requestsStarted')).not.toBeInTheDocument();
+      expect(screen.getByText('Technische details')).toBeInTheDocument();
+    });
+  });
 });

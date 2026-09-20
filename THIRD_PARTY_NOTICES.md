@@ -38,13 +38,43 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## Crawlee and Playwright (Apache-2.0) — reserved, not yet installed
+## Crawlee (Apache-2.0)
 
-Fase 2 of this modernization (introducing Crawlee as the crawler engine, with Playwright as an
-opt-in fallback for JS-rendered pages) has not been implemented yet — see the project's own
-architecture decisions for why it was deliberately deferred. This section is a placeholder for
-their Apache-2.0 NOTICE text once that phase actually lands; it is not filled in prematurely for
-a dependency that isn't installed.
+Used by: `packages/discovery-core` (`src/crawler/crawlee-crawler.ts`) — the opt-in `crawlee` crawl
+engine (request queue, retries, concurrency). Installed as an ordinary npm dependency, never
+vendored/copied into this repository; it is only loaded when the `crawlee` engine is selected
+(`DISCOVERY_CRAWLER_ENGINE=crawlee`), and the default engine does not use it.
+
+Only `@crawlee/basic` is a direct dependency (exact version 3.18.1). It brings in `@crawlee/core`,
+`@crawlee/memory-storage`, `@crawlee/types` and `@crawlee/utils` (all Apache-2.0), plus 14
+Apache-2.0 packages in total (among them the `@apify/*` utilities, `got-scraping`,
+`header-generator` and `generative-bayesian-network`) and MIT/BSD/ISC/CC0/BlueOak-licensed helpers.
+Every one of the 103 packages this added is permissive; none is GPL/AGPL/LGPL. No browser
+dependency is installed: `@crawlee/playwright`, `@crawlee/puppeteer`, `playwright` and `puppeteer`
+are not part of the dependency tree.
+
+```
+Copyright 2018 Apify Technologies s.r.o.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
+The full license text ships with each package (`node_modules/@crawlee/*/LICENSE.md`).
+
+## Playwright — reserved, not installed
+
+Playwright as an opt-in fallback for JS-rendered pages is a later phase and is not installed. This
+section is a placeholder for its Apache-2.0 notice once that phase lands.
 
 ## Deliberately NOT used: idcac-playwright (GPL-3.0-only)
 

@@ -15,7 +15,7 @@ const robotsParser = createRequire(import.meta.url)('robots-parser') as (url: st
 import { fetchPublicUrl, type HttpTransport, type HttpResult } from './http.js';
 import { websiteScope, linkPriority, type PriorityTier } from './url-policy.js';
 import { extractContacts, mergeContacts, type ExtractedContacts, type ContactNormalizers } from '../extract/contacts.js';
-import type { CrawlRecord, CrawlResult, CrawlStopReason, ExtractedPage } from './types.js';
+import type { CrawlRecord, CrawlResult, CrawlStopReason, CrawlerRunStats, ExtractedPage } from './types.js';
 import { CandidateQueue, type CandidateEvidence, type CandidateRank, type CrawlCandidate } from './candidate-ranking.js';
 
 export const CRAWL_POLICY = {
@@ -90,7 +90,35 @@ export interface CrawlOptions<TFacts> {
   clock?: { now(): number; sleep(ms: number): Promise<unknown> };
 }
 
-export async function crawlWebsite<TFacts>(website: string, options: CrawlOptions<TFacts>): Promise<CrawlResult<TFacts>> {
+/** What one attempt to fetch and process a single page ended in. `transient` is true only when a
+ * retry could plausibly help (a network failure/timeout or an HTTP 5xx) — never for a refusal by
+ * our own policy (robots, scope, non-public address, size limit) or a rate-limit stop. */
+export interface CrawlAttempt {
+  fetched: boolean;
+  httpStatus: number | null;
+  transient: boolean;
+}
+
+/** Engine-specific figures a crawler engine adds to the shared result (see `CrawlerRunStats`). */
+export interface SessionFinishInfo {
+  engine: CrawlerRunStats['crawlerEngine'];
+  maxConcurrencyUsed: number;
+  requestsRetried: number;
+  /** Requests an engine still holds in its own dispatch buffer (not yet started). */
+  extraQueueRemaining?: number;
+}
+
+/**
+ * One website crawl's shared state and every policy-bearing step: URL scope, robots.txt, crawl
+ * delay, redirects, request/time/page budgets, candidate ranking, sitemap discovery, extraction and
+ * result building. Engines differ only in how they *schedule* pages (see `crawlWebsite` below for
+ * the original serial loop, and crawlee-crawler.ts for a queue-driven one) — every URL an engine
+ * fetches goes through `crawlPage`, so security and politeness can never differ between engines.
+ *
+ * Safe for a small number of concurrent `crawlPage` calls: page budget and the request slot are
+ * reserved synchronously, before any wait.
+ */
+export function createCrawlSession<TFacts>(website: string, options: CrawlOptions<TFacts>) {
   const scope = websiteScope(website);
   const transport = options.transport ?? fetchPublicUrl;
   const clock = options.clock ?? { now: Date.now, sleep };
@@ -102,7 +130,9 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
   const maxPages = Math.min(CRAWL_POLICY.absoluteMaxPages, Math.max(1, Math.floor(options.maxPages ?? CRAWL_POLICY.maxPages)));
   const maxCandidates = Math.min(CRAWL_POLICY.absoluteMaxCandidates, Math.max(1, Math.floor(options.maxCandidates ?? 500)));
   if (!Number.isFinite(maxPages) || !Number.isFinite(maxCandidates)) throw new Error('Ongeldige crawl-limiet.');
-  let lastRequest = -Infinity, delay = CRAWL_POLICY.minDelayMs;
+  // When the last request was allowed to start: every request (page, robots, sitemap) reserves the
+  // slot one crawl delay after the previous one, so the delay holds however many pages are in flight.
+  let lastSlot = -Infinity, delay = CRAWL_POLICY.minDelayMs;
   let pages = 0, metadata = 0, stopped: string | null = null;
   let stopReasonCode: CrawlStopReason | null = null;
   let candidateLimitReached = false;
@@ -112,7 +142,6 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
   const extractedPages: ExtractedPage<TFacts>[] = [];
   const candidates = new CandidateQueue(maxCandidates);
   const candidateEvidence = new Map<string, CrawlCandidate>();
-  let activeCandidate: CrawlCandidate | undefined;
   let urlsDiscovered = 0, sitemapUrlsFound = 0, listingUrlsFound = 0, candidatesProcessed = 0;
   let sitemapCandidatesAccepted = 0, sitemapCandidatesRejected = 0;
   const unchanged = new Set<string>();
@@ -124,9 +153,12 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
   let checkedSitemap = false;
   const errors: string[] = [];
 
-  async function record(value: Omit<CrawlRecord, 'sequence'>) {
-    const entry = { ...value, ...(value.kind === 'page' && activeCandidate ? {
-      candidateScore: activeCandidate.candidateScore, candidateReasons: activeCandidate.candidateReasons,
+  /** Per-fetch context, so concurrent page fetches never overwrite each other's bookkeeping. */
+  interface FetchContext { candidate?: CrawlCandidate; httpStatus: number | null; transient: boolean }
+
+  async function record(value: Omit<CrawlRecord, 'sequence'>, candidate?: CrawlCandidate) {
+    const entry = { ...value, ...(value.kind === 'page' && candidate ? {
+      candidateScore: candidate.candidateScore, candidateReasons: candidate.candidateReasons,
     } : {}), sequence: records.length + 1 };
     if (value.kind === 'page' && value.sha256 && options.knownCandidates?.get(value.url) === value.sha256) unchanged.add(value.url);
     records.push(entry);
@@ -137,8 +169,8 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
       fetchedAt: new Date(clock.now()).toISOString(), durationMs: 0, contentType: null,
       bytes: 0, title: null, sha256: null, redirectTo: null, error: null };
   }
-  async function denied(url: string, kind: CrawlRecord['kind'], error: string) {
-    await record({ ...blank(url, kind), error });
+  async function denied(url: string, kind: CrawlRecord['kind'], error: string, context?: FetchContext) {
+    await record({ ...blank(url, kind), error }, context?.candidate);
     if (kind === 'page') errors.push(error);
   }
   function add(input: string, base: string, label = '', source: CandidateEvidence['source'] = 'link'): boolean {
@@ -184,39 +216,47 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
     return robots.get(origin)!;
   }
 
-  async function get(initial: string, kind: CrawlRecord['kind']): Promise<{ response: HttpResult; url: string } | null> {
+  /** A network failure, timeout or 5xx may be worth retrying; a refusal by our own policy is not. */
+  const isTransientFailure = (message: string) => !/Niet-publiek netwerkadres|groter dan/i.test(message);
+
+  async function get(initial: string, kind: CrawlRecord['kind'], context?: FetchContext): Promise<{ response: HttpResult; url: string } | null> {
     let url = initial;
     const chain = new Set<string>();
     for (let hop = 0; hop <= CRAWL_POLICY.maxRedirects; hop++) {
-      if (!scope.normalize(url, undefined, false)) { await denied(url, kind, 'URL buiten het toegestane domein.'); return null; }
-      if (chain.has(url)) { await denied(url, kind, 'Redirectlus gestopt.'); return null; }
+      if (!scope.normalize(url, undefined, false)) { await denied(url, kind, 'URL buiten het toegestane domein.', context); return null; }
+      if (chain.has(url)) { await denied(url, kind, 'Redirectlus gestopt.', context); return null; }
       chain.add(url);
-      if (stopped) { await denied(url, kind, stopped); return null; }
+      if (stopped) { await denied(url, kind, stopped, context); return null; }
       if (kind !== 'robots') {
         const rule = await policy(url);
         if (rule.error || rule.parser.isAllowed(url, userAgent) === false) {
-          await denied(url, kind, rule.error ?? 'Geblokkeerd door robots.txt.');
+          await denied(url, kind, rule.error ?? 'Geblokkeerd door robots.txt.', context);
           return null;
         }
       }
-      if (stopped) { await denied(url, kind, stopped); return null; }
+      if (stopped) { await denied(url, kind, stopped, context); return null; }
       if ((kind === 'page' ? pages >= maxPages : metadata >= CRAWL_POLICY.maxMetadataRequests)) {
-        await denied(url, kind, 'Verzoeklimiet bereikt.'); return null;
+        await denied(url, kind, 'Verzoeklimiet bereikt.', context); return null;
       }
-      const wait = Math.max(0, lastRequest + delay - clock.now());
+      const slot = Math.max(clock.now(), lastSlot + delay);
+      const wait = Math.max(0, slot - clock.now());
       if (clock.now() + wait - start >= maxDurationMs) {
         stopped = 'Tijdslimiet bereikt; vereiste crawl-delay wordt niet verkort.';
         stopReasonCode = 'time_limit';
-        await denied(url, kind, stopped); return null;
+        await denied(url, kind, stopped, context); return null;
       }
-      if (wait) await clock.sleep(wait);
-      lastRequest = clock.now();
+      // Reserve the page/request budget and the next request slot before waiting, so concurrent
+      // fetches can neither exceed the budget nor start closer together than the crawl delay.
+      lastSlot = slot;
       if (kind === 'page') { pages++; visited.add(url); } else metadata++;
+      if (wait) await clock.sleep(wait);
+      const requestStart = clock.now();
       let response: HttpResult;
       try { response = await transport(url, userAgent); }
       catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        await record({ ...blank(url, kind), attempted: true, status: 'failed', durationMs: clock.now() - lastRequest, error: message });
+        if (context) { context.httpStatus = null; context.transient = isTransientFailure(message); }
+        await record({ ...blank(url, kind), attempted: true, status: 'failed', durationMs: clock.now() - requestStart, error: message }, context?.candidate);
         if (kind === 'page') errors.push(message);
         return null;
       }
@@ -231,10 +271,11 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
       let error: string | null = response.status >= 400 ? `HTTP ${response.status}` : null;
       if (redirect && !destination) error = 'Redirect zonder geldige bestemming binnen het toegestane domein.';
       if (redirect && hop === CRAWL_POLICY.maxRedirects) error = 'Maximum aantal redirects bereikt.';
+      if (context) { context.httpStatus = response.status; context.transient = response.status >= 500 && response.status !== 503; }
       await record({ ...blank(url, kind), attempted: true,
         status: error ? 'http_error' : redirect ? 'redirect' : 'ok', httpStatus: response.status,
-        durationMs: clock.now() - lastRequest, contentType, bytes: response.body.length, title,
-        sha256: createHash('sha256').update(response.body).digest('hex'), redirectTo: destination, error });
+        durationMs: clock.now() - requestStart, contentType, bytes: response.body.length, title,
+        sha256: createHash('sha256').update(response.body).digest('hex'), redirectTo: destination, error }, context?.candidate);
       if (kind === 'page' && error) errors.push(error);
       if ([429, 503].includes(response.status)) {
         stopped = `HTTP ${response.status}: website vraagt om rust; verdere verzoeken gestopt.`;
@@ -271,18 +312,20 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
     }
   }
 
-  // This crawler is deliberately serial. Crawlee's autoscaling adds process-tree
-  // sampling (which shells out to `ps` on Linux) without providing concurrency here.
-  async function crawlPage(url: string) {
+  async function crawlPage(candidate: CrawlCandidate): Promise<CrawlAttempt> {
+    const url = candidate.url;
+    const context: FetchContext = { candidate, httpStatus: null, transient: false };
     visited.add(url);
-    const result = await get(url, 'page');
+    const result = await get(url, 'page', context);
     if (url === scope.homepage) {
-      homepageStatus = records.filter(item => item.kind === 'page' && item.attempted).at(-1)?.httpStatus ?? null;
+      homepageStatus = context.httpStatus;
       homepageBlocked = !result && records.some(item => item.kind === 'page' && !item.attempted && /robots/.test(item.error ?? ''));
     }
+    let fetched = false;
     if (result && result.response.status >= 200 && result.response.status < 300) {
       const contentType = result.response.headers['content-type'] ?? '';
       if (/(?:text\/html|application\/xhtml\+xml)/i.test(contentType)) {
+        fetched = true;
         const $ = loadBuffer(result.response.body);
         const base = $('base[href]').first().attr('href');
         let baseUrl = result.url;
@@ -304,58 +347,112 @@ export async function crawlWebsite<TFacts>(website: string, options: CrawlOption
         }
       } else errors.push(`Geen HTML-pagina: ${result.url}`);
     }
+    return { fetched, httpStatus: context.httpStatus, transient: !result && context.transient };
   }
+
+  return {
+    scope,
+    limits: { maxPages, maxCandidates, maxDurationMs },
+    /** The caller's own requested URL (its own path, not just the site's origin) is always
+     * fetched first — see websiteScope's own doc comment on `requestedPage`. A direct deep link
+     * (e.g. one specific detail page) must never be silently discarded down to a homepage-only
+     * crawl before extraction ever gets a chance to run on it. The site's real homepage is still
+     * queued as a normal candidate (unless it *is* the requested page) so it stays available as a
+     * rich source of further navigation links, exactly as before. Returns the requested page. */
+    seed(): CrawlCandidate {
+      add(scope.requestedPage, scope.requestedPage, '', 'requested');
+      const requested = candidates.take(visited)!;
+      if (scope.requestedPage !== scope.homepage) add(scope.homepage, scope.homepage, '', 'homepage');
+      return requested;
+    },
+    /** The best not-yet-taken candidate, by the caller's own ranking. */
+    take: (): CrawlCandidate | undefined => candidates.take(visited),
+    /** Marks a URL as claimed by an engine, so a link found later can never queue it a second time. */
+    claim(url: string) { visited.add(url); },
+    crawlPage,
+    markProcessed() { candidatesProcessed++; },
+    /** False once the caller's `shouldContinue` says the target is reached. */
+    keepGoing(): boolean {
+      if (options.shouldContinue && !options.shouldContinue(extractedPages)) { stopReasonCode = 'target_reached'; return false; }
+      return true;
+    },
+    async discoverSitemap(fromUrl: string) {
+      if (checkedSitemap || stopped || pages >= maxPages) return;
+      checkedSitemap = true;
+      await sitemap(fromUrl);
+    },
+    get halted(): boolean { return stopped !== null; },
+    get pagesStarted(): number { return pages; },
+    get targetReached(): boolean { return stopReasonCode === 'target_reached'; },
+    remainingCandidates: () => candidates.remaining(visited),
+    fail(error: unknown) {
+      stopped = error instanceof Error ? error.message : String(error);
+      errors.push(stopped);
+    },
+    finish(info: SessionFinishInfo): CrawlResult<TFacts> {
+      const successful = records.some(item => item.kind === 'page' && item.status === 'ok' &&
+        (item.httpStatus ?? 0) >= 200 && (item.httpStatus ?? 0) < 300 && /html/i.test(item.contentType ?? ''));
+      if (stopped) errors.push(stopped);
+      // Priority order matches actual loop-break causality: a fully robots-blocked homepage always
+      // wins (see `status` below, which already treats it the same way); an explicit event captured
+      // live while it happened (target reached, the crawl's own time limit, a 429/503 rate-limit)
+      // comes next; then the two numeric caps, page budget before candidate-queue budget (a page-limit
+      // stop is certain — we know pages >= maxPages — while candidateLimitReached only means *some*
+      // link had to be dropped at some point, not necessarily what ended the loop); anything else is
+      // simply "ran out of candidates to try", the natural-completion case.
+      const stopReason: CrawlStopReason = homepageBlocked ? 'robots_blocked'
+        : stopReasonCode ?? (pages >= maxPages ? 'page_limit' : candidateLimitReached ? 'candidate_limit' : 'no_more_candidates');
+      const evidence = [...candidateEvidence.values()];
+      const knownCandidates = evidence.filter(candidate => options.knownCandidates?.has(candidate.canonicalUrl)).length;
+      const attempted = records.filter(item => item.attempted);
+      const crawlerStats: CrawlerRunStats = {
+        crawlerEngine: info.engine,
+        requestsQueued: discoveredUrls.size,
+        requestsStarted: attempted.length,
+        requestsSucceeded: attempted.filter(item => item.status === 'ok' || item.status === 'redirect').length,
+        requestsFailed: attempted.filter(item => item.status === 'failed' || item.status === 'http_error').length,
+        requestsRetried: info.requestsRetried,
+        maxConcurrencyUsed: info.maxConcurrencyUsed,
+        queueRemaining: candidates.remaining(visited) + (info.extraQueueRemaining ?? 0),
+        durationMs: clock.now() - start,
+      };
+      return { homepage: scope.homepage, domain: scope.domain, pagesVisited: pages, httpStatus: homepageStatus,
+        candidates: evidence,
+        discoveryStats: {
+          urlsDiscovered, uniqueUrlsDiscovered: discoveredUrls.size, sitemapUrlsFound, listingUrlsFound,
+          sitemapCandidatesAccepted, sitemapCandidatesRejected, candidateUrlsFound: evidence.length,
+          highConfidenceCandidates: evidence.filter(candidate => candidate.candidateScore >= 60).length,
+          mediumConfidenceCandidates: evidence.filter(candidate => candidate.candidateScore >= 20 && candidate.candidateScore < 60).length,
+          lowConfidenceCandidates: evidence.filter(candidate => candidate.candidateScore < 20).length,
+          candidatesProcessed, candidatesRemaining: candidates.remaining(visited) + (info.extraQueueRemaining ?? 0), knownCandidates,
+          newCandidates: evidence.length - knownCandidates, unchangedCandidates: unchanged.size,
+        },
+        status: homepageBlocked ? 'blocked' : !successful ? 'failed' : errors.length ? 'partial' : 'succeeded',
+        error: errors.length ? [...new Set(errors)].join('; ').slice(0, 4000) : null, records,
+        contacts: mergeContacts(contactPages), extractedPages, stopReason,
+        candidatesDiscovered: discoveredUrls.size, candidateLimitReached, crawlerStats };
+    },
+  };
+}
+
+/**
+ * The original, serial crawl: one page at a time, always the best remaining candidate. This is the
+ * `legacy` engine (see legacy-http-crawler.ts); its behaviour is unchanged.
+ */
+export async function crawlWebsite<TFacts>(website: string, options: CrawlOptions<TFacts>): Promise<CrawlResult<TFacts>> {
+  const session = createCrawlSession(website, options);
   try {
-    // The caller's own requested URL (its own path, not just the site's origin) is always
-    // fetched first — see websiteScope's own doc comment on `requestedPage`. A direct deep link
-    // (e.g. one specific vacancy detail page) must never be silently discarded down to a
-    // homepage-only crawl before extraction ever gets a chance to run on it. The site's real
-    // homepage is still queued as a normal candidate (unless it *is* the requested page) so it
-    // stays available as a rich source of further navigation links, exactly as before.
-    add(scope.requestedPage, scope.requestedPage, '', 'requested');
-    activeCandidate = candidates.take(visited);
-    if (scope.requestedPage !== scope.homepage) add(scope.homepage, scope.homepage, '', 'homepage');
-    let next: string | undefined = scope.requestedPage;
-    while (next && !stopped && pages < maxPages) {
-      await crawlPage(next);
-      candidatesProcessed++;
-      if (options.shouldContinue && !options.shouldContinue(extractedPages)) { stopReasonCode = 'target_reached'; break; }
-      if (!checkedSitemap && !stopped && pages < maxPages) { checkedSitemap = true; await sitemap(next); }
-      if (pages >= maxPages || stopped) break;
-      activeCandidate = candidates.take(visited);
-      next = activeCandidate?.url;
+    let next: CrawlCandidate | undefined = session.seed();
+    while (next && !session.halted && session.pagesStarted < session.limits.maxPages) {
+      await session.crawlPage(next);
+      session.markProcessed();
+      if (!session.keepGoing()) break;
+      await session.discoverSitemap(next.url);
+      if (session.pagesStarted >= session.limits.maxPages || session.halted) break;
+      next = session.take();
     }
   } catch (error) {
-    stopped = error instanceof Error ? error.message : String(error);
-    errors.push(stopped);
+    session.fail(error);
   }
-  const successful = records.some(item => item.kind === 'page' && item.status === 'ok' &&
-    (item.httpStatus ?? 0) >= 200 && (item.httpStatus ?? 0) < 300 && /html/i.test(item.contentType ?? ''));
-  if (stopped) errors.push(stopped);
-  // Priority order matches actual loop-break causality: a fully robots-blocked homepage always
-  // wins (see `status` below, which already treats it the same way); an explicit event captured
-  // live while it happened (target reached, the crawl's own time limit, a 429/503 rate-limit)
-  // comes next; then the two numeric caps, page budget before candidate-queue budget (a page-limit
-  // stop is certain — we know pages >= maxPages — while candidateLimitReached only means *some*
-  // link had to be dropped at some point, not necessarily what ended the loop); anything else is
-  // simply "ran out of candidates to try", the natural-completion case.
-  const stopReason: CrawlStopReason = homepageBlocked ? 'robots_blocked'
-    : stopReasonCode ?? (pages >= maxPages ? 'page_limit' : candidateLimitReached ? 'candidate_limit' : 'no_more_candidates');
-  const evidence = [...candidateEvidence.values()];
-  const knownCandidates = evidence.filter(candidate => options.knownCandidates?.has(candidate.canonicalUrl)).length;
-  return { homepage: scope.homepage, domain: scope.domain, pagesVisited: pages, httpStatus: homepageStatus,
-    candidates: evidence,
-    discoveryStats: {
-      urlsDiscovered, uniqueUrlsDiscovered: discoveredUrls.size, sitemapUrlsFound, listingUrlsFound,
-      sitemapCandidatesAccepted, sitemapCandidatesRejected, candidateUrlsFound: evidence.length,
-      highConfidenceCandidates: evidence.filter(candidate => candidate.candidateScore >= 60).length,
-      mediumConfidenceCandidates: evidence.filter(candidate => candidate.candidateScore >= 20 && candidate.candidateScore < 60).length,
-      lowConfidenceCandidates: evidence.filter(candidate => candidate.candidateScore < 20).length,
-      candidatesProcessed, candidatesRemaining: candidates.remaining(visited), knownCandidates,
-      newCandidates: evidence.length - knownCandidates, unchangedCandidates: unchanged.size,
-    },
-    status: homepageBlocked ? 'blocked' : !successful ? 'failed' : errors.length ? 'partial' : 'succeeded',
-    error: errors.length ? [...new Set(errors)].join('; ').slice(0, 4000) : null, records,
-    contacts: mergeContacts(contactPages), extractedPages, stopReason,
-    candidatesDiscovered: discoveredUrls.size, candidateLimitReached };
+  return session.finish({ engine: 'legacy', maxConcurrencyUsed: 1, requestsRetried: 0 });
 }

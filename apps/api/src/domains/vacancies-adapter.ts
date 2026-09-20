@@ -26,8 +26,8 @@
  *     itself; scoring; dedupe) is the exact same pipeline website mode already uses.
  */
 import {
-  crawlWebsite, fetchAndExtractPage, normalizeCandidateUrls, createBraveSearchProvider, websiteScope,
-  type CrawlOptions, type SourceSearchProvider,
+  createDiscoveryCrawler, parseCrawlerEngine, fetchAndExtractPage, normalizeCandidateUrls, createBraveSearchProvider, websiteScope,
+  type CrawlOptions, type SourceSearchProvider, type DiscoveryCrawler,
 } from '@discovery-platform/core';
 import {
   extractVacancy, extractVacancyWithDiagnostic, vacanciesCrawlerConfig, vacancyCompletenessScore, findVacancyDuplicates,
@@ -53,7 +53,18 @@ import { computeBranchBreakdown, type FactOutcome, type SiteProgress } from './r
 export type VacanciesCrawlOverrides = Pick<CrawlOptions<VacancyFacts>, 'transport' | 'clock'> & {
   searchProvider?: SourceSearchProvider;
   jobBoardProvider?: VacancySourceProvider;
+  /** Test seam: the crawl engine to use instead of the one the server configuration selects. */
+  crawler?: DiscoveryCrawler;
 };
+
+/** The crawl engine for website discovery, from server-side configuration only (never from a
+ * request): `DISCOVERY_CRAWLER_ENGINE` = `legacy` (default) or `crawlee`, and, for the Crawlee
+ * engine, `DISCOVERY_CRAWLER_CONCURRENCY` (1-3, default 2). Anything unrecognised means legacy. */
+function configuredCrawler(): DiscoveryCrawler {
+  const concurrency = Number.parseInt(process.env.DISCOVERY_CRAWLER_CONCURRENCY ?? '', 10);
+  return createDiscoveryCrawler(parseCrawlerEngine(process.env.DISCOVERY_CRAWLER_ENGINE),
+    Number.isFinite(concurrency) ? { maxConcurrency: concurrency } : {});
+}
 
 const BRANCH_SEARCH_COUNTRY = 'NL';
 const BRANCH_SEARCH_LANGUAGE = 'nl';
@@ -281,7 +292,7 @@ async function runWebsiteDiscovery(
       try { const canonical = websiteScope(input.sourceUrl).normalize(url); if (canonical) knownCandidates.set(canonical, null); } catch { /* Ignore old malformed evidence. */ }
     }
   }
-  const crawl = await crawlWebsite(input.sourceUrl, {
+  const crawl = await (overrides.crawler ?? configuredCrawler()).crawl(input.sourceUrl, {
     rankCandidate: vacanciesCrawlerConfig.rankCandidate,
     knownCandidates,
     extract: page => {
@@ -344,6 +355,7 @@ async function runWebsiteDiscovery(
       recordsAccepted: records.length,
       candidatesDiscovered: crawl.candidatesDiscovered,
       ...crawl.discoveryStats,
+      ...(crawl.crawlerStats ?? {}),
       candidateDiagnostics: crawl.candidates,
       dateFilteredCount,
       maxPages: config.maxPages,

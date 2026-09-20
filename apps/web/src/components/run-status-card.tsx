@@ -301,6 +301,9 @@ export function RunStatusCard({ run }: { run: DiscoveryRun }) {
               {(['maxPages', 'maxCandidates', 'maxDurationMs', 'pagesVisited', 'pagesAccepted', 'pagesRejected', 'recordsCreated', 'uniqueUrlsDiscovered', 'sitemapUrlsFound', 'sitemapCandidatesAccepted', 'sitemapCandidatesRejected', 'listingUrlsFound', 'highConfidenceCandidates', 'mediumConfidenceCandidates', 'lowConfidenceCandidates', 'candidatesRemaining', 'knownCandidates', 'newCandidates', 'unchangedCandidates'] as const).map(key => (
                 <Field key={key} label={key} value={typeof stats[key] === 'number' ? stats[key] : null} />
               ))}
+              {typeof stats.crawlerEngine === 'string' && <Field label="Crawler" value={stats.crawlerEngine} />}
+              {(['requestsQueued', 'requestsStarted', 'requestsSucceeded', 'requestsFailed', 'requestsRetried', 'maxConcurrencyUsed', 'queueRemaining'] as const)
+                .filter(key => typeof stats[key] === 'number').map(key => <Field key={key} label={key} value={stats[key] as number} />)}
             </dl>
           </details>
         )}

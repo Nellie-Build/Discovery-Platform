@@ -86,4 +86,29 @@ export interface CrawlResult<TFacts> {
    * discovered link had to be dropped because the candidate list was already full. Distinguishes
    * a genuine `candidate_limit` stop from a crawl that simply ran out of links on its own. */
   candidateLimitReached: boolean;
+  /** How the crawl engine itself behaved (queueing, requests, retries, concurrency). Both engines
+   * report it; optional so results built by older callers remain valid. */
+  crawlerStats?: CrawlerRunStats;
+}
+
+/** Which crawl engine ran. `legacy` is the original serial HTTP crawler, `crawlee` the
+ * queue-driven one built on Crawlee's request queue and retry handling. */
+export type CrawlerEngineName = 'legacy' | 'crawlee';
+
+/** Engine-level figures, identical in meaning for every engine so runs can be compared. The
+ * request counts cover every HTTP request the crawl made (pages, robots.txt, sitemaps). */
+export interface CrawlerRunStats {
+  crawlerEngine: CrawlerEngineName;
+  /** Distinct in-scope URLs the crawl ever queued as a candidate. */
+  requestsQueued: number;
+  requestsStarted: number;
+  requestsSucceeded: number;
+  requestsFailed: number;
+  /** Page requests that were tried again after a transient failure. */
+  requestsRetried: number;
+  /** The most page requests in flight at the same time. */
+  maxConcurrencyUsed: number;
+  /** Candidates still waiting when the crawl ended. */
+  queueRemaining: number;
+  durationMs: number;
 }
