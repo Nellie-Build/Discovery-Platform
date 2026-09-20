@@ -1,0 +1,45 @@
+# Vacancy employer (company) extraction
+
+Implemented in `domains/vacancies/src/company.ts`; the run statistics show the source per page as
+`pageDiagnostics[].companySource`.
+
+## Root cause of the live wrong values
+
+Two live WBO records had the company `inrichting.` and `je vertaalt de missie en visie van de
+organisatie in een strategie en operationele doelen.`. Both came from the plain-text label fallback,
+which searched the *whole body text* for the word "organisatie" followed by `:` or `-` and took the
+rest of the line: "...kwaliteit van de organisatie-inrichting. Dit zegt..." gave `inrichting.`, and the
+competency bullet "Aansturen organisatie: je vertaalt..." gave the sentence. The value was never
+validated, and that text route was also ranked *above* the DOM label route. The pages did contain the
+real employer (an "Over <Employer>" section that repeats the name in the page title).
+
+## Precedence (strongest first; a weaker source never overrides a stronger one)
+
+| companySource | Source |
+|---|---|
+| `json_ld` | JobPosting `hiringOrganization.name` (used as written) |
+| `microdata` | schema.org `itemprop="hiringOrganization"` / `name` (used as written) |
+| `explicit_label` | a label element that is exactly "Werkgever", "Organisatie", "Bedrijf", "Employer", "Company", "Hiring organization" followed by its value (dt/dd, th/td, label + sibling, data-* hooks) |
+| `organization_block` | `itemprop="employer"`; an element whose class/id says employer/company/organisation *name*; or an "Over/About <Name>" heading whose name is also in the page title and is not the job's location |
+| `text_fallback` | "Werkgever: <Name>" / "Organisatie - <Name>" at the start of a line of running text, only if the value looks like an organisation name |
+| `none` | nothing reliable: company is null |
+
+The word "organisatie" inside a sentence is never evidence. There is no title parsing, no AI, no
+site-specific rule.
+
+## Validation
+
+Explicit sources are refused only when obviously not a name: empty, call-to-action/navigation text,
+ends with `:`/`?`/`!`, or a whole paragraph. Running text must also look like an organisation: it needs
+an uppercase letter or digit, must not start with a lowercase word (except name prefixes such as "de",
+"van"), must not contain a sentence break, employment terms (€, uur, per week, salaris, ervaring, ...)
+or words addressed to the reader (je, wij, onze, ...), and a trailing full stop is only accepted after
+an abbreviation ("B.V.", "Inc."). Length in words or a full stop alone never disqualifies a name:
+"Ministerie van Defensie", "Dienst Justitiële Inrichtingen", "Company & Partners", "de Bijenkorf",
+"TNO", "Bedrijf B.V." stay valid. Normalisation is whitespace only: names are never rewritten.
+
+## Known consequence
+
+A company that fails validation is now null instead of a wrong name. The company counts +1 in the
+plausibility score, so a page that only reached the threshold thanks to a wrong company would no longer
+be accepted; none of the 50 + 50 live records checked was affected.

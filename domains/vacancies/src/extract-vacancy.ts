@@ -1,5 +1,6 @@
 import type { CheerioAPI } from 'cheerio';
 import { websiteScope, type CrawlPage } from '@discovery-platform/core';
+import { chooseCompany, extractCompanyFromText, extractOrganizationBlock, type CompanySource } from './company.js';
 
 /** A cheerio-wrapped node selection — `cheerio` itself doesn't export this as a bare type, and
  * this package's own dependency boundary (see tests/dependency-boundary.test.mjs) never imports
@@ -80,7 +81,7 @@ const LABEL_GROUPS: Record<'location' | 'salary' | 'hours' | 'contractType' | 'c
   hours: ['uren', 'werkuren', 'hours', 'aantal uur', 'uren per week'],
   contractType: ['contractsoort', 'contract type', 'contracttype', 'dienstverband', 'arbeidsovereenkomst'],
   contactPerson: ['contactpersoon', 'contact person'],
-  company: ['werkgever', 'organisatie', 'employer', 'company'],
+  company: ['werkgever', 'organisatie', 'bedrijf', 'employer', 'company', 'hiring organization', 'hiring organisation'],
 };
 
 /** Generic `data-*` attribute names a machine-readable metadata hook might use to name its own
@@ -92,9 +93,15 @@ const DATA_LABEL_SELECTOR = DATA_LABEL_ATTRS.map(attr => `[${attr}]`).join(', ')
 export function extractVacancyText(pageText: string): Partial<VacancyFacts> {
   const facts: Partial<VacancyFacts> = {};
   for (const [field, labels] of Object.entries(LABEL_GROUPS) as [keyof typeof LABEL_GROUPS, string[]][]) {
+    // The employer is never taken from a label word anywhere in running text ("organisatie" is
+    // an ordinary word): only a label opening a line, and only a value that looks like an
+    // organisation name — see company.ts.
+    if (field === 'company') continue;
     const value = afterLabel(pageText, labels);
     if (value) facts[field] = value;
   }
+  const company = extractCompanyFromText(pageText);
+  if (company) facts.company = company;
   return facts;
 }
 
@@ -566,6 +573,8 @@ export interface VacancyPageDiagnostic {
   signalScore: number;
   accepted: boolean;
   rejectionReason: 'no_title' | 'insufficient_signals' | 'overview_page' | 'insufficient_description' | null;
+  /** Which source named the employer (see company.ts), or `none` when no reliable one exists. */
+  companySource?: CompanySource;
 }
 
 const PLAUSIBILITY_ACCEPT_THRESHOLD = 3;
@@ -609,7 +618,12 @@ function scoreVacancyDetailEvidence($: CheerioAPI, r: VacancyFacts): { score: nu
   return { score, metadataFieldsFound, directContactFound, descriptionFound };
 }
 
-function diagnose($: CheerioAPI, url: string, r: VacancyFacts, hasJsonLd: boolean): VacancyPageDiagnostic {
+function diagnose($: CheerioAPI, url: string, r: VacancyFacts, hasJsonLd: boolean, companySource: CompanySource): VacancyPageDiagnostic {
+  const diagnostic = diagnoseEvidence($, url, r, hasJsonLd);
+  return { ...diagnostic, companySource };
+}
+
+function diagnoseEvidence($: CheerioAPI, url: string, r: VacancyFacts, hasJsonLd: boolean): VacancyPageDiagnostic {
   const titleFound = Boolean(r.title);
   if (hasJsonLd) {
     const { metadataFieldsFound, directContactFound, descriptionFound } = scoreVacancyDetailEvidence($, r);
@@ -655,10 +669,19 @@ export function extractVacancyWithDiagnostic(page: CrawlPage): { facts: VacancyF
   const jsonLdFacts = extractJobPostingJsonLd(page.$);
   const domPostedDate = extractPostedDateDom(page.$);
 
+  // The employer, from the strongest source that names one (see company.ts for the precedence and
+  // the rules for what may count as an organisation name); a wrong name is worse than none.
+  const locationHint = microdata.location ?? textFacts.location ?? domLabelFacts.location ?? null;
+  const organizationBlock = extractOrganizationBlock(page.$, { title: page.$('title').first().text(), location: locationHint, nonContentSelector: NON_CONTENT_SELECTOR });
+  const companyFor = (structured: Partial<VacancyFacts>) => chooseCompany({
+    jsonLd: structured.company, microdata: microdata.company, explicitLabel: domLabelFacts.company,
+    organizationBlock, text: textFacts.company,
+  });
+
   function build(structured: Partial<VacancyFacts>): VacancyFacts {
     return {
       title: structured.title ?? domTitle.text ?? null,
-      company: structured.company ?? microdata.company ?? textFacts.company ?? domLabelFacts.company ?? null,
+      company: companyFor(structured).value,
       location: structured.location ?? microdata.location ?? textFacts.location ?? domLabelFacts.location ?? null,
       salary: structured.salary ?? textFacts.salary ?? domLabelFacts.salary ?? null,
       hours: textFacts.hours ?? domLabelFacts.hours ?? metadataBlockFacts.hours ?? null,
@@ -675,7 +698,7 @@ export function extractVacancyWithDiagnostic(page: CrawlPage): { facts: VacancyF
   const hasJsonLd = jsonLdFacts.length > 0;
   const results = (hasJsonLd ? jsonLdFacts : [{}]).map(build);
   const primary = results[0] ?? build({});
-  const diagnostic = diagnose(page.$, page.url, primary, hasJsonLd);
+  const diagnostic = diagnose(page.$, page.url, primary, hasJsonLd, companyFor(jsonLdFacts[0] ?? {}).source);
 
   const plausible = results.filter(r => hasJsonLd || diagnostic.accepted);
   return { facts: plausible.length ? plausible : undefined, diagnostic };
