@@ -20,12 +20,14 @@ export interface DiscoveryCrawler {
   fetchPage<TFacts>(url: string, options: SinglePageFetchOptions<TFacts>): Promise<SinglePageFetchResult<TFacts>>;
 }
 
-export const DEFAULT_CRAWLER_ENGINE: CrawlerEngineName = 'legacy';
+/** The primary website crawl engine. `legacy` stays available as an explicit rollback option. */
+export const DEFAULT_CRAWLER_ENGINE: CrawlerEngineName = 'crawlee';
 
-/** Reads a server-side engine setting (e.g. `DISCOVERY_CRAWLER_ENGINE`). Anything other than an
- * explicit `crawlee` is the legacy engine — a typo can never switch engines by accident. */
+/** Reads a server-side engine setting (e.g. `DISCOVERY_CRAWLER_ENGINE`). Only an explicit `legacy`
+ * (case-insensitive, trimmed) selects the rollback engine; an unset, empty or unrecognised value is
+ * the product default, `crawlee` — a typo can never silently move production onto the rollback engine. */
 export function parseCrawlerEngine(value: string | undefined | null): CrawlerEngineName {
-  return value?.trim().toLowerCase() === 'crawlee' ? 'crawlee' : DEFAULT_CRAWLER_ENGINE;
+  return value?.trim().toLowerCase() === 'legacy' ? 'legacy' : DEFAULT_CRAWLER_ENGINE;
 }
 
 export type DiscoveryCrawlerOptions = CrawleeCrawlerOptions;

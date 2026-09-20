@@ -58,8 +58,9 @@ export type VacanciesCrawlOverrides = Pick<CrawlOptions<VacancyFacts>, 'transpor
 };
 
 /** The crawl engine for website discovery, from server-side configuration only (never from a
- * request): `DISCOVERY_CRAWLER_ENGINE` = `legacy` (default) or `crawlee`, and, for the Crawlee
- * engine, `DISCOVERY_CRAWLER_CONCURRENCY` (1-3, default 2). Anything unrecognised means legacy. */
+ * request): `DISCOVERY_CRAWLER_ENGINE` = `crawlee` (default) or `legacy` (the rollback engine), and, for
+ * the Crawlee engine, `DISCOVERY_CRAWLER_CONCURRENCY` (1-3, default 2). Only an explicit `legacy`
+ * selects legacy; unset or unrecognised means crawlee. */
 function configuredCrawler(): DiscoveryCrawler {
   const concurrency = Number.parseInt(process.env.DISCOVERY_CRAWLER_CONCURRENCY ?? '', 10);
   return createDiscoveryCrawler(parseCrawlerEngine(process.env.DISCOVERY_CRAWLER_ENGINE),

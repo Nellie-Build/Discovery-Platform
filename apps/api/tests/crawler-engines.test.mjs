@@ -175,23 +175,32 @@ for (const engine of ENGINES) {
   });
 }
 
-test('the engine comes from server configuration only: legacy by default, crawlee only when explicitly set, never from the request', async () => {
+test('the engine comes from server configuration only: crawlee by default, legacy only when explicitly set, never from the request', async () => {
   const saved = { engine: process.env.DISCOVERY_CRAWLER_ENGINE, concurrency: process.env.DISCOVERY_CRAWLER_CONCURRENCY };
   try {
     const run = async filters => createVacanciesAdapter({ transport: transportFor(spieSite()), clock: fakeClock() })
       .runDiscovery({ ...websiteInput(`${HOST}/vacatures`), filters });
     delete process.env.DISCOVERY_CRAWLER_ENGINE;
-    assert.equal((await run({})).stats.crawlerEngine, 'legacy');
+    assert.equal((await run({})).stats.crawlerEngine, 'crawlee', 'unset: the product default');
+    process.env.DISCOVERY_CRAWLER_ENGINE = '';
+    assert.equal((await run({})).stats.crawlerEngine, 'crawlee', 'empty: the product default');
     process.env.DISCOVERY_CRAWLER_ENGINE = 'something-else';
-    assert.equal((await run({})).stats.crawlerEngine, 'legacy');
-    process.env.DISCOVERY_CRAWLER_ENGINE = 'legacy';
-    assert.equal((await run({ crawlerEngine: 'crawlee' })).stats.crawlerEngine, 'legacy', 'a request cannot switch engines');
+    assert.equal((await run({})).stats.crawlerEngine, 'crawlee', 'unrecognised: the product default, not the rollback engine');
     process.env.DISCOVERY_CRAWLER_ENGINE = 'crawlee';
+    assert.equal((await run({ crawlerEngine: 'legacy' })).stats.crawlerEngine, 'crawlee', 'a request cannot switch engines');
     process.env.DISCOVERY_CRAWLER_CONCURRENCY = '3';
     const crawlee = await run({});
     assert.equal(crawlee.stats.crawlerEngine, 'crawlee');
     assert.ok(crawlee.stats.maxConcurrencyUsed <= 3);
     assert.equal(titles(crawlee).length, 3);
+    delete process.env.DISCOVERY_CRAWLER_CONCURRENCY;
+    process.env.DISCOVERY_CRAWLER_ENGINE = 'legacy';
+    const legacy = await run({ crawlerEngine: 'crawlee' });
+    assert.equal(legacy.stats.crawlerEngine, 'legacy', 'explicit legacy is the rollback, and a request cannot override it');
+    assert.equal(legacy.stats.maxConcurrencyUsed, 1);
+    assert.equal(titles(legacy).length, 3);
+    process.env.DISCOVERY_CRAWLER_ENGINE = ' LEGACY ';
+    assert.equal((await run({})).stats.crawlerEngine, 'legacy');
   } finally {
     for (const [key, value] of [['DISCOVERY_CRAWLER_ENGINE', saved.engine], ['DISCOVERY_CRAWLER_CONCURRENCY', saved.concurrency]]) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
@@ -200,6 +209,24 @@ test('the engine comes from server configuration only: legacy by default, crawle
 });
 
 test('branch discovery is untouched by the crawler engine setting', async () => {
+  const saved = process.env.DISCOVERY_CRAWLER_ENGINE;
+  try {
+    for (const value of [undefined, 'crawlee', 'legacy']) {
+      if (value === undefined) delete process.env.DISCOVERY_CRAWLER_ENGINE; else process.env.DISCOVERY_CRAWLER_ENGINE = value;
+      const jobBoardProvider = { async findCandidates() { return { candidates: [], meta: [{ provider: 'ts-jobspy', site: 'indeed', status: 'empty', candidates: 0, durationMs: 1, error: null }] }; } };
+      const outcome = await createVacanciesAdapter({ jobBoardProvider }).runDiscovery({
+        mode: 'branch', branch: 'Onderwijs', country: 'Nederland', region: 'Zuid-Holland', keywords: null, existingRecords: [], filters: {},
+        runConfig: { targetRecords: 50, searchBreadth: 'standard', maxPages: 25, maxCandidates: 500, maxDurationMs: 180_000, maxEnrichments: 30, onlyNewRecords: true },
+      });
+      assert.equal(outcome.stats.searchMode, 'branch', String(value));
+      assert.ok(!('crawlerEngine' in outcome.stats), String(value));
+    }
+  } finally {
+    if (saved === undefined) delete process.env.DISCOVERY_CRAWLER_ENGINE; else process.env.DISCOVERY_CRAWLER_ENGINE = saved;
+  }
+});
+
+test('branch discovery keeps its provider query with the crawlee engine set', async () => {
   const saved = process.env.DISCOVERY_CRAWLER_ENGINE;
   process.env.DISCOVERY_CRAWLER_ENGINE = 'crawlee';
   try {

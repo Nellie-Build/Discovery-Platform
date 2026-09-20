@@ -1,10 +1,16 @@
 # Crawler engines
 
-Website discovery can run on two crawl engines behind one domain-neutral interface. The engine is
-chosen by server configuration only; **`legacy` is the default** and nothing selects `crawlee`
-automatically (no fallback from one to the other).
+Website discovery runs on one of two crawl engines behind one domain-neutral interface. The engine is
+chosen by server configuration only.
 
-| | `legacy` | `crawlee` |
+- **Primary: `crawlee`** (`CrawleeCrawler`), the default since the promotion described below.
+- **Rollback: `legacy`** (`LegacyHttpCrawler`), kept for at least one further release phase and
+  selected only by an explicit `DISCOVERY_CRAWLER_ENGINE=legacy`.
+- **There is no automatic fallback.** If Crawlee fails, the run shows the crawler failure (see
+  "Runtime diagnostics and infrastructure failures"); rolling back is a configuration/deployment
+  change, never something the crawler does by itself, so a failure is never hidden.
+
+| | `legacy` (rollback) | `crawlee` (primary) |
 |---|---|---|
 | Class | `LegacyHttpCrawler` | `CrawleeCrawler` |
 | Scheduling | serial loop, best remaining candidate next | Crawlee `BasicCrawler` + `RequestQueue`, 1-3 pages in flight |
@@ -20,7 +26,7 @@ interface DiscoveryCrawler {
   fetchPage(url, options): Promise<SinglePageFetchResult>;
 }
 createDiscoveryCrawler(engine, { maxConcurrency?, maxRequestRetries? })
-parseCrawlerEngine(process.env.DISCOVERY_CRAWLER_ENGINE)   // anything but "crawlee" is "legacy"
+parseCrawlerEngine(process.env.DISCOVERY_CRAWLER_ENGINE)   // only an explicit "legacy" is legacy; everything else is "crawlee"
 ```
 
 The engines know nothing about the domain: a page goes to the caller's `extract` callback, and
@@ -66,13 +72,18 @@ the run card shows them under "Technische details" only when present.
 
 ## Configuration
 
-- `DISCOVERY_CRAWLER_ENGINE=legacy|crawlee` (default `legacy`), set by the deploy workflow input
-  `crawler_engine` (default `legacy`).
-- `DISCOVERY_CRAWLER_CONCURRENCY` (1-3, default 2; crawlee only).
+- `DISCOVERY_CRAWLER_ENGINE=crawlee|legacy`: unset, empty or unrecognised means **`crawlee`**; only an
+  explicit `legacy` (case-insensitive, surrounding spaces ignored) selects the rollback engine. An
+  unrecognised value is deliberately the product default, so a typo can never silently move the
+  service onto the rollback engine. It is never taken from a request. The deploy workflow input
+  `crawler_engine` (choice `crawlee`/`legacy`, default `crawlee`) always sets it explicitly.
+- `DISCOVERY_CRAWLER_CONCURRENCY` (1-3, default 2; crawlee only). Not changed by the promotion.
+- **Rollback:** run the deploy workflow with `crawler_engine=legacy` (the crawler canary is skipped
+  then); switch back with `crawler_engine=crawlee`, which runs the canary.
 
 ## Known considerations
 
-- Crawlee keeps everything in memory (no `storage/` directory) and is loaded only when selected.
+- Crawlee keeps everything in memory (no `storage/` directory) and is only loaded when it is the selected engine.
 - **`ps` must exist in the runtime image.** Verified live on Cloud Run (`node:24-slim`, which has no
   `ps`): with `DISCOVERY_CRAWLER_ENGINE=crawlee`, `crawler.run()` created its AutoscaledPool and then
   failed *before the first request handler* with `Error: spawn ps ENOENT` (`crawlerFailurePhase: run`,
@@ -84,7 +95,31 @@ the run card shows them under "Technische details" only when present.
   The legacy engine does not use Crawlee and never needed it.
 - The deliberate behavioural difference between the engines is retrying; results otherwise match
   (see `tests/crawler-contract.test.mjs`, which runs one contract against both engines).
-- Not built yet: browser rendering (Playwright), engine fallback, a queue shared between runs.
+- Not built yet: browser rendering (Playwright), automatic engine fallback (deliberately not planned:
+  it would hide failures), a queue shared between runs.
+
+## Why Crawlee became the primary engine
+
+The decision rests on a live comparison on the shared test environment (Cloud Run, commit
+`1bdb1e0`), target 50 per site, new projects for every run:
+
+- The Cloud Run runtime problem is solved: the runtime image installs `procps` (with a build-time
+  guard); `spawn ps ENOENT` is gone and the crawler canary passes.
+- The WBO extractor false negative is fixed (`looksLikeOverviewPage`): no real detail page was
+  rejected as an overview in any of the runs (before: 65 of 66 `overview_page` rejections were real
+  vacancies). Both engines reach 50 records with `target_reached` on WBO.
+- The requested URL is the first page processed by both engines (first `pageDiagnostics` entry).
+- Target and limits hold: `target_reached`, records capped at the target; an overshoot of one page
+  (well within `maxConcurrency`) was seen.
+- SPIE parity: the same 50 records by URL (50 of 50 overlap) from both engines. WBO: 50 records each,
+  all real vacancy detail pages, though a different 50 (26 of 50 shared by URL) because almost all
+  WBO candidates have the same ranking score; the choice among equals depends on discovery order.
+- No runtime or security regressions: no failure phase, no `ps`/memory/cgroup/storage errors, the
+  shared policy layer (robots, scope, redirects, SSRF-safe transport) is the same for both engines.
+- Concurrency is used live (`maxConcurrencyUsed = 2`) and the run diagnostics are present.
+- Speed is **not** a reason: it is about the same (roughly 28-29 pages per minute for both
+  engines), because the 2 second crawl delay between request starts applies to both. What Crawlee
+  adds is queueing, retries after transient failures and diagnostics, not throughput.
 
 ## Runtime diagnostics and infrastructure failures
 
@@ -119,6 +154,9 @@ and a robots.txt block keep their previous status. For crawls that end `failed` 
 crawler's own error text is kept as `crawlError` in the statistics.
 
 ## Crawler canary (separate from the deployment smoke test)
+
+With Crawlee as the default this runs in every deployment that uses it (skipped for a `legacy`
+rollback deployment).
 
 The deployment smoke test only checks that a run *finishes*. `scripts/verify-crawler-canary.mjs
 <service-url> <legacy|crawlee> [probe-url]` runs one website discovery on a simple public page

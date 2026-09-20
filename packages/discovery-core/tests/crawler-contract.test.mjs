@@ -52,14 +52,21 @@ function run(engine, website, pages, extra = {}) {
   return promise.then(result => ({ result, log }));
 }
 
-test('engine selection: legacy is the default and only an explicit "crawlee" switches', () => {
-  assert.equal(parseCrawlerEngine(undefined), 'legacy');
-  assert.equal(parseCrawlerEngine(''), 'legacy');
-  assert.equal(parseCrawlerEngine('crawle'), 'legacy');
-  assert.equal(parseCrawlerEngine('LEGACY'), 'legacy');
+test('engine selection: crawlee is the default and only an explicit "legacy" selects the rollback engine', () => {
+  assert.equal(parseCrawlerEngine(undefined), 'crawlee');
+  assert.equal(parseCrawlerEngine(null), 'crawlee');
+  assert.equal(parseCrawlerEngine(''), 'crawlee');
+  assert.equal(parseCrawlerEngine('   '), 'crawlee');
   assert.equal(parseCrawlerEngine('crawlee'), 'crawlee');
   assert.equal(parseCrawlerEngine(' Crawlee '), 'crawlee');
-  assert.equal(createDiscoveryCrawler().engine, 'legacy');
+  assert.equal(parseCrawlerEngine('legacy'), 'legacy');
+  assert.equal(parseCrawlerEngine(' LEGACY '), 'legacy');
+  // A typo is not a rollback: an unrecognised value is the product default.
+  assert.equal(parseCrawlerEngine('legcy'), 'crawlee');
+  assert.equal(parseCrawlerEngine('crawle'), 'crawlee');
+  assert.equal(parseCrawlerEngine('old'), 'crawlee');
+  assert.equal(createDiscoveryCrawler().engine, 'crawlee');
+  assert.equal(createDiscoveryCrawler('legacy').engine, 'legacy');
   assert.equal(createDiscoveryCrawler('crawlee').engine, 'crawlee');
 });
 

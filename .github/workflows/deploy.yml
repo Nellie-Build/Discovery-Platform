@@ -17,11 +17,11 @@ on:
         required: true
         default: 'europe-west1'
       crawler_engine:
-        description: 'Website crawl engine (DISCOVERY_CRAWLER_ENGINE). legacy is the default; crawlee is for controlled comparison runs only.'
+        description: 'Website crawl engine (DISCOVERY_CRAWLER_ENGINE). crawlee is the primary engine and the default; legacy is the temporary rollback engine.'
         required: true
-        default: 'legacy'
+        default: 'crawlee'
         type: choice
-        options: [legacy, crawlee]
+        options: [crawlee, legacy]
 
 jobs:
   deploy:
@@ -38,7 +38,7 @@ jobs:
     env:
       PROJECT_ID: ${{ github.event.inputs.gcp_project_id || 'discovery-platform-508814' }}
       REGION: ${{ github.event.inputs.gcp_region || 'europe-west1' }}
-      CRAWLER_ENGINE: ${{ github.event.inputs.crawler_engine || 'legacy' }}
+      CRAWLER_ENGINE: ${{ github.event.inputs.crawler_engine || 'crawlee' }}
       AR_REPO: discovery-platform
       SQL_INSTANCE: discovery-platform-db
       DB_NAME: discovery_platform
@@ -288,9 +288,10 @@ jobs:
           echo "Smoke test passed against ${SERVICE_URL}"
 
       # Deliberately separate from the smoke test above: it fetches one external page (example.com)
-      # and only runs for an explicit crawlee canary deployment. The smoke test only checks that a
-      # run *finishes*; this proves the crawl engine actually fetched a page (pagesVisited >= 1,
-      # requestsStarted >= 1, crawl not failed) and prints every recorded crawler diagnostic if not.
+      # and runs whenever the crawlee engine is deployed (now the default; skipped for a legacy
+      # rollback deployment). The smoke test only checks that a run *finishes*; this proves the
+      # crawl engine actually fetched a page (pagesVisited >= 1, requestsStarted >= 1, crawl not
+      # failed) and prints every recorded crawler diagnostic if not.
       - name: Crawler canary (crawlee deployments only)
         if: env.CRAWLER_ENGINE == 'crawlee'
         run: node scripts/verify-crawler-canary.mjs "${SERVICE_URL}" crawlee
