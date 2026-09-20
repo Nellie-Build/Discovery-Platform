@@ -124,7 +124,7 @@ test('"Security" + "Zuid-Holland" (Security + Zuid-Holland) is turned into the r
   assert.equal(outcome.stats.searchQuery, 'Security beveiliger security officer Zuid-Holland');
 });
 
-test('Beveiliging + Zuid-Holland + Nederland: the job board receives country="netherlands" and an English location, never the raw Dutch region text', async () => {
+test('Beveiliging + Zuid-Holland + Nederland: the job board receives country="netherlands" and no place, never the raw Dutch region text', async () => {
   const { provider, calls } = fakeJobBoardProvider({
     candidates: [jobBoardCandidate({ title: 'Beveiliger', company: 'Acme Security', location: 'Amsterdam', sourceUrl: 'https://indeed.example/job/2' })],
     meta: [{ provider: 'ts-jobspy', site: 'indeed', status: 'ok', candidates: 1, durationMs: 500, error: null }],
@@ -133,7 +133,9 @@ test('Beveiliging + Zuid-Holland + Nederland: the job board receives country="ne
   await adapter.runDiscovery(branchInput({ branch: 'Beveiliging', region: 'Nederland', keywords: 'beveiliger security officer' }));
   assert.equal(calls[0].query, 'Beveiliging beveiliger security officer');
   assert.ok(!calls[0].query.includes('Security'), '"Beveiliging" must never be silently replaced by "Security"');
-  assert.equal(calls[0].location, 'Nederland'); // the raw region is handed to the provider, which normalizes it internally
+  // A lone country is not a place: the provider gets the country, and no place text at all.
+  assert.equal(calls[0].location, null);
+  assert.equal(calls[0].country, 'netherlands');
 });
 
 // ─── Per-jobboard statistics stay visible (Indeed vs. LinkedIn separately) ──────────────────────

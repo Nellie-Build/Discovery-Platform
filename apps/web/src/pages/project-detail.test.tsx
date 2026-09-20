@@ -48,18 +48,20 @@ describe('StartDiscoveryForm', () => {
     expect(onStarted).toHaveBeenCalledWith(startedRun);
   });
 
-  it('switching to Branche mode hides the Website URL field and shows Branche/Regio/Extra trefwoorden instead', async () => {
+  it('switching to Branche mode hides the Website URL field and shows Branche/Land/Regio/Extra trefwoorden instead', async () => {
     render(<StartDiscoveryForm projectId="p1" onStarted={vi.fn()} />);
 
     await userEvent.click(screen.getByRole('radio', { name: 'Branche' }));
 
     expect(screen.queryByLabelText('Website URL')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Branche')).toBeInTheDocument();
-    expect(screen.getByLabelText('Regio')).toBeInTheDocument();
+    expect(screen.getByLabelText('Land')).toHaveValue('Nederland');
+    expect(screen.getByLabelText('Regio / provincie / plaats')).toBeInTheDocument();
     expect(screen.getByLabelText('Extra trefwoorden')).toBeInTheDocument();
+    expect(screen.getByText('Gebruik regio/plaats voor geografische filtering. Gebruik trefwoorden voor functie, specialisme of vakgebied.')).toBeInTheDocument();
   });
 
-  it('Branche mode: submitting calls api.runs.startBranchSearch with branch/region/keywords, never runs.start', async () => {
+  it('Branche mode: submitting calls api.runs.startBranchSearch with branch/country/region/keywords, never runs.start', async () => {
     const startedRun = run({ id: 'run2' });
     vi.mocked(api.runs.startBranchSearch).mockResolvedValue(startedRun);
     const onStarted = vi.fn();
@@ -67,19 +69,19 @@ describe('StartDiscoveryForm', () => {
 
     await userEvent.click(screen.getByRole('radio', { name: 'Branche' }));
     await userEvent.type(screen.getByLabelText('Branche'), 'Security');
-    await userEvent.type(screen.getByLabelText('Regio'), 'Nederland');
+    await userEvent.type(screen.getByLabelText('Regio / provincie / plaats'), 'Zuid-Holland');
     await userEvent.type(screen.getByLabelText('Extra trefwoorden'), 'beveiliger security officer');
     await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
 
     expect(api.runs.startBranchSearch).toHaveBeenCalledWith('p1', {
-      branch: 'Security', region: 'Nederland', keywords: 'beveiliger security officer',
+      branch: 'Security', country: 'Nederland', region: 'Zuid-Holland', keywords: 'beveiliger security officer',
       runConfig: { targetRecords: 50, searchBreadth: 'standard', onlyNewRecords: true }, filters: {},
     });
     expect(api.runs.start).not.toHaveBeenCalled();
     expect(onStarted).toHaveBeenCalledWith(startedRun);
   });
 
-  it('Branche mode: region and keywords are optional — omitted from the request body when left blank', async () => {
+  it('Branche mode: region and keywords are optional — omitted from the request body when left blank (the country defaults to Nederland)', async () => {
     vi.mocked(api.runs.startBranchSearch).mockResolvedValue(run({ id: 'run3' }));
     render(<StartDiscoveryForm projectId="p1" onStarted={vi.fn()} />);
 
@@ -88,7 +90,7 @@ describe('StartDiscoveryForm', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
 
     expect(api.runs.startBranchSearch).toHaveBeenCalledWith('p1', {
-      branch: 'Security', runConfig: { targetRecords: 50, searchBreadth: 'standard', onlyNewRecords: true }, filters: {},
+      branch: 'Security', country: 'Nederland', runConfig: { targetRecords: 50, searchBreadth: 'standard', onlyNewRecords: true }, filters: {},
     });
   });
 
@@ -102,7 +104,7 @@ describe('StartDiscoveryForm', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
 
     expect(api.runs.startBranchSearch).toHaveBeenCalledWith('p1', {
-      branch: 'Security', runConfig: { targetRecords: 50, searchBreadth: 'broad', onlyNewRecords: true }, filters: {},
+      branch: 'Security', country: 'Nederland', runConfig: { targetRecords: 50, searchBreadth: 'broad', onlyNewRecords: true }, filters: {},
     });
   });
 
@@ -184,7 +186,7 @@ describe('StartDiscoveryForm', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Start Discovery' }));
 
       expect(api.runs.startBranchSearch).toHaveBeenCalledWith('p1', {
-        branch: 'Security',
+        branch: 'Security', country: 'Nederland',
         runConfig: { targetRecords: 50, searchBreadth: 'standard', onlyNewRecords: true },
         filters: { sources: ['indeed', 'web_search'] },
       });

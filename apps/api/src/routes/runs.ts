@@ -38,13 +38,14 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
     // client sent is inferred from which field is present — no new required field on existing
     // { sourceUrl }-only clients.
     let discoveryInput: { mode: 'website'; sourceUrl: string; runConfig: DiscoveryRunConfig; filters: Record<string, unknown> }
-      | { mode: 'branch'; branch: string; region: string | null; keywords: string | null; runConfig: DiscoveryRunConfig; filters: Record<string, unknown> };
+      | { mode: 'branch'; branch: string; country: string | null; region: string | null; keywords: string | null; runConfig: DiscoveryRunConfig; filters: Record<string, unknown> };
     if (typeof body.sourceUrl === 'string' && body.sourceUrl.trim()) {
       discoveryInput = { mode: 'website', sourceUrl: body.sourceUrl.trim(), runConfig, filters };
     } else if (typeof body.branch === 'string' && body.branch.trim()) {
       discoveryInput = {
         mode: 'branch',
         branch: body.branch.trim(),
+        country: typeof body.country === 'string' && body.country.trim() ? body.country.trim() : null,
         region: typeof body.region === 'string' && body.region.trim() ? body.region.trim() : null,
         keywords: typeof body.keywords === 'string' && body.keywords.trim() ? body.keywords.trim() : null,
         runConfig, filters,

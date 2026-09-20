@@ -222,3 +222,58 @@ reason ("Doel bereikt"); "Bronstatus" says how complete the sources were ("Gedee
 LinkedIn timeout"), so a run can be partial and still have reached its target. Branch runs use
 "Kandidaten ontdekt / Kandidaten verwerkt"; "Pages visited" is only used for website runs. Runs
 without a breakdown and website runs keep their previous layout.
+
+## Job board query targeting and provider resilience (third quality round)
+
+**Query.** Before: branch and keywords were one search term, so `Onderwijs` + keyword `zuid-holland`
+became the job board query `Onderwijs zuid-holland`; Indeed then returned jobs that merely lie in
+Zuid-Holland (50 candidates, 46 rejected by relevance). Now the form has three inputs and the job
+boards get them as separate parameters:
+
+| Input | Goes to |
+|---|---|
+| Branche + Extra trefwoorden | `searchTerm` (`Onderwijs`, `Onderwijs voortgezet onderwijs`) |
+| Land + Regio / provincie / plaats | the board's native location parameter |
+
+- Indeed: `location` = the place (`Zuid-Holland`), `country` = `netherlands`; a lone country becomes
+  `location` = `Netherlands`.
+- LinkedIn has no country parameter, so its location text carries both, in English:
+  `Zuid-Holland, Netherlands`.
+- A keyword that only repeats the location (`zuid-holland`, also `Zuid Holland`, `Den Haag`) is
+  removed from the content term; exact match only, no place database, no classification.
+- Runs that only have the old single `region` keep working: a lone country name is the country,
+  anything else stays the place. The Web Search (Brave) query gets the same deduplicated keywords.
+- Measured locally with the same ts-jobspy: `Onderwijs` in `Zuid-Holland` gives Indeed mostly
+  education vacancies (schools, Lucas Onderwijs, Driestar, Stichting BOOR), where
+  `Onderwijs zuid-holland` gave mostly construction and care.
+
+**LinkedIn timeout, root cause.** The abort at ~9.5 s came from our provider wrapper, not from
+ts-jobspy or the API: it split the provider budget (19.5 s) in two ("sites run one after the
+other"), but both sites run in parallel, so each got 9.5 s. ts-jobspy enforces that value with its
+own AbortController and returns the partial results. Other layers: a fixed 10 s per LinkedIn page
+request (ts-jobspy), our outer provider wait (20 s), the run limit (240 s). LinkedIn pages hold 10
+results with a random 3-7 s pause between pages: 30 results took ~12 s locally, so 50 cannot fit
+in one provider budget.
+
+**Now.** Each site gets the whole provider budget. Each site has a capacity
+(`JOB_BOARD_SITE_PROFILES`: Indeed 100, LinkedIn 30 results) so a request never asks for more than
+fits in one run. The outer wait is only a safety net (budget + 4 s); every site enforces its own
+timeout and guard, so one site timing out never discards another's results.
+
+**Retry and rate limits.** One retry, only for a `timeout`/`network` failure with nothing returned
+and at least 5 s of budget left. A 429 is `rate_limited` and never retried. ts-jobspy does not
+expose response headers, so a `Retry-After` value is not available for LinkedIn; when a source does
+provide one it is still kept.
+
+**Provider budget.** Each board is asked for the target plus 30% (`ceil(target × 1.3)`, at least the
+tier minimum, never above the run's candidate limit), then capped to its own capacity: target 50
+gives Indeed 65 and LinkedIn 30. `requestedCandidates` and `returnedCandidates` are reported per
+provider, next to the exact `searchTerm`, `location`, `country`, `resultsWanted` and `timeoutMs`
+(under "Technische details"; no headers or secrets).
+
+**Relevance** is unchanged from 8830e5f. The borderline "Dyslexiebehandelaar" case (6 mentions in
+874 words, 0.69% against the 0.7% threshold) has a regression test so it can be followed.
+
+Limits: LinkedIn still returns at most about 30 results per run and can still be rate limited from
+the shared Cloud Run address; there is no proxy rotation and no anti-bot handling. Whether a
+keyword is geographic is only known for an exact match with the location that was entered.

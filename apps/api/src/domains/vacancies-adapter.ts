@@ -33,7 +33,7 @@ import {
   extractVacancy, extractVacancyWithDiagnostic, vacanciesCrawlerConfig, vacancyCompletenessScore, findVacancyDuplicates,
   buildBranchSearchQuery, buildJobBoardSearchTerm, createTsJobSpySourceProvider, scoreVacancyRelevance, isWithinPostedWindow,
   isSearchBreadth, DEFAULT_SEARCH_BREADTH, SEARCH_BREADTH_LIMITS,
-  summarizeSources, sourceFailure,
+  summarizeSources, sourceFailure, resolveSearchLocation, removeLocationKeywords,
   type VacancyFacts, type VacancySourceProvider, type VacancySourceCandidate, type VacancySourceMeta, type SearchBreadth,
   type VacancyPageDiagnostic,
 } from '@discovery-platform/domain-vacancies';
@@ -62,6 +62,12 @@ const BRANCH_SEARCH_LANGUAGE = 'nl';
  * exactly like any other provider failure: isolated, reported in stats.sources, and never allowed
  * to block the other source from still contributing (see runBranchDiscovery's own per-source
  * try/catch). Never used to abort real in-flight work, only to stop *waiting* on it. */
+/** Asked per job board: the target plus 30%, so relevance filtering and de-duplication have room. */
+const OVERFETCH_FACTOR = 1.3;
+/** How much longer than a provider's own budget the outer wait may last (one grace period inside
+ * the provider). */
+const PROVIDER_TIMEOUT_MARGIN_MS = 4_000;
+
 function withTimeout<T>(fn: () => Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs);
@@ -429,12 +435,22 @@ async function runBranchDiscovery(
   const remainingCandidateBudget = () => Math.max(0, config.maxCandidates - totalCandidatesUsed);
   // Request enough candidates to plausibly satisfy the target, never fewer than the breadth
   // tier's own sensible minimum, and never more than the overall candidate budget allows.
-  const perProviderRequestSize = Math.max(1, Math.min(config.maxCandidates, Math.max(limits.maxCandidatesPerProvider, config.targetRecords)));
+  // A little more than the target, so relevance filtering and de-duplication have room, but never
+  // the whole target again per provider. Each job board additionally caps this to what it can
+  // deliver in one run (see JOB_BOARD_SITE_PROFILES); the outcome is reported per provider as
+  // requestedCandidates / returnedCandidates.
+  const perProviderRequestSize = Math.max(1, Math.min(config.maxCandidates, Math.max(limits.maxCandidatesPerProvider, Math.ceil(config.targetRecords * OVERFETCH_FACTOR))));
 
   // Both queries preserve user branch and keywords. Web Search also receives the region;
   // job boards receive it as a separate location/country parameter. No hidden expansion.
-  const webSearchQuery = buildBranchSearchQuery({ branch: input.branch, region: input.region, keywords: input.keywords });
-  const jobBoardSearchTerm = buildJobBoardSearchTerm({ branch: input.branch, keywords: input.keywords });
+  // Geography and content are separate: the job boards get the branch and the user's own content
+  // keywords as search term and the place/country as their native location parameters. A keyword
+  // that merely repeats the location is dropped from the content term (exact match only).
+  const location = resolveSearchLocation({ country: input.country, region: input.region });
+  const contentKeywords = removeLocationKeywords(input.keywords, [location.place, location.countryLabel, input.country, input.region]);
+  const webSearchRegion = [location.place, input.country ?? (location.place ? null : input.region)].filter(Boolean).join(' ') || null;
+  const webSearchQuery = buildBranchSearchQuery({ branch: input.branch, region: webSearchRegion, keywords: contentKeywords });
+  const jobBoardSearchTerm = buildJobBoardSearchTerm({ branch: input.branch, keywords: contentKeywords });
   const sources: VacancySourceMeta[] = [];
   const freshFacts: VacancyFacts[] = [];
   // Per-provider funnel bookkeeping for stats.breakdown (see run-breakdown.ts).
@@ -475,10 +491,12 @@ async function runBranchDiscovery(
     try {
       const jobBoard = overrides.jobBoardProvider ?? createTsJobSpySourceProvider({ sites: jobBoardSites });
       const jobBoardResult = await withTimeout(
-        () => jobBoard.findCandidates({ query: jobBoardSearchTerm, location: input.region, resultsWanted: perProviderRequestSize,
+        () => jobBoard.findCandidates({ query: jobBoardSearchTerm, location: location.place, country: location.country ?? location.countryLabel, resultsWanted: perProviderRequestSize,
           hoursOld: filters.postedWithinDays ? filters.postedWithinDays * 24 : undefined,
           timeoutMs: Math.min(limits.providerTimeoutMs - 500, config.maxDurationMs - (Date.now() - runStart) - 500) }),
-        Math.min(limits.providerTimeoutMs, config.maxDurationMs - (Date.now() - runStart)),
+        // Safety net only: every site enforces its own timeout inside the provider (see
+        // jobspy-source.ts), so this must not fire before they do and discard both results.
+        Math.min(limits.providerTimeoutMs + PROVIDER_TIMEOUT_MARGIN_MS, config.maxDurationMs - (Date.now() - runStart)),
       );
       sources.push(...jobBoardResult.meta);
       candidatesFound += jobBoardResult.candidates.length;
@@ -545,6 +563,8 @@ async function runBranchDiscovery(
       sources.push({
         provider: 'brave', site: 'brave', status: candidates.length === 0 ? 'empty' : 'ok',
         candidates: candidates.length, durationMs: Date.now() - start, error: null,
+        query: { searchTerm: webSearchQuery, location: null, country: null, resultsWanted: searchCap, timeoutMs: limits.providerTimeoutMs },
+        requestedCandidates: searchCap, returnedCandidates: candidates.length,
       });
     } catch (error) {
       const failure = sourceFailure(error);
@@ -577,7 +597,7 @@ async function runBranchDiscovery(
     perSite, freshFacts, factSite, relevant: relevantSet, outcomes: built.outcomes, stored: storedFacts,
     reseenRecords: records.filter(record => record.existingRecordId).length,
   });
-  const relevanceQuery = { branch: input.branch, keywords: input.keywords, region: input.region };
+  const relevanceQuery = { branch: input.branch, keywords: input.keywords, region: location.place ?? input.region };
   for (const record of [...records, ...built.observedRecords]) record.classification = { ...record.classification, relevance: scoreVacancyRelevance(record.domainData as unknown as VacancyFacts, relevanceQuery) };
   for (const site of ['indeed', 'linkedin', 'brave']) {
     if (sources.some(source => source.site === site)) continue;
@@ -605,6 +625,8 @@ async function runBranchDiscovery(
       jobBoardSearchTerm,
       branch: input.branch,
       region: input.region,
+      country: input.country ?? location.countryLabel,
+      searchLocation: { country: location.country, countryLabel: location.countryLabel, place: location.place },
       keywords: input.keywords,
       sources,
       candidatesFound,

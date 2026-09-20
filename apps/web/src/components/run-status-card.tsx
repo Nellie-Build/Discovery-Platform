@@ -34,6 +34,8 @@ function stopReasonLabel(stopReason: unknown): string | null {
   return typeof stopReason === 'string' ? STOP_REASON_LABELS[stopReason] ?? stopReason : null;
 }
 
+interface SourceQueryInfo { searchTerm: string; location: string | null; country: string | null; resultsWanted: number; timeoutMs: number | null }
+
 interface SourceMeta {
   provider: string;
   site: string;
@@ -42,6 +44,9 @@ interface SourceMeta {
   errorType?: string;
   candidates: number;
   error: string | null;
+  query?: SourceQueryInfo;
+  requestedCandidates?: number;
+  returnedCandidates?: number;
 }
 
 const SOURCE_LABELS: Record<string, string> = { indeed: 'Indeed', linkedin: 'LinkedIn', brave: 'Web Search' };
@@ -157,6 +162,31 @@ function sourceStatusSummary(sources: SourceMeta[]): string | null {
   return failed.length === used.length && !used.some(source => source.status === 'partial') ? `Mislukt — ${detail}` : `Gedeeltelijk — ${detail}`;
 }
 
+/** What every source was actually asked (search term, location, country, how many candidates were
+ * requested and returned) — falls back to the older single search-term-per-source map. */
+function ProviderQueries({ sources, legacyQueries }: { sources: SourceMeta[]; legacyQueries: Record<string, string> }) {
+  const withQuery = sources.filter(source => source.query);
+  if (withQuery.length === 0) {
+    return <dl className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-3">{Object.entries(legacyQueries).map(([site, query]) => <Field key={site} label={`Zoekopdracht ${sourceLabel(site)}`} value={query} />)}</dl>;
+  }
+  return (
+    <div className="mt-4 grid gap-3 sm:grid-cols-2" data-testid="provider-queries">
+      {withQuery.map(source => (
+        <div key={`${source.provider}-${source.site}`} className="rounded-lg border border-slate-100 p-3">
+          <p className="mb-1 text-sm font-semibold">{sourceLabel(source.site)}</p>
+          <dl className="grid grid-cols-2 gap-2 text-xs">
+            <Field label="Zoekterm" value={source.query?.searchTerm} />
+            <Field label="Locatie" value={source.query?.location ?? 'Geen'} />
+            <Field label="Land" value={source.query?.country ?? 'Geen'} />
+            <Field label="Gevraagd / ontvangen" value={`${source.requestedCandidates ?? source.query?.resultsWanted ?? '—'} / ${source.returnedCandidates ?? source.candidates}`} />
+            <Field label="Tijdslimiet" value={typeof source.query?.timeoutMs === 'number' ? formatSeconds(source.query.timeoutMs / 1000) : null} />
+          </dl>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
@@ -171,7 +201,7 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
  * duplicates), or the error message when it failed. */
 export function RunStatusCard({ run }: { run: DiscoveryRun }) {
   const stats = run.stats ?? {};
-  const criteria = (stats.criteria ?? {}) as { mode?: string; branch?: string; keywords?: string; region?: string; sourceUrl?: string; filters?: { postedWithinDays?: number; sources?: string[] }; runConfig?: { targetRecords?: number } };
+  const criteria = (stats.criteria ?? {}) as { mode?: string; branch?: string; keywords?: string; country?: string; region?: string; sourceUrl?: string; filters?: { postedWithinDays?: number; sources?: string[] }; runConfig?: { targetRecords?: number } };
   const duration = typeof stats.durationMs === 'number' ? formatSeconds(stats.durationMs / 1000) : formatDuration(run.started_at, run.completed_at);
   const isBranchSearch = stats.searchMode === 'branch';
   const compactBranch = isBranchSearch && isBreakdown(stats.breakdown);
@@ -195,7 +225,8 @@ export function RunStatusCard({ run }: { run: DiscoveryRun }) {
             {isBranchSearch || criteria.mode === 'branch' ? <>
               <Field label="Branche" value={criteria.branch ?? (typeof stats.branch === 'string' ? stats.branch : null)} />
               <Field label="Keywords" value={criteria.keywords ?? (typeof stats.keywords === 'string' ? stats.keywords : 'Geen')} />
-              <Field label="Regio" value={criteria.region ?? (typeof stats.region === 'string' ? stats.region : 'Niet opgegeven')} />
+              {(criteria.country ?? (typeof stats.country === 'string' ? stats.country : null)) && <Field label="Land" value={criteria.country ?? String(stats.country)} />}
+              <Field label={criteria.country ? 'Regio / plaats' : 'Regio'} value={criteria.region ?? (typeof stats.region === 'string' ? stats.region : 'Niet opgegeven')} />
               <Field label="Gekozen bronnen" value={criteria.filters?.sources?.join(', ') || (criteria.filters?.sources ? 'Geen' : 'Volgens zoekmodus')} />
             </> : <Field label="Website URL" value={criteria.sourceUrl ?? 'Niet vastgelegd voor deze oudere run'} />}
             <Field label="Date filter" value={criteria.filters?.postedWithinDays ? `Laatste ${criteria.filters.postedWithinDays} dagen` : stats.criteria ? 'Alle datums' : 'Niet vastgelegd'} />
@@ -258,10 +289,8 @@ export function RunStatusCard({ run }: { run: DiscoveryRun }) {
               <Field label="Budget" value={stats.budgetSource === 'adaptive' ? 'Automatisch' : stats.budgetSource === 'advanced' ? 'Geavanceerd' : null} />
               <Field label="Max kandidaten" value={typeof stats.maxCandidates === 'number' ? stats.maxCandidates : null} />
               <Field label="Max duur (ms)" value={typeof stats.maxDurationMs === 'number' ? stats.maxDurationMs : null} />
-              {Object.entries((stats.providerQueries ?? {}) as Record<string, string>).map(([site, query]) => (
-                <Field key={site} label={`Zoekopdracht ${sourceLabel(site)}`} value={query} />
-              ))}
             </dl>
+            <ProviderQueries sources={Array.isArray(stats.sources) ? stats.sources as SourceMeta[] : []} legacyQueries={(stats.providerQueries ?? {}) as Record<string, string>} />
           </details>
         )}
         {typeof stats.budgetSource === 'string' && !compactBranch && (

@@ -171,6 +171,7 @@ export function StartDiscoveryForm({ projectId, onStarted }: { projectId: string
   const [mode, setMode] = useState<SearchMode>('website');
   const [sourceUrl, setSourceUrl] = useState('');
   const [branch, setBranch] = useState('');
+  const [country, setCountry] = useState('Nederland');
   const [region, setRegion] = useState('');
   const [keywords, setKeywords] = useState('');
   const [searchMode, setSearchMode] = useState<SearchModeOption>('standard');
@@ -233,6 +234,7 @@ export function StartDiscoveryForm({ projectId, onStarted }: { projectId: string
         ? await api.runs.start(projectId, sourceUrl, { runConfig, filters })
         : await api.runs.startBranchSearch(projectId, {
           branch,
+          ...(country.trim() ? { country: country.trim() } : {}),
           ...(region.trim() ? { region: region.trim() } : {}),
           ...(keywords.trim() ? { keywords: keywords.trim() } : {}),
           runConfig, filters,
@@ -263,19 +265,26 @@ export function StartDiscoveryForm({ projectId, onStarted }: { projectId: string
               />
             </div>
           ) : (
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div>
-                <Label htmlFor="branch">Branche</Label>
-                <Input id="branch" required placeholder="Security" value={branch} onChange={e => setBranch(e.target.value)} />
+            <div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <Label htmlFor="branch">Branche</Label>
+                  <Input id="branch" required placeholder="Security" value={branch} onChange={e => setBranch(e.target.value)} />
+                </div>
+                <div>
+                  <Label htmlFor="country">Land</Label>
+                  <Input id="country" placeholder="Nederland" value={country} onChange={e => setCountry(e.target.value)} />
+                </div>
+                <div>
+                  <Label htmlFor="region">Regio / provincie / plaats</Label>
+                  <Input id="region" placeholder="Zuid-Holland" value={region} onChange={e => setRegion(e.target.value)} />
+                </div>
+                <div>
+                  <Label htmlFor="keywords">Extra trefwoorden</Label>
+                  <Input id="keywords" placeholder="beveiliger security officer" value={keywords} onChange={e => setKeywords(e.target.value)} />
+                </div>
               </div>
-              <div>
-                <Label htmlFor="region">Regio</Label>
-                <Input id="region" placeholder="Nederland" value={region} onChange={e => setRegion(e.target.value)} />
-              </div>
-              <div>
-                <Label htmlFor="keywords">Extra trefwoorden</Label>
-                <Input id="keywords" placeholder="beveiliger security officer" value={keywords} onChange={e => setKeywords(e.target.value)} />
-              </div>
+              <p className="mt-2 text-xs text-slate-500">Gebruik regio/plaats voor geografische filtering. Gebruik trefwoorden voor functie, specialisme of vakgebied.</p>
             </div>
           )}
 

@@ -17,6 +17,10 @@ export interface VacancySourceQuery {
   resultsWanted?: number;
   /** Only postings within the last N hours, if the source supports it. */
   hoursOld?: number | null;
+  /** Country of the search (a recognized country name or a ts-jobspy country code). When set,
+   * `location` is only the region/place; when absent `location` is the legacy free-text region
+   * (which may itself be a country). */
+  country?: string | null;
   remote?: boolean | null;
 }
 
@@ -54,6 +58,19 @@ export interface VacancySourceMeta {
   candidates: number;
   durationMs: number;
   error: string | null;
+  /** What this origin was actually asked (never secrets or headers). */
+  query?: SourceQueryDiagnostics;
+  /** How many candidates were asked for and how many came back. */
+  requestedCandidates?: number;
+  returnedCandidates?: number;
+}
+
+export interface SourceQueryDiagnostics {
+  searchTerm: string;
+  location: string | null;
+  country: string | null;
+  resultsWanted: number;
+  timeoutMs: number | null;
 }
 
 export interface VacancySourceResult {

@@ -84,3 +84,44 @@ export function normalizeJobBoardLocation(region: string | null | undefined): No
   // only; never guessed to belong to any particular country.
   return { location: trimmed, country: null };
 }
+
+/** The user's search location, split the way job boards want it. `country` is the explicit
+ * ts-jobspy country (lowercase, only when the input was itself a recognizable country name);
+ * `countryLabel` is that country's readable English name (or the free text the user typed when it
+ * is not a recognized country); `place` is the optional region, province or city. */
+export interface ResolvedSearchLocation {
+  country: string | null;
+  countryLabel: string | null;
+  place: string | null;
+}
+
+/**
+ * Splits "Land" and "Regio / plaats" apart. Backwards compatible with runs that only had one
+ * free-text `region`: a lone region that is itself a country name ("Nederland") is the country;
+ * anything else stays the place (never guessed to belong to a country, see this file's header).
+ * A place that only repeats the country ("Nederland" twice) is dropped.
+ */
+export function resolveSearchLocation(input: { country?: string | null; region?: string | null }): ResolvedSearchLocation {
+  const countryText = input.country?.trim() || null;
+  const regionText = input.region?.trim() || null;
+  let country: string | null = null;
+  let countryLabel: string | null = null;
+  let place = regionText;
+  if (countryText) {
+    const normalized = normalizeJobBoardLocation(countryText);
+    country = normalized.country;
+    countryLabel = normalized.country ? normalized.location : countryText;
+  } else if (regionText) {
+    const normalized = normalizeJobBoardLocation(regionText);
+    if (normalized.country) { country = normalized.country; countryLabel = normalized.location; place = null; }
+  }
+  if (place && countryLabel && normalizeJobBoardLocation(place).country === country && country) place = null;
+  return { country, countryLabel, place };
+}
+
+/** The `location` text one job board gets. Indeed picks its country domain from `country` and only
+ * needs the place; LinkedIn has no country parameter, so its location text carries both. */
+export function jobBoardLocationFor(site: string, location: ResolvedSearchLocation): string | null {
+  if (site === 'linkedin') return [location.place, location.countryLabel].filter(Boolean).join(', ') || null;
+  return location.place ?? location.countryLabel;
+}

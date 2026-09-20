@@ -56,6 +56,9 @@ export type DiscoveryRunInput =
     }
   | {
       mode: 'branch'; branch: string; region: string | null; keywords: string | null;
+      /** The search country ("Land"). Optional for backwards compatibility: older runs only had one
+       * free-text `region`, which may itself be a country. */
+      country?: string | null;
       runConfig: DiscoveryRunConfig;
       /** Opaque to apps/api — passed straight through to the domain adapter. For vacancies today:
        * `{ postedWithinDays?: number; sources?: string[] }`. */

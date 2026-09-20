@@ -183,4 +183,36 @@ describe('RunStatusCard', () => {
       expect(screen.getByText('Verwerkt')).toBeInTheDocument();
     });
   });
+
+  describe('search location and provider queries', () => {
+    const bucket = { discovered: 2, notProcessed: 0, noUsableData: 0, rejectedByRelevance: 0, relevant: 2, rejectedByDate: 0,
+      duplicatesInRun: 0, alreadyKnown: 0, cutByTarget: 0, newRecords: 2, multiRecordExtra: 0 };
+    const query = (location: string | null) => ({ searchTerm: 'Onderwijs', location, country: 'netherlands', resultsWanted: 30, timeoutMs: 19500 });
+
+    it('shows Land and Regio / plaats separately for a run with a country', () => {
+      render(<RunStatusCard run={run({ stats: { searchMode: 'branch', criteria: { mode: 'branch', branch: 'Onderwijs', country: 'Nederland', region: 'Zuid-Holland' } } })} />);
+      expect(screen.getByText('Land')?.closest('div')?.textContent).toBe('LandNederland');
+      expect(screen.getByText('Regio / plaats')?.closest('div')?.textContent).toBe('Regio / plaatsZuid-Holland');
+    });
+
+    it('an older run with only a region still shows "Regio"', () => {
+      render(<RunStatusCard run={run({ stats: { searchMode: 'branch', criteria: { mode: 'branch', branch: 'Onderwijs', region: 'Nederland' } } })} />);
+      expect(screen.getByText('Regio')).toBeInTheDocument();
+      expect(screen.queryByText('Land')).not.toBeInTheDocument();
+    });
+
+    it('technical details list what each provider was asked and how many candidates were requested and returned', () => {
+      render(<RunStatusCard run={run({ stats: { searchMode: 'branch', targetRecords: 50, recordsAccepted: 2, breakdown: bucket, stopReason: 'target_reached',
+        sources: [
+          { provider: 'ts-jobspy', site: 'indeed', status: 'ok', candidates: 2, error: null, query: query('Zuid-Holland'), requestedCandidates: 65, returnedCandidates: 2 },
+          { provider: 'ts-jobspy', site: 'linkedin', status: 'partial', errorType: 'timeout', candidates: 19, error: 'x', query: query('Zuid-Holland, Netherlands'), requestedCandidates: 30, returnedCandidates: 19 },
+        ] } })} />);
+      const queries = screen.getByTestId('provider-queries');
+      expect(queries).toHaveTextContent('IndeedZoektermOnderwijsLocatieZuid-HollandLandnetherlandsGevraagd / ontvangen65 / 2');
+      expect(queries).toHaveTextContent('LinkedIn');
+      expect(queries).toHaveTextContent('Zuid-Holland, Netherlands');
+      expect(queries).toHaveTextContent('30 / 19');
+      expect(queries).toHaveTextContent('Tijdslimiet20s');
+    });
+  });
 });

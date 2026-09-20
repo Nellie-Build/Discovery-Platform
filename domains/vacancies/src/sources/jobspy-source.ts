@@ -12,7 +12,7 @@
  */
 import { scrapeJobs, type ScrapeOptions, type Job, type SiteMeta } from 'ts-jobspy';
 import type { VacancyFacts } from '../extract-vacancy.js';
-import { normalizeJobBoardLocation } from './location.js';
+import { resolveSearchLocation, jobBoardLocationFor } from './location.js';
 import { sourceFailure } from './outcome.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { VacancySourceProvider, VacancySourceQuery, VacancySourceCandidate, VacancySourceMeta, VacancySourceResult } from './types.js';
@@ -96,6 +96,28 @@ export interface TsJobSpySourceProviderOptions {
   scrapeJobsImpl?: typeof scrapeJobs;
 }
 
+/**
+ * What each site can deliver inside one provider timeout, measured against the live sites:
+ * Indeed answers in one request (50 results in ~0.4 s), LinkedIn returns 10 results per page with a
+ * random 3-7 s pause between pages (30 results took ~12 s), so asking LinkedIn for more than ~30 in
+ * one run only ends in a timeout with partial results. Requests above a site's capacity are capped
+ * to it; the cap is reported as `requestedCandidates`.
+ */
+export const JOB_BOARD_SITE_PROFILES: Record<string, { maxResults: number }> = {
+  indeed: { maxResults: 100 },
+  linkedin: { maxResults: 30 },
+};
+const DEFAULT_SITE_MAX_RESULTS = 30;
+/** ts-jobspy enforces `timeoutMs` itself (and returns partial results); this guard only makes sure
+ * one site can never keep the whole provider waiting past that. */
+const GUARD_GRACE_MS = 3_000;
+/** A failed first attempt is only retried when this much of the provider budget is still left. */
+const MIN_RETRY_BUDGET_MS = 5_000;
+
+function guardTimeout(ms: number): Promise<never> {
+  return new Promise((_resolve, reject) => setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms).unref?.());
+}
+
 export function createTsJobSpySourceProvider(options: TsJobSpySourceProviderOptions = {}): VacancySourceProvider {
   const scrape = options.scrapeJobsImpl ?? scrapeJobs;
   const configuredSites = options.sites?.length ? options.sites : JOB_BOARD_SITES;
@@ -103,34 +125,40 @@ export function createTsJobSpySourceProvider(options: TsJobSpySourceProviderOpti
   return {
     id: 'ts-jobspy',
     async findCandidates(query: VacancySourceQuery): Promise<VacancySourceResult> {
-      // `query.location` here is the user's raw "Regio" text (e.g. "Nederland", "Zuid-Holland",
-      // "Den Haag") — normalized into ts-jobspy's own two distinct parameters. A recognized
-      // country name (e.g. "Nederland" -> "netherlands") sets `country` explicitly, so Indeed
-      // searches the right country domain instead of ts-jobspy's own "usa" default; LinkedIn
-      // ignores `country` entirely and is given the same location as readable English text
-      // instead of the raw Dutch word, since LinkedIn's own search takes `location` as a plain
-      // string with no geo-resolution of its own (see this file's own header comment). A bare
-      // region/city with no recognizable country (e.g. "Den Haag" alone) still leaves `country`
-      // unset — ts-jobspy then falls back to its own "usa" default for Indeed; this is a known,
-      // accepted limit of a single free-text "Regio" field with no separate country input, never
-      // "fixed" by guessing which country a city belongs to.
-      const { location, country } = normalizeJobBoardLocation(query.location);
+      // `query.location` is the place ("Zuid-Holland") when `query.country` is given; without a
+      // country it is the legacy free-text "Regio", which may itself be a country name. Either
+      // way the content search term and the location are separate parameters: a place never ends
+      // up in `searchTerm`. Indeed selects its country domain from `country` and only needs the
+      // place; LinkedIn has no country parameter, so its location text carries both, in readable
+      // English ("Zuid-Holland, Netherlands").
+      const resolved = resolveSearchLocation({ country: query.country, region: query.location });
+      const budgetMs = query.timeoutMs ?? 18_000;
+      const providerStart = Date.now();
+      // Sites run in parallel and each gets the whole provider budget (it used to be halved, which
+      // cut LinkedIn off at ~9.5 s). One site failing or timing out never touches another's result.
       const outcomes = await Promise.all(sites.map(async site => {
         const started = Date.now();
-        const timeoutMs = Math.max(500, Math.floor(((query.timeoutMs ?? 18_000) - 500) / 2));
+        const requested = Math.max(1, Math.min(query.resultsWanted ?? options.resultsWanted ?? DEFAULT_RESULTS_WANTED,
+          JOB_BOARD_SITE_PROFILES[site]?.maxResults ?? DEFAULT_SITE_MAX_RESULTS));
+        const siteLocation = jobBoardLocationFor(site, resolved);
         for (let attempt = 1; ; attempt++) {
+          const timeoutMs = Math.max(500, budgetMs - (Date.now() - providerStart) - 500);
+          const diagnostics = { searchTerm: query.query, location: siteLocation, country: resolved.country, resultsWanted: requested, timeoutMs };
           let candidates: VacancySourceCandidate[] = [];
           let meta: VacancySourceMeta;
           try {
-            const result = await scrape({
-              sites: [site], timeoutMs,
-              searchTerm: query.query,
-              location: location ?? undefined,
-              country: country ?? undefined,
-              resultsWanted: query.resultsWanted ?? options.resultsWanted ?? DEFAULT_RESULTS_WANTED,
-              hoursOld: query.hoursOld ?? undefined,
-              isRemote: query.remote ?? undefined,
-            });
+            const result = await Promise.race([
+              scrape({
+                sites: [site], timeoutMs,
+                searchTerm: query.query,
+                location: siteLocation ?? undefined,
+                country: resolved.country ?? undefined,
+                resultsWanted: requested,
+                hoursOld: query.hoursOld ?? undefined,
+                isRemote: query.remote ?? undefined,
+              }),
+              guardTimeout(timeoutMs + GUARD_GRACE_MS),
+            ]);
             candidates = result.jobs.filter(job => job.site === site).map(job => ({ ...mapJobToCandidate(job), site }));
             const reported = result.meta.sites.find(item => item.site === site);
             meta = reported ? mapSiteMeta(reported) : { provider: 'ts-jobspy', site, status: 'unavailable', candidates: candidates.length, durationMs: Date.now() - started, error: 'Bron rapporteerde geen status.', errorType: 'provider_error' };
@@ -138,10 +166,13 @@ export function createTsJobSpySourceProvider(options: TsJobSpySourceProviderOpti
             const failure = sourceFailure(error);
             meta = { provider: 'ts-jobspy', site, status: failure.errorType === 'rate_limited' ? 'rate_limited' : 'error', candidates: 0, durationMs: Date.now() - started, ...failure };
           }
+          // One retry, only for a transient failure with nothing returned and enough budget left.
+          // Never for a 429 (rate_limited); a Retry-After hint is kept when the source gives one.
+          const remaining = budgetMs - (Date.now() - providerStart);
           if (attempt === 1 && candidates.length === 0 && ['timeout', 'network'].includes(meta.errorType ?? '')
-            && Date.now() - started + timeoutMs + 250 <= (query.timeoutMs ?? 18_000)) { await sleep(250); continue; }
-          // Never retry 429; any Retry-After is recorded and this source stops for the run.
-          return { candidates, meta: { ...meta, attempts: attempt, durationMs: Date.now() - started } };
+            && remaining >= MIN_RETRY_BUDGET_MS) { await sleep(250); continue; }
+          return { candidates, meta: { ...meta, attempts: attempt, durationMs: Date.now() - started, query: diagnostics,
+            requestedCandidates: requested, returnedCandidates: candidates.length } };
         }
       }));
       return { candidates: outcomes.flatMap(result => result.candidates), meta: outcomes.map(result => result.meta) };

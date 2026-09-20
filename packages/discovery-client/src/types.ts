@@ -81,9 +81,12 @@ export interface VacancySearchFilters {
 }
 
 /** Body for `runs.startBranchSearch` — the "search by branch" alternative to `runs.start`'s
- * plain `sourceUrl`. `region` and `keywords` are both optional. */
+ * plain `sourceUrl`. `country`, `region` and `keywords` are all optional. `country` is the
+ * search country ("Nederland"), `region` a region, province or place inside it ("Zuid-Holland") —
+ * geography goes there, not into `keywords`. */
 export interface BranchSearchInput {
   branch: string;
+  country?: string;
   region?: string;
   keywords?: string;
   runConfig?: DiscoveryRunConfig;
