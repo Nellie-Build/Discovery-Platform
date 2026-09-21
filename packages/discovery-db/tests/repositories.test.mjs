@@ -189,3 +189,32 @@ test('WorkspaceMembersRepository.isMember reflects membership exactly, and listW
   assert.equal(listA[0].role, 'owner');
   await db.close();
 });
+
+test('updateRecordFacts replaces a record\'s facts inside its own project only, and addSourcesIfMissing never duplicates provenance', async () => {
+  const db = await freshDb();
+  const workspace = await new WorkspacesRepository(db).createWorkspace('W');
+  const projects = new ProjectsRepository(db);
+  const mine = await projects.createProject({ workspaceId: workspace.id, name: 'A', domain: 'tenders' });
+  const other = await projects.createProject({ workspaceId: workspace.id, name: 'B', domain: 'tenders' });
+  const records = new DiscoveryRecordsRepository(db);
+  const created = await records.createRecordWithDetails({
+    projectId: mine.id, domain: 'tenders', displayName: 'Old', domainData: { n: 1 }, classification: { a: 1 }, score: 10,
+    sources: [{ sourceType: 'api', sourceUrl: 'https://example.test/1', sourceData: { p: 1 } }],
+  });
+  const updated = await records.updateRecordFacts(created.id, mine.id, { displayName: 'New', domainData: { n: 2 }, classification: { a: 2 }, score: 20 });
+  assert.equal(updated.display_name, 'New');
+  assert.deepEqual(updated.domain_data, { n: 2 });
+  assert.equal(updated.score, 20);
+  assert.ok(new Date(updated.updated_at) >= new Date(created.updated_at));
+  assert.equal(await records.updateRecordFacts(created.id, other.id, { displayName: 'Hijack', domainData: {} }), null, 'another project cannot update it');
+  assert.equal((await records.getRecordById(created.id)).display_name, 'New');
+
+  assert.equal(await records.addSourcesIfMissing(created.id, [
+    { sourceType: 'api', sourceUrl: 'https://example.test/1' },
+    { sourceType: 'api', sourceUrl: 'https://example.test/2', sourceData: { p: 2 } },
+    { sourceType: 'api', sourceUrl: 'https://example.test/2' },
+  ]), 1);
+  assert.equal(await records.addSourcesIfMissing(created.id, [{ sourceType: 'api', sourceUrl: 'https://example.test/2' }]), 0);
+  assert.deepEqual((await records.getRecordById(created.id)).sources.map(s => s.source_url).sort(), ['https://example.test/1', 'https://example.test/2']);
+  await db.close();
+});

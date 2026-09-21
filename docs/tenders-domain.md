@@ -27,7 +27,18 @@ Public endpoints, no credentials (data is CC0; the JSON shape is not an official
 * Tender identity = `sourceSystem` + `kenmerk` (`tenderned|567798`); a publication without a kenmerk is its own tender (`publicatie-<id>`).
 * Publication identity = `publicatieId`.
 * Several publications of one tender (announcement, correction, ...) are **one record**: each field takes the value of the latest publication that has one, `publicationId`/`noticeType`/`publicationDate` describe the latest publication, `publications[]` lists all of them. Corrections and awards are not separate records.
-* Across runs a stored tender is recognised by its identity and is not created again. Not done yet: appending a later publication to the stored record.
+* Across runs a stored tender is recognised by its identity and never created again. A newer publication of it **updates the stored record** (see below).
+
+## Updating stored tenders
+
+When a run finds publications of a tender that already has a record in the project (same source system + kenmerk):
+
+* the publication is added to `publications[]` (each publication id once) and its provenance row is added to `record_sources`;
+* every field takes the value of the latest publication that has one (`noticeType`, `publicationId`, `publicationDate`, deadline, procedure, CPV/NUTS, description, ...); a later publication without a field keeps the earlier value; on the same publication id the freshly fetched values win; an older publication seen late only fills gaps;
+* nothing is written when the merged facts equal the stored ones, so the same run twice leaves `discovery_records`, `record_sources` and `record_contacts` untouched (including `updated_at`);
+* no second record is ever created for the same tender.
+
+The adapter returns `updatedRecords` (changed) and `observedRecords` (unchanged); the run route stores them and reports `recordsCreated`, `recordsUpdated` and, from the adapter, `duplicatesUnchanged` in the run statistics (`duplicatesAgainstExisting` = updated + unchanged). Updates are scoped to the run's own project, and `DiscoveryRecordsRepository.updateRecordFacts`/`addSourcesIfMissing` do the writes.
 
 ## Not in this phase
 

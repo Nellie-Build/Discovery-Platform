@@ -20,7 +20,11 @@ function fakeFetch(publications, { failAll } = {}) {
     const detail = /\/publicaties\/(\d+)$/.exec(url.pathname);
     if (detail) {
       const p = publications.find(x => x.id === detail[1]);
-      return p ? json({ publicatieId: Number(p.id), kenmerk: p.kenmerk, referentieNummer: `REF-${p.kenmerk}`, cpvCodes: [{ isHoofdOpdracht: true, code: '45000000-7', omschrijving: 'Bouwwerkzaamheden' }], nutsCodes: [{ code: 'NL33', omschrijving: 'Zuid-Holland' }] }) : json({}, 404);
+      return p ? json({
+        publicatieId: Number(p.id), kenmerk: p.kenmerk, referentieNummer: p.reference === undefined ? `REF-${p.kenmerk}` : p.reference,
+        cpvCodes: p.cpv === undefined ? [{ isHoofdOpdracht: true, code: '45000000-7', omschrijving: 'Bouwwerkzaamheden' }] : p.cpv,
+        nutsCodes: p.nuts === undefined ? [{ code: 'NL33', omschrijving: 'Zuid-Holland' }] : p.nuts,
+      }) : json({}, 404);
     }
     const from = url.searchParams.get('publicatieDatumVanaf');
     const to = url.searchParams.get('publicatieDatumTot');
@@ -29,7 +33,8 @@ function fakeFetch(publications, { failAll } = {}) {
     const inRange = publications.filter(p => p.date >= from && p.date <= to);
     const content = inRange.slice(page * size, (page + 1) * size).map(p => ({
       publicatieId: p.id, publicatieDatum: p.date, typePublicatie: { code: p.type, omschrijving: p.typeLabel }, aanbestedingNaam: p.name, opdrachtgeverNaam: p.authority,
-      sluitingsDatum: p.deadline, kenmerk: p.kenmerk, procedure: { code: 'OPE', omschrijving: 'Openbaar' }, typeOpdracht: { code: 'W', omschrijving: 'Werken' },
+      sluitingsDatum: p.deadline, kenmerk: p.kenmerk, opdrachtBeschrijving: p.description,
+      procedure: p.procedure === undefined ? { code: 'OPE', omschrijving: 'Openbaar' } : p.procedure, typeOpdracht: { code: 'W', omschrijving: 'Werken' },
     }));
     const totalPages = Math.ceil(inRange.length / size);
     return json({ content, last: page + 1 >= totalPages, totalPages, number: page, size });
@@ -80,15 +85,28 @@ test('two publications with the same kenmerk become ONE record, listing both pub
   assert.equal(outcome.stats.publicationsMergedIntoOtherPublications, 1);
 });
 
-test('stable dedupe on kenmerk: a stored tender is not created again, even when a new publication of it appears', async () => {
-  const { adapter } = adapterFor([pub(1, 500), pub(9, 500, { type: 'REC' }), pub(3, 501)]);
-  const existing = [{ id: 'rec-1', domainData: { sourceSystem: 'tenderned', tenderIdentity: '500', title: 'old' } }, { id: 'rec-v', domainData: { title: 'a vacancy', company: 'x' } }];
-  const outcome = await adapter.runDiscovery(input({ existingRecords: existing }));
-  assert.deepEqual(outcome.records.map(r => r.domainData.tenderIdentity), ['501']);
-  assert.equal(outcome.observedRecords.length, 1);
-  assert.equal(outcome.observedRecords[0].existingRecordId, 'rec-1');
-  assert.equal(outcome.stats.duplicatesAgainstExisting, 1);
+test('stable dedupe on kenmerk: a stored tender is never created again — a new publication of it updates it, nothing else is touched', async () => {
+  const first = await adapterFor([pub(1, 500), pub(3, 501)]).adapter.runDiscovery(input());
+  const stored = first.records.map((record, index) => ({ id: `rec-${index}`, domainData: record.domainData }));
+  const { adapter } = adapterFor([pub(1, 500), pub(9, 500, { type: 'REC', typeLabel: 'Rectificatie' }), pub(3, 501), pub(4, 502)]);
+  const outcome = await adapter.runDiscovery(input({ existingRecords: [...stored, { id: 'rec-v', domainData: { title: 'a vacancy', company: 'x' } }] }));
+  assert.deepEqual(outcome.records.map(r => r.domainData.tenderIdentity), ['502'], 'only the new tender is created');
+  assert.deepEqual(outcome.updatedRecords.map(r => [r.existingRecordId, r.domainData.publications.map(p => p.publicationId)]), [['rec-0', ['1', '9']]]);
+  assert.deepEqual(outcome.updatedRecords[0].sources.map(s => s.sourceData.publicationId), ['9'], 'provenance only for the new publication');
+  assert.deepEqual(outcome.observedRecords.map(r => r.existingRecordId), ['rec-1']);
+  assert.equal(outcome.stats.duplicatesUnchanged, 1);
+  assert.equal(outcome.stats.duplicatesAgainstExisting, 2);
+  assert.equal(outcome.stats.tendersToUpdate, 1);
   assert.equal(outcome.stats.recordsAccepted, 1);
+});
+
+test('a stored record that is sparse (older shape) is completed by the update, not rejected', async () => {
+  const { adapter } = adapterFor([pub(1, 500)]);
+  const outcome = await adapter.runDiscovery(input({ existingRecords: [{ id: 'old', domainData: { sourceSystem: 'tenderned', tenderIdentity: '500', title: 'old' } }] }));
+  assert.equal(outcome.records.length, 0);
+  assert.equal(outcome.updatedRecords.length, 1);
+  assert.equal(outcome.updatedRecords[0].domainData.title, 'Aanbesteding 500');
+  assert.equal(outcome.updatedRecords[0].domainData.publications.length, 1);
 });
 
 test('the same kenmerk from another source system is a different tender', async () => {
@@ -164,6 +182,8 @@ test('over HTTP: the tenders module is disabled by default; once enabled, one Te
     const again = await request('POST', `/projects/${project.id}/runs`, { body });
     assert.equal(again.body.status, 'succeeded');
     assert.equal(again.body.recordsCreated, 0);
+    assert.equal(again.body.recordsUpdated, 0);
+    assert.equal(again.body.stats.duplicatesUnchanged, 2);
     assert.equal(again.body.stats.duplicatesAgainstExisting, 2);
     assert.equal((await request('GET', `/projects/${project.id}/records`)).body.length, 2);
 
@@ -183,4 +203,216 @@ test('over HTTP: a vacancies project asked for a source run fails the run cleanl
     assert.equal(run.status, 201);
     assert.equal(run.body.status, 'failed');
   } finally { await close(); }
+});
+
+// ─── updates of stored tenders: a new publication of the same kenmerk updates the record, never duplicates it ───
+
+/** A mutable in-memory TenderNed behind a real API app: publications can be added between runs. */
+async function updateApp(initial = []) {
+  const publications = [...initial];
+  const fake = fakeFetch(publications);
+  const adapter = createTendersAdapter({ sources: { tenderned: () => createTenderNedSource({ fetch: fake.fetch, clock: clock(), minIntervalMs: 0, maxRetries: 0 }) } });
+  const app = await startTestApp({ apiKey: 'test-key', domainRegistry: { tenders: adapter } });
+  await app.db.query("UPDATE modules SET enabled = true, status = 'active' WHERE id = 'tenders'");
+  const workspace = (await app.request('POST', '/workspaces', { body: { name: 'W' } })).body;
+  const project = (await app.request('POST', '/projects', { body: { workspaceId: workspace.id, name: 'Tenders', domain: 'tenders' } })).body;
+  const body = { sourceId: 'tenderned', filters: { publishedFrom: '2026-09-19', publishedTo: '2026-09-21' } };
+  return {
+    ...app, publications, project,
+    run: async () => (await app.request('POST', `/projects/${project.id}/runs`, { body })).body,
+    records: async () => (await app.request('GET', `/projects/${project.id}/records`)).body,
+    /** Every row of the record tables, as data: the state a run must leave untouched when nothing changed. */
+    snapshot: async () => JSON.stringify([
+      (await app.db.query('SELECT * FROM discovery_records ORDER BY id')).rows,
+      (await app.db.query('SELECT * FROM record_sources ORDER BY id')).rows,
+      (await app.db.query('SELECT * FROM record_contacts ORDER BY id')).rows,
+    ]),
+  };
+}
+const ids = record => record.domain_data.publications.map(p => p.publicationId);
+
+test('announcement -> correction: the correction is added to publications[] of the same record, and the latest publication describes it', async () => {
+  const t = await updateApp([pub(1, 500, { date: '2026-09-19', description: 'Oorspronkelijke beschrijving.' })]);
+  try {
+    const first = await t.run();
+    assert.equal(first.recordsCreated, 1);
+    assert.equal(first.recordsUpdated, 0);
+    t.publications.push(pub(2, 500, { date: '2026-09-21', type: 'REC', typeLabel: 'Rectificatie', description: 'Gecorrigeerde beschrijving.' }));
+    const second = await t.run();
+    assert.equal(second.status, 'succeeded');
+    assert.equal(second.recordsCreated, 0);
+    assert.equal(second.recordsUpdated, 1);
+    assert.equal(second.stats.recordsUpdated, 1);
+    assert.equal(second.stats.duplicatesUnchanged, 0);
+    const records = await t.records();
+    assert.equal(records.length, 1, 'no second record for the same tender');
+    const [record] = records;
+    assert.deepEqual(ids(record), ['1', '2']);
+    assert.deepEqual(record.domain_data.publications.map(p => p.noticeType), ['AAO', 'REC']);
+    assert.equal(record.domain_data.publicationId, '2');
+    assert.equal(record.domain_data.noticeType, 'REC');
+    assert.equal(record.domain_data.noticeTypeLabel, 'Rectificatie');
+    assert.equal(record.domain_data.publicationDate, '2026-09-21');
+    assert.equal(record.domain_data.description, 'Gecorrigeerde beschrijving.');
+    // The new publication is also recorded as provenance; the record keeps its first source.
+    const { rows } = await t.db.query('SELECT source_url FROM record_sources ORDER BY discovered_at, source_url');
+    assert.equal(rows.length, 2);
+  } finally { await t.close(); }
+});
+
+test('a correction with a changed deadline (and procedure, CPV and NUTS) updates those fields', async () => {
+  const t = await updateApp([pub(1, 500, { date: '2026-09-19', deadline: '2026-11-02T08:00:00' })]);
+  try {
+    await t.run();
+    t.publications.push(pub(2, 500, {
+      date: '2026-09-21', type: 'REC', typeLabel: 'Rectificatie', deadline: '2026-11-16T08:00:00',
+      procedure: { code: 'NOP', omschrijving: 'Niet-openbaar' },
+      cpv: [{ isHoofdOpdracht: true, code: '45100000-8', omschrijving: 'Sloopwerkzaamheden' }], nuts: [{ code: 'NL34', omschrijving: 'Zeeland' }],
+    }));
+    const run = await t.run();
+    assert.equal(run.recordsUpdated, 1);
+    const [record] = await t.records();
+    assert.equal(record.domain_data.submissionDeadline, '2026-11-16T08:00:00');
+    assert.equal(record.domain_data.procedureType, 'Niet-openbaar');
+    assert.deepEqual(record.domain_data.cpvCodes.map(c => c.code), ['45100000']);
+    assert.deepEqual(record.domain_data.nutsCodes.map(n => n.code), ['NL34']);
+    assert.equal(record.domain_data.location, 'Zeeland');
+  } finally { await t.close(); }
+});
+
+test('a later publication that lacks a field the earlier one had keeps the earlier information', async () => {
+  const t = await updateApp([pub(1, 500, { date: '2026-09-19', description: 'Volledige beschrijving.', reference: 'P-500' })]);
+  try {
+    await t.run();
+    t.publications.push(pub(2, 500, { date: '2026-09-21', type: 'REC', typeLabel: 'Rectificatie', deadline: null, description: null, cpv: [], nuts: [], reference: null, procedure: null }));
+    const run = await t.run();
+    assert.equal(run.recordsUpdated, 1);
+    const [record] = await t.records();
+    assert.equal(record.domain_data.noticeType, 'REC', 'what the later publication states is taken over');
+    assert.equal(record.domain_data.submissionDeadline, '2026-11-02T08:00:00');
+    assert.equal(record.domain_data.description, 'Volledige beschrijving.');
+    assert.equal(record.domain_data.referenceNumber, 'P-500');
+    assert.equal(record.domain_data.procedureType, 'Openbaar');
+    assert.equal(record.domain_data.cpvCodes.length, 1);
+    assert.equal(record.domain_data.location, 'Zuid-Holland');
+    assert.deepEqual(ids(record), ['1', '2']);
+  } finally { await t.close(); }
+});
+
+test('the same publication id again: nothing is added twice; a changed value of that same publication is taken over', async () => {
+  const t = await updateApp([pub(1, 500, { date: '2026-09-19', description: 'Eerste tekst.' })]);
+  try {
+    await t.run();
+    const again = await t.run();
+    assert.equal(again.recordsUpdated, 0);
+    assert.equal(again.stats.duplicatesUnchanged, 1);
+    t.publications[0].description = 'Bijgewerkte tekst van dezelfde publicatie.';
+    const changed = await t.run();
+    assert.equal(changed.recordsUpdated, 1);
+    const [record] = await t.records();
+    assert.deepEqual(ids(record), ['1'], 'the publication id is listed once');
+    assert.equal(record.domain_data.description, 'Bijgewerkte tekst van dezelfde publicatie.');
+    const { rows } = await t.db.query('SELECT id FROM record_sources');
+    assert.equal(rows.length, 1, 'no provenance row for a publication that was already known');
+  } finally { await t.close(); }
+});
+
+test('the same publication twice in one run (a page shift while paging) still gives one publication', async () => {
+  const t = await updateApp([pub(1, 500, { date: '2026-09-19' })]);
+  try {
+    t.publications.push({ ...t.publications[0] });
+    const run = await t.run();
+    assert.equal(run.recordsCreated, 1);
+    assert.deepEqual(ids((await t.records())[0]), ['1']);
+  } finally { await t.close(); }
+});
+
+test('an award after the announcement: the same record, now described by the award; the deadline stays', async () => {
+  const t = await updateApp([pub(1, 500, { date: '2026-09-19', description: 'Beschrijving van de opdracht.' })]);
+  try {
+    await t.run();
+    t.publications.push(pub(3, 500, { date: '2026-09-21', type: 'AGO', typeLabel: 'Aankondiging gegunde opdracht', deadline: null, description: null }));
+    const run = await t.run();
+    assert.equal(run.recordsCreated, 0);
+    assert.equal(run.recordsUpdated, 1);
+    const records = await t.records();
+    assert.equal(records.length, 1);
+    const [record] = records;
+    assert.equal(record.domain_data.noticeType, 'AGO');
+    assert.equal(record.domain_data.publicationId, '3');
+    assert.deepEqual(record.domain_data.publications.map(p => p.noticeType), ['AAO', 'AGO']);
+    assert.equal(record.domain_data.submissionDeadline, '2026-11-02T08:00:00');
+    assert.equal(record.domain_data.description, 'Beschrijving van de opdracht.');
+  } finally { await t.close(); }
+});
+
+test('an older publication seen late fills gaps but does not overwrite what a newer publication states', async () => {
+  const t = await updateApp([pub(5, 500, { date: '2026-09-21', type: 'REC', typeLabel: 'Rectificatie', deadline: '2026-11-16T08:00:00', description: null })]);
+  try {
+    await t.run();
+    t.publications.push(pub(2, 500, { date: '2026-09-19', deadline: '2026-11-02T08:00:00', description: 'Tekst van de aankondiging.' }));
+    const run = await t.run();
+    assert.equal(run.recordsUpdated, 1);
+    const [record] = await t.records();
+    assert.deepEqual(ids(record), ['2', '5']);
+    assert.equal(record.domain_data.publicationId, '5');
+    assert.equal(record.domain_data.noticeType, 'REC');
+    assert.equal(record.domain_data.submissionDeadline, '2026-11-16T08:00:00');
+    assert.equal(record.domain_data.description, 'Tekst van de aankondiging.');
+  } finally { await t.close(); }
+});
+
+test('idempotence: the same run twice leaves the record tables exactly as they were the second time — also after an update', async () => {
+  const t = await updateApp([pub(1, 500, { date: '2026-09-19' }), pub(2, 501, { date: '2026-09-20' })]);
+  try {
+    const first = await t.run();
+    assert.equal(first.recordsCreated, 2);
+    const afterFirst = await t.snapshot();
+    const second = await t.run();
+    assert.equal(second.recordsCreated, 0);
+    assert.equal(second.recordsUpdated, 0);
+    assert.equal(second.stats.duplicatesUnchanged, 2);
+    assert.equal(await t.snapshot(), afterFirst, 'discovery_records, record_sources and record_contacts are untouched (even updated_at)');
+
+    t.publications.push(pub(9, 500, { date: '2026-09-21', type: 'REC', typeLabel: 'Rectificatie', deadline: '2026-12-01T08:00:00' }));
+    const update = await t.run();
+    assert.equal(update.recordsUpdated, 1);
+    assert.equal(update.stats.duplicatesUnchanged, 1);
+    const afterUpdate = await t.snapshot();
+    assert.notEqual(afterUpdate, afterFirst);
+    const repeat = await t.run();
+    assert.equal(repeat.recordsCreated, 0);
+    assert.equal(repeat.recordsUpdated, 0);
+    assert.equal(repeat.stats.duplicatesUnchanged, 2);
+    assert.equal(await t.snapshot(), afterUpdate);
+  } finally { await t.close(); }
+});
+
+test('run statistics keep created, updated and unchanged apart', async () => {
+  const t = await updateApp([pub(1, 500, { date: '2026-09-19' }), pub(2, 501, { date: '2026-09-19' })]);
+  try {
+    await t.run();
+    t.publications.push(pub(3, 500, { date: '2026-09-21', type: 'REC', typeLabel: 'Rectificatie' }), pub(4, 502, { date: '2026-09-21' }));
+    const run = await t.run();
+    assert.equal(run.recordsCreated, 1);
+    assert.equal(run.recordsUpdated, 1);
+    assert.equal(run.stats.recordsCreated, 1);
+    assert.equal(run.stats.recordsUpdated, 1);
+    assert.equal(run.stats.duplicatesUnchanged, 1);
+    assert.equal((await t.records()).length, 3);
+  } finally { await t.close(); }
+});
+
+test('an update never crosses projects: the same tender in another project is its own record', async () => {
+  const t = await updateApp([pub(1, 500, { date: '2026-09-19' })]);
+  try {
+    await t.run();
+    const other = (await t.request('POST', '/projects', { body: { workspaceId: t.project.workspace_id, name: 'Other', domain: 'tenders' } })).body;
+    const otherRun = (await t.request('POST', `/projects/${other.id}/runs`, { body: { sourceId: 'tenderned', filters: { publishedFrom: '2026-09-19', publishedTo: '2026-09-21' } } })).body;
+    assert.equal(otherRun.recordsCreated, 1);
+    t.publications.push(pub(2, 500, { date: '2026-09-21', type: 'REC', typeLabel: 'Rectificatie', deadline: '2026-12-31T08:00:00' }));
+    await t.run();
+    const untouched = (await t.request('GET', `/projects/${other.id}/records`)).body;
+    assert.deepEqual(ids(untouched[0]), ['1'], 'the other project keeps its own state until its own run');
+  } finally { await t.close(); }
 });

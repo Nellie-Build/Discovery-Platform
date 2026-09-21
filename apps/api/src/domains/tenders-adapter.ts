@@ -1,13 +1,13 @@
 /**
  * The tenders module's DomainAdapter (MVP): one `source` run pulls publications from a DiscoverySource
  * (TenderNed today), turns them into TenderFacts, merges publications of the same tender into one record,
- * skips tenders that are already stored, and hands the result to the generic run/record persistence in
- * routes/runs.ts. No crawler and no vacancy code is involved.
+ * updates tenders that are already stored with newer publications (or leaves them alone when nothing changed),
+ * and hands the result to the generic run/record persistence in routes/runs.ts. No crawler and no vacancy code is involved.
  */
 import { collectFromSource, SourceError, type DiscoverySource } from '@discovery-platform/core';
 import {
   createTenderNedSource, mapTenderNedPublication, mergeTenderPublications, parseTenderNedFilters,
-  storedTenderIdentityKey, tenderCompletenessScore, tenderIdentityKey, TENDERNED_SOURCE_ID,
+  storedTenderFacts, storedTenderIdentityKey, tenderCompletenessScore, tenderIdentityKey, updateStoredTender, TENDERNED_SOURCE_ID,
   type TenderFacts, type TenderNedRaw,
 } from '@discovery-platform/domain-tenders';
 import type { DiscoveredRecord, DiscoveryRunInput, DiscoveryRunOutcome, DomainAdapter } from '../domain-registry.js';
@@ -62,30 +62,40 @@ export function createTendersAdapter(options: TendersAdapterOptions = {}): Domai
 
       const publications = collected.items.map(item => mapTenderNedPublication(item)).filter((fact): fact is TenderFacts => fact !== null);
       const tenders = mergeTenderPublications(publications);
-      const existingByKey = new Map<string, string>();
+      const existingByKey = new Map<string, { id: string; domainData: Record<string, unknown> }>();
       for (const existing of input.existingRecords) {
         const key = storedTenderIdentityKey(existing.domainData);
-        if (key && !existingByKey.has(key)) existingByKey.set(key, existing.id);
+        if (key && !existingByKey.has(key)) existingByKey.set(key, existing);
       }
 
-      const fresh: DiscoveredRecord[] = [];
-      const observed: DiscoveredRecord[] = [];
-      for (const fact of tenders) {
+      const recordFor = (fact: TenderFacts, existingRecordId: string | undefined, publications = fact.publications): DiscoveredRecord => {
         const completeness = tenderCompletenessScore(fact);
-        const existingRecordId = existingByKey.get(tenderIdentityKey(fact));
-        const record: DiscoveredRecord = {
+        return {
           existingRecordId,
           displayName: fact.title ?? fact.contractingAuthority,
           domainData: fact as unknown as Record<string, unknown>,
           classification: { presentSignals: completeness.presentSignals, missingSignals: completeness.missingSignals },
           score: completeness.score,
-          sources: [{
-            sourceType: source.kind, sourceUrl: fact.sourceUrl, sourceLabel: source.id,
-            sourceData: { tenderIdentity: fact.tenderIdentity, publicationIds: fact.publications.map(p => p.publicationId) },
-          }],
+          // A new record starts with one source naming all its publications; an update adds one per NEW publication.
+          sources: existingRecordId
+            ? publications.map(p => ({ sourceType: source.kind, sourceUrl: p.sourceUrl, sourceLabel: source.id, sourceData: { tenderIdentity: fact.tenderIdentity, publicationId: p.publicationId, noticeType: p.noticeType } }))
+            : [{ sourceType: source.kind, sourceUrl: fact.sourceUrl, sourceLabel: source.id, sourceData: { tenderIdentity: fact.tenderIdentity, publicationIds: fact.publications.map(p => p.publicationId) } }],
           contacts: [],
         };
-        if (existingRecordId) observed.push(record); else fresh.push(record);
+      };
+      const fresh: DiscoveredRecord[] = [];
+      const updated: DiscoveredRecord[] = [];
+      const unchanged: DiscoveredRecord[] = [];
+      for (const fact of tenders) {
+        const existing = existingByKey.get(tenderIdentityKey(fact));
+        if (!existing) { fresh.push(recordFor(fact, undefined)); continue; }
+        // The tender is stored already: merge this run's publications into it by the usual rule (newest publication
+        // with a value wins, earlier information stays); write only when that changes something.
+        const stored = storedTenderFacts(existing.domainData);
+        if (!stored) { unchanged.push(recordFor(fact, existing.id)); continue; }
+        const update = updateStoredTender(stored, fact);
+        if (update.changed) updated.push(recordFor(update.facts, existing.id, update.newPublications));
+        else unchanged.push(recordFor(stored, existing.id));
       }
       const records = fresh.slice(0, config.targetRecords);
       const stopReason = fresh.length > config.targetRecords ? 'target_reached'
@@ -94,7 +104,8 @@ export function createTendersAdapter(options: TendersAdapterOptions = {}): Domai
         : collected.stopReason === 'time_limit' ? 'time_limit' : collected.stopReason;
       return {
         records,
-        observedRecords: observed,
+        observedRecords: unchanged,
+        updatedRecords: updated,
         stats: {
           ...stats,
           ...source.stats?.(),
@@ -103,8 +114,11 @@ export function createTendersAdapter(options: TendersAdapterOptions = {}): Domai
           publicationsMapped: publications.length,
           tendersFound: tenders.length,
           publicationsMergedIntoOtherPublications: publications.length - tenders.length,
-          duplicatesAgainstExisting: observed.length,
-          duplicates: observed.length,
+          // recordsCreated is set by the run route from what it actually stored, next to recordsUpdated.
+          duplicatesUnchanged: unchanged.length,
+          duplicatesAgainstExisting: unchanged.length + updated.length,
+          duplicates: unchanged.length + updated.length,
+          tendersToUpdate: updated.length,
           candidatesDiscovered: tenders.length,
           recordsAccepted: records.length,
           recordsCreated: records.length,

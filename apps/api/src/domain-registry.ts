@@ -33,6 +33,8 @@ export interface DiscoveryRunOutcome {
   /** A short, user-facing reason, stored on the run when `status` is `failed`. */
   error?: string;
   observedRecords?: DiscoveredRecord[];
+  /** Existing records (`existingRecordId` set) that a later run found newer information about: their stored facts are replaced with `domainData`, and any `sources` they did not have are added. Never counts as a created record. */
+  updatedRecords?: DiscoveredRecord[];
   records: DiscoveredRecord[];
   stats: Record<string, unknown>;
 }

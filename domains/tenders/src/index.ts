@@ -7,4 +7,5 @@ export {
   type TenderNedSource, type TenderNedSourceOptions, type TenderNedSourceStats, type TenderNedFilters, type TenderNedRaw,
 } from './tenderned-source.js';
 export { mapTenderNedPublication, mergeTenderPublications } from './tenderned-map.js';
+export { storedTenderFacts, updateStoredTender, tenderFactsEqual, type TenderUpdate } from './update.js';
 export { tenderIdentityKey, storedTenderIdentityKey, tenderCompletenessScore } from './identity.js';

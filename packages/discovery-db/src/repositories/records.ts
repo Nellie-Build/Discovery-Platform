@@ -60,6 +60,35 @@ export class DiscoveryRecordsRepository {
       [runId, record.id, JSON.stringify(record)]);
   }
 
+  /**
+   * Replaces what a record says about itself (display name, domain facts, classification, score) after a later
+   * run found newer information about the same real-world record, and stamps `updated_at`. Scoped to a project so
+   * a record of another project can never be touched. Returns null when there is no such record in that project.
+   */
+  async updateRecordFacts(id: string, projectId: string, update: { displayName: string | null; domainData: Record<string, unknown>; classification?: Record<string, unknown>; score?: number | null }): Promise<DiscoveryRecord | null> {
+    const { rows } = await this.db.query<DiscoveryRecord>(
+      `UPDATE discovery_records SET display_name = $3, domain_data = $4::jsonb, classification = $5::jsonb, score = $6, updated_at = now()
+       WHERE id = $1 AND project_id = $2 RETURNING *`,
+      [id, projectId, update.displayName, JSON.stringify(update.domainData), JSON.stringify(update.classification ?? {}), update.score ?? null],
+    );
+    return rows[0] ?? null;
+  }
+
+  /** Adds provenance rows a record does not have yet (same source type and URL = already there). Returns how many were added. */
+  async addSourcesIfMissing(recordId: string, sources: NonNullable<NewRecordInput['sources']>): Promise<number> {
+    let added = 0;
+    for (const source of sources) {
+      const { rows } = await this.db.query(
+        `INSERT INTO record_sources (record_id, source_type, source_url, source_label, source_data)
+         SELECT $1, $2, $3, $4, $5::jsonb
+         WHERE NOT EXISTS (SELECT 1 FROM record_sources WHERE record_id = $1 AND source_type = $2 AND source_url IS NOT DISTINCT FROM $3) RETURNING id`,
+        [recordId, source.sourceType, source.sourceUrl ?? null, source.sourceLabel ?? null, JSON.stringify(source.sourceData ?? {})],
+      );
+      added += rows.length;
+    }
+    return added;
+  }
+
   /** Inserts one record together with its sources and contacts. Callers that need several
    * records to succeed or fail together (a whole discovery run's worth) should construct this
    * repository with a transaction client (see connection.ts's `withTransaction`) and call this

@@ -78,6 +78,7 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
     }
 
     let recordsCreated = 0;
+    let recordsUpdated = 0;
     try {
       // Every record from this run is persisted in one transaction: if inserting record N fails
       // (a bad value, a lost connection), record 1..N-1 are rolled back too — a run either
@@ -96,6 +97,20 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
             if (!record.existingRecordId) recordsCreated++;
           }
         }
+        // A later run found newer information about a record that already exists: replace its facts (the domain
+        // decided what the new facts are), add the provenance it lacked, and note the observation in this run.
+        for (const record of outcome!.updatedRecords ?? []) {
+          if (!record.existingRecordId) continue;
+          const stored = await recordsInTransaction.getRecordById(record.existingRecordId);
+          if (!stored || stored.project_id !== project.id || stored.domain !== project.domain) continue;
+          const updated = await recordsInTransaction.updateRecordFacts(stored.id, project.id, {
+            displayName: record.displayName, domainData: record.domainData, classification: record.classification, score: record.score,
+          });
+          if (!updated) continue;
+          await recordsInTransaction.addSourcesIfMissing(stored.id, record.sources);
+          await recordsInTransaction.observeInRun(run.id, updated);
+          recordsUpdated++;
+        }
         for (const record of outcome!.observedRecords ?? []) {
           if (!record.existingRecordId) continue;
           const stored = await recordsInTransaction.getRecordById(record.existingRecordId);
@@ -103,18 +118,18 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
         }
       });
     } catch (error) {
-      const failed = await runs.markFailed(run.id, 'Resultaten konden niet worden opgeslagen.', { ...outcome.stats, ...initialStats, recordsCreated: 0 });
+      const failed = await runs.markFailed(run.id, 'Resultaten konden niet worden opgeslagen.', { ...outcome.stats, ...initialStats, recordsCreated: 0, recordsUpdated: 0 });
       res.status(201).json({ ...failed, recordsCreated: 0 });
       return;
     }
 
     if (outcome.status === 'failed' && outcome.error) {
-      const failed = await runs.markFailed(run.id, outcome.error, { ...outcome.stats, ...initialStats, recordsCreated });
-      res.status(201).json({ ...failed, recordsCreated });
+      const failed = await runs.markFailed(run.id, outcome.error, { ...outcome.stats, ...initialStats, recordsCreated, recordsUpdated });
+      res.status(201).json({ ...failed, recordsCreated, recordsUpdated });
       return;
     }
-    const succeeded = await runs.finish(run.id, outcome.status ?? 'succeeded', { ...outcome.stats, ...initialStats, recordsCreated });
-    res.status(201).json({ ...succeeded, recordsCreated });
+    const succeeded = await runs.finish(run.id, outcome.status ?? 'succeeded', { ...outcome.stats, ...initialStats, recordsCreated, recordsUpdated });
+    res.status(201).json({ ...succeeded, recordsCreated, recordsUpdated });
   }));
 
   router.get('/projects/:id/runs', asyncHandler(async (req, res) => {
