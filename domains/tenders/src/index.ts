@@ -7,5 +7,11 @@ export {
   type TenderNedSource, type TenderNedSourceOptions, type TenderNedSourceStats, type TenderNedFilters, type TenderNedRaw,
 } from './tenderned-source.js';
 export { mapTenderNedPublication, mergeTenderPublications } from './tenderned-map.js';
+export {
+  createTedSource, parseTedFilters, buildTedQuery, TED_SOURCE_ID, TED_SEARCH_URL, TED_FIELDS, TED_MAX_RESULT_WINDOW,
+  type TedSource, type TedSourceOptions, type TedSourceStats, type TedFilters, type TedNoticeRaw,
+} from './ted-source.js';
+export { mapTedNotice, pickLanguage } from './ted-map.js';
+export { TENDER_SOURCES, type TenderSourceDefinition } from './sources.js';
 export { storedTenderFacts, updateStoredTender, tenderFactsEqual, type TenderUpdate } from './update.js';
 export { tenderIdentityKey, storedTenderIdentityKey, tenderCompletenessScore } from './identity.js';

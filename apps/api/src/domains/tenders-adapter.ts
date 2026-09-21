@@ -6,15 +6,15 @@
  */
 import { collectFromSource, SourceError, type DiscoverySource } from '@discovery-platform/core';
 import {
-  createTenderNedSource, mapTenderNedPublication, mergeTenderPublications, parseTenderNedFilters,
-  storedTenderFacts, storedTenderIdentityKey, tenderCompletenessScore, tenderIdentityKey, updateStoredTender, TENDERNED_SOURCE_ID,
-  type TenderFacts, type TenderNedRaw,
+  mergeTenderPublications, storedTenderFacts, storedTenderIdentityKey, tenderCompletenessScore, tenderIdentityKey, updateStoredTender, TENDER_SOURCES,
+  type TenderFacts,
 } from '@discovery-platform/domain-tenders';
 import type { DiscoveredRecord, DiscoveryRunInput, DiscoveryRunOutcome, DomainAdapter } from '../domain-registry.js';
 
-/** Every source a `source` run may name; the id is the only thing a request chooses. */
-export type TenderSource = DiscoverySource<TenderNedRaw> & { stats?(): object };
+/** Every source a `source` run may name (see TENDER_SOURCES in domains/tenders); the id is the only thing a request chooses. */
+export type TenderSource = DiscoverySource<any> & { stats?(): object };
 export interface TendersAdapterOptions {
+  /** Replaces how a known source is created (tests inject a fake network); how its items are mapped stays the domain's. */
   sources?: Record<string, () => TenderSource>;
 }
 
@@ -22,7 +22,7 @@ const BATCH_SIZE = 25;
 const MAX_ITEMS_PER_RUN = 200;
 
 export function createTendersAdapter(options: TendersAdapterOptions = {}): DomainAdapter {
-  const sources: Record<string, () => TenderSource> = options.sources ?? { [TENDERNED_SOURCE_ID]: () => createTenderNedSource() };
+  const overrides = options.sources ?? {};
   return {
     id: 'tenders',
     async runDiscovery(input: DiscoveryRunInput): Promise<DiscoveryRunOutcome> {
@@ -30,28 +30,24 @@ export function createTendersAdapter(options: TendersAdapterOptions = {}): Domai
         return { status: 'failed', error: 'Aanbestedingen ondersteunt alleen bronruns (sourceId).', records: [], stats: { searchMode: input.mode } };
       }
       const start = Date.now();
-      const factory = sources[input.sourceId];
-      if (!factory) {
+      const definition = Object.hasOwn(TENDER_SOURCES, input.sourceId) ? TENDER_SOURCES[input.sourceId] : undefined;
+      if (!definition) {
         return { status: 'failed', error: `Onbekende bron "${input.sourceId}".`, records: [], stats: { searchMode: 'source', sourceId: input.sourceId } };
       }
-      const source = factory();
+      const source = (overrides[input.sourceId] ?? definition.create)();
       const config = input.runConfig;
       const stats: Record<string, unknown> = {
         searchMode: 'source', sourceId: source.id, sourceKind: source.kind, targetRecords: config.targetRecords, maxCandidates: config.maxCandidates, maxDurationMs: config.maxDurationMs,
       };
-      if (source.id === TENDERNED_SOURCE_ID) {
-        try {
-          const range = parseTenderNedFilters(input.filters);
-          stats.publishedFrom = range.publishedFrom;
-          stats.publishedTo = range.publishedTo;
-        } catch (error) {
-          return { status: 'failed', error: error instanceof Error ? error.message : 'Ongeldige filters.', records: [], stats };
-        }
+      try {
+        Object.assign(stats, definition.describeFilters(input.filters));
+      } catch (error) {
+        return { status: 'failed', error: error instanceof Error ? error.message : 'Ongeldige filters.', records: [], stats };
       }
 
       let collected;
       try {
-        collected = await collectFromSource<TenderNedRaw>(source, {
+        collected = await collectFromSource(source, {
           filters: input.filters, batchSize: BATCH_SIZE, maxItems: Math.min(config.maxCandidates, MAX_ITEMS_PER_RUN),
           maxDurationMs: config.maxDurationMs,
         });
@@ -60,7 +56,7 @@ export function createTendersAdapter(options: TendersAdapterOptions = {}): Domai
         return { status: 'failed', error: message, records: [], stats: { ...stats, ...source.stats?.(), durationMs: Date.now() - start } };
       }
 
-      const publications = collected.items.map(item => mapTenderNedPublication(item)).filter((fact): fact is TenderFacts => fact !== null);
+      const publications = collected.items.map(item => definition.map(item)).filter((fact): fact is TenderFacts => fact !== null);
       const tenders = mergeTenderPublications(publications);
       const existingByKey = new Map<string, { id: string; domainData: Record<string, unknown> }>();
       for (const existing of input.existingRecords) {
