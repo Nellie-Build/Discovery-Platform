@@ -78,6 +78,7 @@ Requires Node.js 24+ and a PostgreSQL server (see "Local development" below).
 ```sh
 npm install
 docker compose up -d      # starts PostgreSQL (or: npm run db:local:up on Windows without Docker)
+# whole product locally (PostgreSQL + migrations + API + Web App): docker compose --profile app up --build — see docs/local-development.md
 npm run db:migrate        # applies packages/discovery-db/migrations
 npm run build              # builds every package, domain module, app and the Web App's production bundle
 npm run typecheck           # tsc --noEmit across every TypeScript package, including apps/web

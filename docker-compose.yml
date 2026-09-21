@@ -1,3 +1,12 @@
+# Local-first development and testing.
+#
+#   docker compose up -d                       PostgreSQL only (what `npm run dev` / `npm run db:migrate` use)
+#   docker compose --profile app up --build    PostgreSQL + migrations + the whole product (API + Web App)
+#                                              on http://localhost:${APP_PORT:-8080}
+#
+# The `app` profile builds the SAME root Dockerfile the online test deployment uses, so what runs here is
+# what is deployed. Nothing here needs a cloud account: PostgreSQL is a local container, secrets come from
+# .env (see .env.example), and the crawl runs from your own machine with the Crawlee engine.
 services:
   postgres:
     image: postgres:16-alpine
@@ -15,6 +24,51 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # One-shot schema migration (idempotent; the online environment runs the same command as a separate job,
+  # never on every web start).
+  migrate:
+    profiles: ["app"]
+    build:
+      context: .
+      args:
+        VITE_ENV_LABEL: ${VITE_ENV_LABEL:-Lokaal}
+    image: discovery-platform:local
+    command: ["node", "packages/discovery-db/dist/migrate.js"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-discovery}:${POSTGRES_PASSWORD:-discovery_local_dev}@postgres:5432/${POSTGRES_DB:-discovery_platform}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # API + built Web App on one origin, exactly like the deployed image.
+  app:
+    profiles: ["app"]
+    build:
+      context: .
+      args:
+        VITE_ENV_LABEL: ${VITE_ENV_LABEL:-Lokaal}
+    image: discovery-platform:local
+    environment:
+      # NODE_ENV=production (the image default) turns on Secure cookies, which a browser will not keep over
+      # plain http://localhost; local runs use development mode. The deployed environment is unchanged.
+      NODE_ENV: development
+      PORT: "8080"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-discovery}:${POSTGRES_PASSWORD:-discovery_local_dev}@postgres:5432/${POSTGRES_DB:-discovery_platform}
+      SESSION_SECRET: ${SESSION_SECRET_LOCAL:-local-development-session-secret-not-for-real-use-0123456789}
+      WEB_ORIGIN: http://localhost:${APP_PORT:-8080}
+      # Server-side crawl engine; `crawlee` is the default, `legacy` is the explicit rollback.
+      DISCOVERY_CRAWLER_ENGINE: ${DISCOVERY_CRAWLER_ENGINE:-crawlee}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_VISION_MODEL: ${GEMINI_VISION_MODEL:-}
+      BRAVE_SEARCH_API_KEY: ${BRAVE_SEARCH_API_KEY:-}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
 volumes:
   discovery_platform_postgres_data:

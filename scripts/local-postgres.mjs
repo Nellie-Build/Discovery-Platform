@@ -16,7 +16,8 @@ if (process.platform !== 'win32' || process.arch !== 'x64') {
   throw new Error('This local launcher is for Windows x64. Use `docker compose up -d` on other platforms.');
 }
 const { initdb, pg_ctl } = await import('@embedded-postgres/windows-x64');
-const directory = join(root, 'data', '.postgres');
+// LOCAL_POSTGRES_DIR relocates the cluster (initdb needs a POSIX-style filesystem such as NTFS, not exFAT).
+const directory = process.env.LOCAL_POSTGRES_DIR ? resolve(process.env.LOCAL_POSTGRES_DIR) : join(root, 'data', '.postgres');
 const cluster = join(directory, 'cluster');
 const log = join(directory, 'postgres.log');
 const run = (binary, args) => execFileSync(binary, args, { windowsHide: true, stdio: 'inherit' });
