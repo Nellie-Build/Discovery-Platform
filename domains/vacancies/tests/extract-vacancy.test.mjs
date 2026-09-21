@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { load } from 'cheerio';
 import { extractContacts } from '@discovery-platform/core';
-import { extractVacancy, extractVacancyWithDiagnostic } from '../dist/extract-vacancy.js';
+import { extractVacancy, extractVacancyWithDiagnostic, extractVacancyText } from '../dist/extract-vacancy.js';
 
 // Deliberately simple and country-agnostic — this domain package owns no phone-numbering-plan
 // knowledge of its own — that logic lives in
@@ -463,3 +463,65 @@ for (const [name, sections] of [
     assert.equal(overviewDecision(sections).rejectionReason, 'overview_page');
   });
 }
+
+// ─── Regression: "Plaats" as the town label in a vacancy metadata table. A hosted recruitment
+// system's detail pages carried the job town only as `<th>Plaats</th><td>Katwijk</td>` (no JSON-LD,
+// no microdata, no "Locatie" label), so `location` came out null on every vacancy even though
+// company, hours and contract type were found. "Plaats" is the standard Dutch label for the town of
+// a job, but it is only trusted as the *entire* text of a structured label element — never in
+// running prose. Reproduced with a generic fixture (fixtures/job-plaats-metadata-table.html). ────
+
+const PLAATS_URL = 'https://careersite.example/nl/what:job/jobID:1/';
+
+test('a metadata table row "Plaats" → town gives the vacancy its location, and only that row (Provincie/Land never leak)', async () => {
+  const page = await loadPage('job-plaats-metadata-table.html', PLAATS_URL);
+  const results = extractVacancy(page);
+  assert.notEqual(results, undefined);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].location, 'Amstelveen');
+  assert.equal(results[0].hours, '36');
+  assert.equal(results[0].contractType, 'Bepaalde tijd');
+});
+
+const plaatsPage = (metadata, extra = '') => pageFromHtml(
+  '<html><head><title>Beleidsadviseur Wonen</title></head><body><main><h1>Beleidsadviseur Wonen</h1>' +
+  '<p>Als beleidsadviseur Wonen werk je aan de woonopgave van onze gemeente. Je adviseert het bestuur, werkt samen met corporaties en marktpartijen en vertaalt maatschappelijke vragen naar uitvoerbaar beleid.</p>' +
+  `${metadata}${extra}<a href="mailto:hr@careersite.example">Mail HR</a></main></body></html>`,
+  PLAATS_URL,
+);
+
+test('"Plaats" also works as a definition-list term and as a bold label followed by its value', () => {
+  for (const [name, metadata] of [
+    ['dt/dd', '<dl><dt>Plaats</dt><dd>Delft</dd><dt>Uren</dt><dd>32 uur</dd></dl>'],
+    ['label with colon', '<ul><li><strong>Plaats:</strong> Delft</li><li><strong>Uren:</strong> 32 uur</li></ul>'],
+  ]) {
+    const results = extractVacancy(plaatsPage(metadata));
+    assert.notEqual(results, undefined, name);
+    assert.equal(results[0].location, 'Delft', name);
+  }
+});
+
+test('"Plaats" with an empty value never borrows an unrelated neighbouring value as the location', () => {
+  const results = extractVacancy(plaatsPage('<table><tr><th>Plaats</th><td></td></tr><tr><th>Uren</th><td>32 uur</td></tr></table>'));
+  assert.notEqual(results, undefined);
+  assert.ok(!results[0].location, `location must stay empty, got ${results[0].location}`);
+});
+
+test('the word "plaats" inside a sentence is never a location label, in the DOM or in running text', () => {
+  const results = extractVacancy(plaatsPage('<table><tr><th>Uren</th><td>32 uur</td></tr></table>', '<p>Bij ons staat veiligheid op de eerste plaats: dat merk je elke dag.</p><div>In plaats van vergaderen werken we samen.</div>'));
+  assert.notEqual(results, undefined);
+  assert.ok(!results[0].location, `location must stay empty, got ${results[0].location}`);
+  assert.equal(extractVacancyText('Op de eerste plaats: veiligheid. Plaats - Utrecht').location, undefined);
+});
+
+test('structured JobPosting jobLocation still wins over a "Plaats" table row', () => {
+  const page = pageFromHtml(
+    '<html><head><title>Beleidsadviseur Wonen</title><script type="application/ld+json">' +
+    JSON.stringify({ '@context': 'https://schema.org', '@type': 'JobPosting', title: 'Beleidsadviseur Wonen', description: 'Als beleidsadviseur Wonen werk je aan de woonopgave van onze gemeente en adviseer je het bestuur over beleid.', hiringOrganization: { '@type': 'Organization', name: 'Voorbeeldgemeente' }, jobLocation: { '@type': 'Place', address: { '@type': 'PostalAddress', addressLocality: 'Rotterdam' } } }) +
+    '</script></head><body><h1>Beleidsadviseur Wonen</h1><table><tr><th>Plaats</th><td>Delft</td></tr></table></body></html>',
+    PLAATS_URL,
+  );
+  const results = extractVacancy(page);
+  assert.notEqual(results, undefined);
+  assert.equal(results[0].location, 'Rotterdam');
+});

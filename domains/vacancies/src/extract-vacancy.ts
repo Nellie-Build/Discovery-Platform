@@ -84,6 +84,15 @@ const LABEL_GROUPS: Record<'location' | 'salary' | 'hours' | 'contractType' | 'c
   company: ['werkgever', 'organisatie', 'bedrijf', 'employer', 'company', 'hiring organization', 'hiring organisation'],
 };
 
+/** Extra label words accepted only when they are the *entire* text of a DOM label element (dt,
+ * th, a bold/span label, an accessible-name attribute) — never in running text. "Plaats" is the
+ * standard Dutch metadata-table label for the town of a job ("Plaats | Katwijk"), but in running
+ * prose "plaats:" turns up in ordinary sentences ("op de eerste plaats: veiligheid"), so it is not
+ * a safe plain-text label the way "locatie:" is. */
+const DOM_ONLY_LABELS: Partial<Record<keyof typeof LABEL_GROUPS, string[]>> = {
+  location: ['plaats'],
+};
+
 /** Generic `data-*` attribute names a machine-readable metadata hook might use to name its own
  * field — never one site's own bespoke attribute, only the handful of conventional names widely
  * used for this purpose (component/test/analytics hooks). */
@@ -124,7 +133,7 @@ function matchLabelElement(labelText: string): keyof typeof LABEL_GROUPS | null 
   const norm = labelText.trim().replace(/[:：]\s*$/, '').trim().toLowerCase();
   if (!norm || norm.length > 40) return null;
   for (const [field, labels] of Object.entries(LABEL_GROUPS) as [keyof typeof LABEL_GROUPS, string[]][]) {
-    if (labels.includes(norm)) return field;
+    if (labels.includes(norm) || DOM_ONLY_LABELS[field]?.includes(norm)) return field;
   }
   return null;
 }
