@@ -454,9 +454,11 @@ export function ProjectDetailPage() {
         </div>
       </div>
 
-      <StartDiscoveryForm key={project.id} projectId={project.id} onStarted={handleRunStarted} />
+      {renderer.RunPanel
+        ? <renderer.RunPanel key={project.id} projectId={project.id} onStarted={handleRunStarted} />
+        : <StartDiscoveryForm key={project.id} projectId={project.id} onStarted={handleRunStarted} />}
 
-      {latestRun && <RunStatusCard run={latestRun} />}
+      {latestRun && (renderer.RunSummary ? <renderer.RunSummary run={latestRun} /> : <RunStatusCard run={latestRun} />)}
 
       <div>
         <div role="tablist" aria-label="Resultaten" className="mb-3 flex gap-3">

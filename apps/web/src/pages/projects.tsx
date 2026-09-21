@@ -13,6 +13,7 @@ import { getDomainRenderer } from '../domains/registry';
 
 const DOMAIN_OPTIONS = [
   { value: 'vacancies', label: 'Vacancies', available: true },
+  { value: 'tenders', label: 'Tenders', available: true },
   { value: 'companies', label: 'Companies', available: false },
   { value: 'housing', label: 'Housing', available: false },
   { value: 'candidates', label: 'Candidates', available: false },

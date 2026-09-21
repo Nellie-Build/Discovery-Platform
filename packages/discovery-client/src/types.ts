@@ -93,6 +93,15 @@ export interface BranchSearchInput {
   filters?: VacancySearchFilters;
 }
 
+/** Body for `runs.startSourceRun` — a run that pulls from a named API/feed source instead of crawling a website or
+ * searching a branch. `sourceId` picks the source; `filters` are that source's own (opaque to the client and to
+ * apps/api). */
+export interface SourceRunInput {
+  sourceId: string;
+  filters?: Record<string, unknown>;
+  runConfig?: DiscoveryRunConfig;
+}
+
 export interface DiscoveryRun {
   id: string;
   project_id: string;

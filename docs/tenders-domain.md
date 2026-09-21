@@ -43,3 +43,13 @@ The adapter returns `updatedRecords` (changed) and `observedRecords` (unchanged)
 ## Not in this phase
 
 Web UI (the generic renderer shows tender records), estimated values (TenderNed's JSON has none; the field exists and is filled only when a source states one), TED, feeds, website sources, deploying.
+
+## Web UI (minimal)
+
+All tender knowledge in the Web App lives in `apps/web/src/domains/tenders/` (renderer, run form, run summary); the generic components only call the `DomainRenderer` (a test checks that they contain no tender vocabulary). The registry got three optional hooks: `RunPanel` (the domain's own "start a run" form), `RunSummary` and `renderDetailSections` (extra sections on the record page).
+
+* Projects: "Tenders" is offered as a domain; while the module is disabled the API refuses the project ("module is currently disabled").
+* Tender project page: a TenderNed run form (`sourceId: 'tenderned'`; published from/to, CPV prefix, NUTS prefix, wanted number) instead of the website/branch form, and a run summary with created / updated / unchanged.
+* List: title, contracting authority, deadline, procedure, CPV, location/NUTS, latest publication type, and a "Bijgewerkt" badge for records that a later publication updated.
+* Detail: all `TenderFacts`, the source link, a publication history from `publications[]` (newest first) and a notice when the record was updated later.
+* `packages/discovery-client`: `runs.startSourceRun(projectId, { sourceId, filters?, runConfig? })`.

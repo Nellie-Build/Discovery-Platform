@@ -63,6 +63,8 @@ export function RecordDetailPage() {
             </CardContent>
           </Card>
 
+          {renderer.renderDetailSections?.(record)}
+
           {/* Sources / provenance — a strong point of Discovery Platform: show where data came
               from, never hidden in raw JSON as the primary way to see it. */}
           <Card>

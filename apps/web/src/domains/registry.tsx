@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import type { DiscoveryRecord, RecordWithDetails } from '@discovery-platform/client';
+import type { ComponentType, ReactNode } from 'react';
+import type { DiscoveryRecord, DiscoveryRun, RecordWithDetails } from '@discovery-platform/client';
 
 /**
  * The one seam that keeps the generic Record UI (record lists, record detail) from ever
@@ -23,6 +23,12 @@ export interface DomainRenderer {
   renderCell(record: DiscoveryRecord, columnKey: string): ReactNode;
   /** The "Found information" section on the record detail page. */
   renderDetailFields(record: RecordWithDetails): DomainDetailField[];
+  /** Optional: the domain's own "start a run" form, shown on the project page instead of the default website/branch form. */
+  RunPanel?: ComponentType<{ projectId: string; onStarted: (run: DiscoveryRun) => void }>;
+  /** Optional: the domain's own summary of a run, shown instead of the default run status card. */
+  RunSummary?: ComponentType<{ run: DiscoveryRun }>;
+  /** Optional: extra sections on the record detail page (history, update notice, ...), right below "Found information". */
+  renderDetailSections?(record: RecordWithDetails): ReactNode;
 }
 
 const missing = <span className="text-slate-400">—</span>;

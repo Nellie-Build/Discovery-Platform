@@ -109,3 +109,15 @@ test('records.listByProject omits the domain query parameter when none is given'
     assert.equal(calls[0].url, 'http://api.test/api/v1/projects/project1/records');
   } finally { restore(); }
 });
+
+test('runs.startSourceRun posts sourceId, filters and runConfig to /projects/:id/runs and leaves the other run shapes untouched', async () => {
+  const { calls, restore } = fakeFetch(() => jsonResponse(201, { id: 'run4', status: 'succeeded', recordsCreated: 2 }));
+  try {
+    const client = createApiClient({ baseUrl: 'http://api.test/api/v1' });
+    const run = await client.runs.startSourceRun('project1', { sourceId: 'tenderned', filters: { publishedFrom: '2026-09-20' }, runConfig: { targetRecords: 20 } });
+    assert.equal(calls[0].url, 'http://api.test/api/v1/projects/project1/runs');
+    assert.equal(calls[0].init.method, 'POST');
+    assert.deepEqual(JSON.parse(calls[0].init.body), { sourceId: 'tenderned', filters: { publishedFrom: '2026-09-20' }, runConfig: { targetRecords: 20 } });
+    assert.equal(run.recordsCreated, 2);
+  } finally { restore(); }
+});

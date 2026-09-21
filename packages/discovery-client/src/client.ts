@@ -1,7 +1,7 @@
 import {
   ApiError,
   type PublicUser, type Workspace, type WorkspaceMembership, type Project, type AdminProject,
-  type DiscoveryRun, type DiscoveryRecord, type RecordWithDetails, type BranchSearchInput,
+  type DiscoveryRun, type DiscoveryRecord, type RecordWithDetails, type BranchSearchInput, type SourceRunInput,
   type DiscoveryModuleDefinition, type DiscoveryRunConfig, type VacancySearchFilters,
 } from './types.js';
 
@@ -63,6 +63,8 @@ export function createApiClient({ baseUrl }: ApiClientOptions) {
        * extractor `start()` uses, for a project with no single website in mind yet. `region` and
        * `keywords` are both optional. */
       startBranchSearch: (projectId: string, input: BranchSearchInput) => req<DiscoveryRun>('POST', `/projects/${projectId}/runs`, input),
+      /** A run against a named source (an API or feed) — no website, no branch. */
+      startSourceRun: (projectId: string, input: SourceRunInput) => req<DiscoveryRun>('POST', `/projects/${projectId}/runs`, input),
       listByProject: (projectId: string) => req<DiscoveryRun[]>('GET', `/projects/${projectId}/runs`),
       get: (id: string) => req<DiscoveryRun>('GET', `/runs/${id}`),
     },
