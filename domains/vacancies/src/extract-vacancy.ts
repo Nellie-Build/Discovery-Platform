@@ -572,7 +572,10 @@ export interface VacancyPageDiagnostic {
   directContactFound: boolean;
   signalScore: number;
   accepted: boolean;
-  rejectionReason: 'no_title' | 'insufficient_signals' | 'overview_page' | 'insufficient_description' | null;
+  rejectionReason: 'no_title' | 'insufficient_signals' | 'overview_page' | 'insufficient_description' | 'no_single_vacancy_evidence' | null;
+  /** Why a page without JobPosting data counts as one concrete vacancy (accepted pages only): `json_ld`, explicit
+   * employment `metadata`, a named `contact_person`, or an `apply_action`. */
+  detailEvidence?: 'json_ld' | 'metadata' | 'contact_person' | 'apply_action';
   /** Which source named the employer (see company.ts), or `none` when no reliable one exists. */
   companySource?: CompanySource;
 }
@@ -618,6 +621,11 @@ function scoreVacancyDetailEvidence($: CheerioAPI, r: VacancyFacts): { score: nu
   return { score, metadataFieldsFound, directContactFound, descriptionFound };
 }
 
+/** A real application action ("Solliciteer", "Apply"), as opposed to a link to another vacancy. */
+function hasApplyAction($: CheerioAPI): boolean {
+  return $('a, button').toArray().some(el => /solliciteer|\bapply\b/i.test(text($(el).text(), 100) ?? ''));
+}
+
 function diagnose($: CheerioAPI, url: string, r: VacancyFacts, hasJsonLd: boolean, companySource: CompanySource): VacancyPageDiagnostic {
   const diagnostic = diagnoseEvidence($, url, r, hasJsonLd);
   return { ...diagnostic, companySource };
@@ -627,7 +635,7 @@ function diagnoseEvidence($: CheerioAPI, url: string, r: VacancyFacts, hasJsonLd
   const titleFound = Boolean(r.title);
   if (hasJsonLd) {
     const { metadataFieldsFound, directContactFound, descriptionFound } = scoreVacancyDetailEvidence($, r);
-    return { url, titleFound, metadataFieldsFound, descriptionFound, directContactFound, signalScore: PLAUSIBILITY_ACCEPT_THRESHOLD, accepted: true, rejectionReason: null };
+    return { url, titleFound, metadataFieldsFound, descriptionFound, directContactFound, signalScore: PLAUSIBILITY_ACCEPT_THRESHOLD, accepted: true, rejectionReason: null, detailEvidence: 'json_ld' };
   }
   if (looksLikeOverviewPage($, url)) {
     return { url, titleFound, metadataFieldsFound: 0, descriptionFound: false, directContactFound: false, signalScore: 0, accepted: false, rejectionReason: 'overview_page' };
@@ -641,10 +649,16 @@ function diagnoseEvidence($: CheerioAPI, url: string, r: VacancyFacts, hasJsonLd
   // or the exact "title + description + contact" combination the brief this shipped with names
   // explicitly, is required — never description alone, never contact alone.
   const hasJobSpecificEvidence = metadataFieldsFound > 0 || (descriptionFound && directContactFound);
-  const accepted = score >= PLAUSIBILITY_ACCEPT_THRESHOLD && hasJobSpecificEvidence;
+  // Text and a mailbox are also what a career-information page has ("Working as a nurse", with a general
+  // "e-mail us" address): without explicit employment metadata, the description + contact route needs one more
+  // sign that the page is about ONE opportunity — a person named for it, or an actual application action.
+  // A "view vacancy" link is navigation to some other vacancy, not an application.
+  const singleVacancyEvidence: VacancyPageDiagnostic['detailEvidence'] | null = metadataFieldsFound > 0 ? 'metadata'
+    : r.contactPerson ? 'contact_person' : hasApplyAction($) ? 'apply_action' : null;
+  const accepted = score >= PLAUSIBILITY_ACCEPT_THRESHOLD && hasJobSpecificEvidence && singleVacancyEvidence !== null;
   let rejectionReason: VacancyPageDiagnostic['rejectionReason'] = null;
-  if (!accepted) rejectionReason = !titleFound ? 'no_title' : !hasJobSpecificEvidence ? 'insufficient_description' : 'insufficient_signals';
-  return { url, titleFound, metadataFieldsFound, descriptionFound, directContactFound, signalScore: score, accepted, rejectionReason };
+  if (!accepted) rejectionReason = !titleFound ? 'no_title' : !hasJobSpecificEvidence ? 'insufficient_description' : singleVacancyEvidence === null ? 'no_single_vacancy_evidence' : 'insufficient_signals';
+  return { url, titleFound, metadataFieldsFound, descriptionFound, directContactFound, signalScore: score, accepted, rejectionReason, ...(accepted && singleVacancyEvidence ? { detailEvidence: singleVacancyEvidence } : {}) };
 }
 
 /**
