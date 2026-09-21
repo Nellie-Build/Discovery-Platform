@@ -22,6 +22,7 @@ real employer (an "Over <Employer>" section that repeats the name in the page ti
 | `explicit_label` | a label element that is exactly "Werkgever", "Organisatie", "Bedrijf", "Employer", "Company", "Hiring organization" followed by its value (dt/dd, th/td, label + sibling, data-* hooks) |
 | `organization_block` | `itemprop="employer"`; an element whose class/id says employer/company/organisation *name*; or an "Over/About <Name>" heading whose name is also in the page title and is not the job's location |
 | `text_fallback` | "Werkgever: <Name>" / "Organisatie - <Name>" at the start of a line of running text, only if the value looks like an organisation name |
+| `page_metadata` | the page's declared owner: `<meta name="author">`, only when a second independent declaration on the page names the same organisation (an image with alt "Logo voor/of <Name>" or "<Name> logo", or `og:site_name`). One declaration alone is never used (an author is often a person). Deliberately the weakest source: it can only fill a company nothing else found. |
 | `none` | nothing reliable: company is null |
 
 The word "organisatie" inside a sentence is never evidence. There is no title parsing, no AI, no
@@ -57,3 +58,12 @@ unchanged: a period-terminated or 10+ word value from running text is still reje
 A company that fails validation is now null instead of a wrong name. The company counts +1 in the
 plausibility score, so a page that only reached the threshold thanks to a wrong company would no longer
 be accepted; none of the 50 + 50 live records checked was affected.
+
+## Hosted recruitment pages (page_metadata)
+
+Real vacancy pages of a hosted recruitment system had `company = null`: no JSON-LD, no microdata, no "Werkgever" label
+(the metadata table has Dienstverband / Salaris / Uren / Plaats / Contact only), no employer element and no title that names
+the organisation. The employer is declared twice in the page head/body, in two independent places: `<meta name="author"
+content="Gemeente Katwijk">` and the logo `<img alt="Logo voor Gemeente Katwijk">`. Their agreement is the evidence; either alone
+is not (verified: author-only, logo-only and a person as author all stay null). Existing outcomes cannot change, because the
+source is consulted last.

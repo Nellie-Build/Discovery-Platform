@@ -16,12 +16,16 @@ import type { CheerioAPI } from 'cheerio';
  *                           page title
  *  5. `text_fallback`       "Werkgever: <Name>" at the start of a line of running text, and only if
  *                           the value looks like an organisation name
- *  6. `none`                no reliable employer: the company stays empty (null beats a wrong name)
+ *  6. `page_metadata`      the page's declared owner: `<meta name="author">` that a second, independent
+ *                           declaration on the page confirms (a logo image named after it, or `og:site_name`).
+ *                           One declaration alone is never enough (an author is often a person).
+ *                           Deliberately last: it can only fill a company that nothing else found.
+ *  7. `none`                no reliable employer: the company stays empty (null beats a wrong name)
  *
  * The word "organisatie" in ordinary body text is never evidence: only a label at the start of a
  * line, or a label element, counts.
  */
-export type CompanySource = 'json_ld' | 'microdata' | 'explicit_label' | 'organization_block' | 'text_fallback' | 'none';
+export type CompanySource = 'json_ld' | 'microdata' | 'explicit_label' | 'organization_block' | 'text_fallback' | 'page_metadata' | 'none';
 
 /** How much structural evidence stands behind a candidate: `text` is a value from running text (strictest),
  * `explicit` a value a label or element already marked as the employer, `structured` a name from a
@@ -148,6 +152,33 @@ export function extractOrganizationBlock($: CheerioAPI, context: { title: string
   return null;
 }
 
+const LOGO_ALT_BEFORE = /^\s*logo\s+(?:voor|van|of|for)\s+(\S.*?)\s*$/i;
+const LOGO_ALT_AFTER = /^\s*(\S.*?)\s+logo\s*$/i;
+
+/**
+ * The organisation a page declares itself to belong to: `<meta name="author">`, accepted only when a second,
+ * independent declaration names the same organisation — an image whose alternative text is a logo of it
+ * ("Logo voor X", "Logo of X", "X logo") or `og:site_name`. Hosted recruitment systems declare their customer
+ * this way; a blog's author (a person) has no such second declaration. Compared without case, spacing or
+ * trailing full stops. Returns null when there is no such agreement or the name does not look like an
+ * organisation name.
+ */
+export function extractDeclaredOrganization($: CheerioAPI): string | null {
+  const author = collapse($('meta[name="author" i]').first().attr('content') ?? '');
+  if (!author) return null;
+  const name = assessCompanyName(author, 'structured');
+  if (!name) return null;
+  const key = matchKey(name);
+  const siteName = matchKey($('meta[property="og:site_name" i]').first().attr('content') ?? '');
+  if (siteName && siteName === key) return name;
+  for (const img of $('img[alt]').toArray()) {
+    const alt = collapse($(img).attr('alt') ?? '');
+    const named = LOGO_ALT_BEFORE.exec(alt)?.[1] ?? LOGO_ALT_AFTER.exec(alt)?.[1];
+    if (named && matchKey(named) === key) return name;
+  }
+  return null;
+}
+
 export interface CompanyCandidates {
   /** JobPosting JSON-LD `hiringOrganization.name` (already the node's own value). */
   jsonLd?: string | null;
@@ -155,6 +186,8 @@ export interface CompanyCandidates {
   explicitLabel?: string | null;
   organizationBlock?: string | null;
   text?: string | null;
+  /** See `extractDeclaredOrganization`; the weakest source. */
+  declared?: string | null;
 }
 
 /** The strongest usable candidate, and which source it came from. */
@@ -170,5 +203,7 @@ export function chooseCompany(candidates: CompanyCandidates): { value: string | 
   if (block) return { value: block, source: 'organization_block' };
   const text = assessCompanyName(candidates.text, 'text');
   if (text) return { value: text, source: 'text_fallback' };
+  const declared = assessCompanyName(candidates.declared, 'structured');
+  if (declared) return { value: declared, source: 'page_metadata' };
   return { value: null, source: 'none' };
 }

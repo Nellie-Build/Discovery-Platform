@@ -1,6 +1,6 @@
 import type { CheerioAPI } from 'cheerio';
 import { websiteScope, type CrawlPage } from '@discovery-platform/core';
-import { chooseCompany, extractCompanyFromText, extractOrganizationBlock, type CompanySource } from './company.js';
+import { chooseCompany, extractCompanyFromText, extractDeclaredOrganization, extractOrganizationBlock, type CompanySource } from './company.js';
 
 /** A cheerio-wrapped node selection — `cheerio` itself doesn't export this as a bare type, and
  * this package's own dependency boundary (see tests/dependency-boundary.test.mjs) never imports
@@ -687,9 +687,10 @@ export function extractVacancyWithDiagnostic(page: CrawlPage): { facts: VacancyF
   // the rules for what may count as an organisation name); a wrong name is worse than none.
   const locationHint = microdata.location ?? textFacts.location ?? domLabelFacts.location ?? null;
   const organizationBlock = extractOrganizationBlock(page.$, { title: page.$('title').first().text(), location: locationHint, nonContentSelector: NON_CONTENT_SELECTOR });
+  const declaredOrganization = extractDeclaredOrganization(page.$);
   const companyFor = (structured: Partial<VacancyFacts>) => chooseCompany({
     jsonLd: structured.company, microdata: microdata.company, explicitLabel: domLabelFacts.company,
-    organizationBlock, text: textFacts.company,
+    organizationBlock, text: textFacts.company, declared: declaredOrganization,
   });
 
   function build(structured: Partial<VacancyFacts>): VacancyFacts {

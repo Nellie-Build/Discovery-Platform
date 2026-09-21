@@ -261,3 +261,56 @@ test('free text stays strict: the same long or full-stopped names are NOT taken 
   const body = '<p>Je hebt invloed op de kwaliteit van de organisatie-inrichting. Dit zegt een collega.</p><p>Aansturen organisatie: je vertaalt de missie en visie van de organisatie in een strategie.</p>';
   assert.equal(extract(vacancy({ title: 'Vacature: Adviseur, Belastingdienst - Werken bij', body })).facts.company, null);
 });
+
+// ─── page_metadata: the organisation a page declares itself to belong to (hosted recruitment pages) ────────
+
+const hostedHead = (author, extra = '') => `<meta name="author" content="${author}"/>${extra}`;
+const logo = alt => `<img src="/logo.png" alt="${alt}" class="top-banner-logos"/>`;
+
+test('page_metadata: an author declaration confirmed by a logo named after it is the employer, when nothing else names one', () => {
+  for (const alt of ['Logo voor Gemeente Katwijk', 'Logo of Gemeente Katwijk', 'Gemeente Katwijk logo', 'Logo van  Gemeente   Katwijk']) {
+    const { facts, diagnostic } = extract(vacancy({ title: 'Wmo consulent', head: hostedHead('Gemeente Katwijk'), body: `${logo(alt)}<h1>Wmo consulent</h1>` }));
+    assert.equal(facts.company, 'Gemeente Katwijk', alt);
+    assert.equal(diagnostic.companySource, 'page_metadata', alt);
+  }
+});
+
+test('page_metadata: og:site_name is an accepted second declaration', () => {
+  const { facts, diagnostic } = extract(vacancy({ title: 'Wmo consulent', head: hostedHead('Gemeente Katwijk', '<meta property="og:site_name" content="Gemeente Katwijk"/>') }));
+  assert.equal(facts.company, 'Gemeente Katwijk');
+  assert.equal(diagnostic.companySource, 'page_metadata');
+});
+
+test('page_metadata: one declaration alone is never enough — an author is often a person', () => {
+  const author = extract(vacancy({ title: 'Wmo consulent', head: hostedHead('Gemeente Katwijk'), body: '<h1>Wmo consulent</h1>' }));
+  assert.equal(author.facts.company, null);
+  assert.equal(author.diagnostic.companySource, 'none');
+  const logoOnly = extract(vacancy({ title: 'Wmo consulent', body: `${logo('Logo voor Gemeente Katwijk')}<h1>Wmo consulent</h1>` }));
+  assert.equal(logoOnly.facts.company, null);
+  // A person as author, with the site's own logo: the two do not agree.
+  const person = extract(vacancy({ title: 'Wmo consulent', head: hostedHead('Jan Jansen'), body: `${logo('Logo voor Gemeente Katwijk')}` }));
+  assert.equal(person.facts.company, null);
+  // A blog with a named author and the same name as site name: only organisations are accepted as names, not sentences.
+  const sentence = extract(vacancy({ title: 'Wmo consulent', head: hostedHead('Wij zoeken jou voor een baan!', '<meta property="og:site_name" content="Wij zoeken jou voor een baan!"/>') }));
+  assert.equal(sentence.facts.company, null);
+});
+
+test('page_metadata is the weakest source: it never replaces a company another source found', () => {
+  const head = hostedHead('Gemeente Katwijk');
+  const withLogo = logo('Logo voor Gemeente Katwijk');
+  assert.equal(extract(vacancy({ title: 'X', head: head + jobPosting('Andere Werkgever B.V.'), body: withLogo })).facts.company, 'Andere Werkgever B.V.');
+  const label = extract(vacancy({ title: 'X', head, body: `${withLogo}<dl><dt>Werkgever</dt><dd>Stichting Voorbeeld</dd></dl>` }));
+  assert.equal(label.facts.company, 'Stichting Voorbeeld');
+  assert.equal(label.diagnostic.companySource, 'explicit_label');
+  const text = extract(vacancy({ title: 'X', head, body: `${withLogo}
+<p>Werkgever: Stichting Voorbeeld</p>
+` }));
+  assert.equal(text.facts.company, 'Stichting Voorbeeld');
+  assert.equal(text.diagnostic.companySource, 'text_fallback');
+});
+
+test('page_metadata: chooseCompany ranks it last and still validates the name', () => {
+  assert.deepEqual(chooseCompany({ declared: 'Gemeente Katwijk' }), { value: 'Gemeente Katwijk', source: 'page_metadata' });
+  assert.deepEqual(chooseCompany({ declared: 'Gemeente Katwijk', text: 'Acme B.V.' }), { value: 'Acme B.V.', source: 'text_fallback' });
+  assert.deepEqual(chooseCompany({ declared: 'Solliciteer nu' }), { value: null, source: 'none' });
+});
