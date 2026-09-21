@@ -21,7 +21,8 @@ test('A: twelve language variants of one job ID share one identity; the fetchabl
   assert.equal(keys.size, 1);
   const one = identity('https://jobs.example/en/what:job/jobID:966837/');
   assert.deepEqual({ type: one.type, value: one.value, origin: one.origin }, { type: 'jobid', value: '966837', origin: 'https://jobs.example' });
-  assert.equal(one.key, 'https://jobs.example|jobid|966837');
+  assert.equal(one.namespace, 'what:job');
+  assert.equal(one.key, 'https://jobs.example|what:job|jobid|966837');
   // The candidate keeps its real URL; only the key is shared.
   const ranks = LANGS.map(lang => rank(`https://jobs.example${jobUrl(lang, 966837)}`));
   assert.equal(new Set(ranks.map(r => r.dedupeKey)).size, 1);
@@ -46,7 +47,9 @@ test('D: query-parameter identifiers (jobId, job_id, vacancyId, positionId, post
 });
 
 test('E: path identifiers (jobID:123) dedupe across path variants and ignore the surrounding segments', () => {
-  assert.equal(identity('https://jobs.example/en/what:job/jobID:123/').key, identity('https://jobs.example/whatever/jobID:123/type:x/').key);
+  assert.equal(identity('https://jobs.example/en/what:job/jobID:123/').key, identity('https://jobs.example/de/what:job/jobID:123/type:x/').key);
+  assert.equal(identity('https://jobs.example/en/jobs/jobID:123').key, identity('https://jobs.example/de/jobs/jobID:123').key, 'a plain word before the identifier is not a namespace');
+  assert.equal(identity('https://jobs.example/en/jobs/jobID:123').key, 'https://jobs.example|jobid|123');
   assert.equal(identity('https://jobs.example/nl/what:job/jobid=123').value, '123');
 });
 
@@ -139,7 +142,8 @@ test('open applications keep their identifier but rank clearly lower; concrete v
 // ─── end to end: a Varbi-shaped site through both crawl engines ───────────────────────────────────────
 
 function varbiSite() {
-  const ids = Array.from({ length: 10 }, (_, i) => 940000 + i * 7);
+  // One concrete job deliberately shares its number (4041) with an open application below.
+  const ids = [4041, ...Array.from({ length: 9 }, (_, i) => 940007 + i * 7)];
   const spontaneous = [4041, 4701, 4802];
   const pages = { '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nAllow: /' }, '/sitemap.xml': { contentType: 'application/xml', body: '<urlset></urlset>' } };
   const homeLinks = [];
@@ -207,4 +211,52 @@ test('without a ranking that supplies keys, the crawler behaves as before (only 
   assert.equal(result.records.filter(r => r.kind === 'page' && r.attempted).length, 3);
   assert.equal(result.discoveryStats.candidateIdentityDuplicates, 0);
   assert.equal(result.discoveryStats.uniqueCrawlIdentities, result.discoveryStats.uniqueUrlsDiscovered);
+});
+
+// ─── namespaces: the same number in two explicit record families is two identities ─────────────────
+
+test('N1: what:job/jobID:4041 and what:spontaneous/jobID:4041 are different identities, in every language', () => {
+  const job = LANGS.map(lang => identity(`https://jobs.example/${lang}/what:job/jobID:4041/`).key);
+  const open = LANGS.map(lang => identity(`https://jobs.example/${lang}/what:spontaneous/jobID:4041/type:spontaneous/where:4/apply:1/`).key);
+  assert.equal(new Set(job).size, 1);
+  assert.equal(new Set(open).size, 1);
+  assert.notEqual(job[0], open[0]);
+  assert.equal(job[0], 'https://jobs.example|what:job|jobid|4041');
+  assert.equal(open[0], 'https://jobs.example|what:spontaneous|jobid|4041');
+});
+
+test('N2: the locale is never a namespace; only an explicit key:value family segment directly before the identifier is', () => {
+  for (const before of ['en', 'de', 'nl-NL', 'jobs', 'vacatures', 'campaign', 'utm_source', 'categorie-zorg']) {
+    assert.equal(identity(`https://jobs.example/${before}/jobID:12`)?.namespace ?? null, null, before);
+  }
+  assert.equal(identity('https://jobs.example/what:job/en/jobID:12').namespace, null, 'the family must directly precede the identifier');
+  assert.equal(identity('https://jobs.example/where:62/what:job/jobID:12').namespace, 'what:job', 'only the directly preceding segment');
+  assert.equal(identity('https://jobs.example/en/what:job/jobID:12').key, identity('https://jobs.example/de/where:9/what:job/jobID:12').key);
+  assert.equal(identity('https://jobs.example/what:job/jobID:12/what:x/jobID:23').value, '12', 'the first identifier wins');
+});
+
+test('N3: query identities keep working and ignore other parameters', () => {
+  assert.equal(identity('https://jobs.example/vacature?jobId=123').key, identity('https://jobs.example/vacature?jobId=123&lang=en').key);
+  assert.equal(identity('https://jobs.example/vacature?jobId=123').key, 'https://jobs.example|jobid|123');
+  assert.equal(identity('https://jobs.example/en/vacature?jobId=123').key, identity('https://jobs.example/de/vacature?jobId=123').key);
+});
+
+test('N4: record level — job 4041 is not a duplicate of spontaneous 4041, but is of its own language variant', () => {
+  const fact = (sourceUrl, title) => ({ title, company: null, location: null, salary: null, hours: null, contractType: null, description: null, contactPerson: null, phone: null, email: null, sourceUrl });
+  assert.deepEqual(findVacancyDuplicates([fact('https://jobs.example/en/what:job/jobID:4041/', 'Wmo consulent'), fact('https://jobs.example/en/what:spontaneous/jobID:4041/', 'Open sollicitatie')]), []);
+  const same = findVacancyDuplicates([fact('https://jobs.example/en/what:job/jobID:4041/', 'A'), fact('https://jobs.example/de/what:job/jobID:4041/', 'B')]);
+  assert.equal(same[0].decision, 'duplicate');
+  const open = findVacancyDuplicates([fact('https://jobs.example/en/what:spontaneous/jobID:4041/', 'A'), fact('https://jobs.example/de/what:spontaneous/jobID:4041/', 'B')]);
+  assert.equal(open[0].decision, 'duplicate');
+  assert.deepEqual(findVacancyDuplicates([fact('https://a.example/en/what:job/jobID:4041/', 'A'), fact('https://b.example/en/what:job/jobID:4041/', 'B')]), []);
+});
+
+test('N5: queue level — the two families with one number are two crawl identities', () => {
+  const q = new CandidateQueue(10);
+  const key = url => rank(url).dedupeKey;
+  assert.equal(q.offer(candidate('https://jobs.example/en/what:job/jobID:4041/', 65), key('https://jobs.example/en/what:job/jobID:4041/')), true);
+  assert.equal(q.offer(candidate('https://jobs.example/en/what:spontaneous/jobID:4041/', 15), key('https://jobs.example/en/what:spontaneous/jobID:4041/')), true);
+  assert.equal(q.offer(candidate('https://jobs.example/de/what:job/jobID:4041/', 65), key('https://jobs.example/de/what:job/jobID:4041/')), false);
+  assert.equal(q.offer(candidate('https://jobs.example/de/what:spontaneous/jobID:4041/', 15), key('https://jobs.example/de/what:spontaneous/jobID:4041/')), false);
+  assert.equal(q.size, 2);
 });

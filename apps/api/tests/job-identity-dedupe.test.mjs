@@ -14,11 +14,11 @@ const jobPath = (lang, id) => `/${lang}/what:job/jobID:${id}/`;
 const page = body => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(body) });
 const text = (body, type = 'text/plain') => ({ status: 200, headers: { 'content-type': type }, body: Buffer.from(body) });
 /** A vacancy page without any employer: title, location and a description only. */
-function vacancyPage(id, lang) {
-  const jsonLd = JSON.stringify({ '@context': 'https://schema.org/', '@type': 'JobPosting', title: `Medewerker ${id}`,
+function vacancyPage(id, lang, title = `Medewerker ${id}`) {
+  const jsonLd = JSON.stringify({ '@context': 'https://schema.org/', '@type': 'JobPosting', title,
     description: `<p>Vacature ${id}: je werkt in een team aan uiteenlopende opdrachten, denkt mee over de aanpak en draagt bij aan goede resultaten voor onze inwoners.</p>`,
     jobLocation: { '@type': 'Place', address: { '@type': 'PostalAddress', addressLocality: 'Katwijk' } } });
-  return page(`<html lang="${lang}"><head><title>Medewerker ${id}</title><script type="application/ld+json">${jsonLd}</script></head><body><main><h1>Medewerker ${id}</h1></main></body></html>`);
+  return page(`<html lang="${lang}"><head><title>${title}</title><script type="application/ld+json">${jsonLd}</script></head><body><main><h1>${title}</h1></main></body></html>`);
 }
 function site(ids) {
   const pages = { '/robots.txt': text('User-agent: *\nAllow: /'), '/sitemap.xml': text('<urlset></urlset>', 'application/xml') };
@@ -83,3 +83,39 @@ test('record-level dedupe still catches variants that were fetched before the id
   assert.equal(duplicate.decision, 'duplicate');
   assert.ok(duplicate.matchedSignals.includes('stableJobIdentity'));
 });
+
+// ─── cross-run with namespaces: the same number in another record family is another vacancy ─────────
+
+const known = sourceUrl => ({ id: 'rec-1', domainData: { title: 'Wmo consulent', company: null, location: 'Katwijk', salary: null, hours: null, contractType: null, description: null, contactPerson: null, phone: null, email: null, sourceUrl } });
+const spontaneousPath = (lang, id) => `/${lang}/what:spontaneous/jobID:${id}/type:spontaneous/where:4/apply:1/`;
+function singlePageSite(path, title) {
+  return { '/robots.txt': text('User-agent: *\nAllow: /'), '/sitemap.xml': text('<urlset></urlset>', 'application/xml'),
+    '/': page(`<html><head><title>Start</title></head><body><a href="${path}">x</a></body></html>`), [path]: vacancyPage(4041, 'de', title) };
+}
+
+for (const engine of ['legacy', 'crawlee']) {
+  test(`[${engine}] namespace cross-run A: existing /en/what:job/jobID:4041/ vs new /de/what:job/jobID:4041/ is already known`, async () => {
+    const { outcome } = await run(engine, singlePageSite(jobPath('de', 4041), 'Wmo consulent (DE)'), input(25, [known(`${HOST}${jobPath('en', 4041)}`)]));
+    assert.equal(outcome.records.length, 0);
+    assert.equal(outcome.stats.duplicatesAgainstExisting, 1);
+  });
+
+  test(`[${engine}] namespace cross-run B: existing what:job 4041 vs new what:spontaneous 4041 is not a duplicate`, async () => {
+    const { outcome } = await run(engine, singlePageSite(spontaneousPath('en', 4041), 'Open sollicitatie'), input(25, [known(`${HOST}${jobPath('en', 4041)}`)]));
+    assert.equal(outcome.stats.duplicatesAgainstExisting, 0);
+    assert.equal(outcome.records.length, 1);
+    assert.equal(outcome.records[0].existingRecordId, undefined);
+  });
+
+  test(`[${engine}] namespace cross-run C: existing spontaneous 4041 (en) vs new spontaneous 4041 (de) is a duplicate`, async () => {
+    const { outcome } = await run(engine, singlePageSite(spontaneousPath('de', 4041), 'Open sollicitatie (DE)'), input(25, [known(`${HOST}${spontaneousPath('en', 4041)}`)]));
+    assert.equal(outcome.records.length, 0);
+    assert.equal(outcome.stats.duplicatesAgainstExisting, 1);
+  });
+
+  test(`[${engine}] namespace cross-run D: the same job ID on another origin is not a duplicate`, async () => {
+    const { outcome } = await run(engine, singlePageSite(jobPath('en', 4041), 'Wmo consulent'), input(25, [known(`https://other.example${jobPath('en', 4041)}`)]));
+    assert.equal(outcome.stats.duplicatesAgainstExisting, 0);
+    assert.equal(outcome.records.length, 1);
+  });
+}

@@ -68,5 +68,8 @@ record dedupe needs the same `sourceUrl` or company + title, and the company was
   (`open-sollicitatie`, `open-application`, `spontaneous`, `spontane sollicitatie`, `initiatiefsollicitatie`).
   A lower crawl priority only: they are still visited with budget left and the extractor decides. Stages,
   trainee, internship and volunteer wording is not touched.
-* Known limit: two different vacancies on one site that share the same identifier value under different
-  identifier *spaces* (e.g. `what:job/jobID:4041` and `what:spontaneous/jobID:4041`) would count as one.
+* Namespaces: when the identifier path segment is directly preceded by an explicit `key:value` family segment
+  (`what:job/jobID:4041` versus `what:spontaneous/jobID:4041`), that segment is part of the identity
+  (`origin|what:job|jobid|4041`), so the same number in two record families stays two identities. A locale or any
+  ordinary segment (`/en/`, `/jobs/`) is never a namespace, so language variants still merge. Query identities
+  (`?jobId=123`) have no namespace.
