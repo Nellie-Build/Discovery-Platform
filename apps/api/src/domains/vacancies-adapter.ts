@@ -696,7 +696,9 @@ export function createVacanciesAdapter(crawlOverrides: VacanciesCrawlOverrides =
   return {
     id: 'vacancies',
     async runDiscovery(input: DiscoveryRunInput) {
-      return input.mode === 'branch' ? runBranchDiscovery(input, crawlOverrides) : runWebsiteDiscovery(input, crawlOverrides);
+      if (input.mode === 'branch') return runBranchDiscovery(input, crawlOverrides);
+      if (input.mode === 'website') return runWebsiteDiscovery(input, crawlOverrides);
+      return { status: 'failed', error: 'Vacatures ondersteunt alleen website- en branche-runs.', records: [], stats: { searchMode: input.mode } };
     },
   };
 }

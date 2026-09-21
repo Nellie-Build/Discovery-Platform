@@ -5,6 +5,7 @@
  * adapter file and adding one line here; no route changes, no database migration.
  */
 import { vacanciesAdapter } from './domains/vacancies-adapter.js';
+import { tendersAdapter } from './domains/tenders-adapter.js';
 import type { DiscoveryRunConfig } from './discovery-run-config.js';
 
 export type { DiscoveryRunConfig } from './discovery-run-config.js';
@@ -49,6 +50,12 @@ export interface DiscoveryRunOutcome {
  */
 export type DiscoveryRunInput =
   | {
+      /** Pull from a named DiscoverySource (an API or feed) instead of crawling: no website, no branch. `filters` are the source's own. */
+      mode: 'source'; sourceId: string; runConfig: DiscoveryRunConfig;
+      filters: Record<string, unknown>;
+      existingRecords: ExistingRecordSnapshot[];
+    }
+  | {
       mode: 'website'; sourceUrl: string; runConfig: DiscoveryRunConfig;
       /** Opaque to apps/api — passed straight through to the domain adapter. For vacancies today:
        * `{ postedWithinDays?: number }` (a website crawl has no branch/keywords/sources to
@@ -83,4 +90,5 @@ export interface DomainAdapter {
  * `createApp(pool, { domainRegistry })` instead of importing this constant. */
 export const defaultDomainRegistry: DomainRegistry = {
   vacancies: vacanciesAdapter,
+  tenders: tendersAdapter,
 };

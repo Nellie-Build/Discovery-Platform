@@ -52,3 +52,8 @@ export {
   normalizeCandidateUrls,
   type NormalizeCandidatesOptions,
 } from './search/candidates.js';
+export {
+  collectFromSource, SourceError,
+  type DiscoverySource, type DiscoverySourceKind, type SourceItem, type FetchBatchRequest, type FetchBatchResult,
+  type SourceErrorCode, type CollectOptions, type CollectResult, type CollectStopReason,
+} from './source/discovery-source.js';

@@ -1,0 +1,26 @@
+{
+  "name": "@discovery-platform/domain-tenders",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tenders / public procurement (aanbestedingen) discovery domain: the record shape, a TenderNed API source and tender identity/dedupe rules. Consumes @discovery-platform/core only; never any application database, React or Firebase. See docs/tenders-domain.md.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@discovery-platform/core": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.4",
+    "typescript": "^7.0.2"
+  }
+}

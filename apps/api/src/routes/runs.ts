@@ -38,9 +38,13 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
     // client sent is inferred from which field is present — no new required field on existing
     // { sourceUrl }-only clients.
     let discoveryInput: { mode: 'website'; sourceUrl: string; runConfig: DiscoveryRunConfig; filters: Record<string, unknown> }
+      | { mode: 'source'; sourceId: string; runConfig: DiscoveryRunConfig; filters: Record<string, unknown> }
       | { mode: 'branch'; branch: string; country: string | null; region: string | null; keywords: string | null; runConfig: DiscoveryRunConfig; filters: Record<string, unknown> };
     if (typeof body.sourceUrl === 'string' && body.sourceUrl.trim()) {
       discoveryInput = { mode: 'website', sourceUrl: body.sourceUrl.trim(), runConfig, filters };
+    } else if (typeof body.sourceId === 'string' && /^[a-z0-9_-]{1,40}$/.test(body.sourceId.trim())) {
+      // A named API/feed source (no crawl): the adapter decides which ids it knows and what its filters mean.
+      discoveryInput = { mode: 'source', sourceId: body.sourceId.trim(), runConfig, filters };
     } else if (typeof body.branch === 'string' && body.branch.trim()) {
       discoveryInput = {
         mode: 'branch',
@@ -51,7 +55,7 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
         runConfig, filters,
       };
     } else {
-      throw badRequest('invalid_source', 'sourceUrl or branch is required.');
+      throw badRequest('invalid_source', 'sourceUrl, sourceId or branch is required.');
     }
     const adapter = domainRegistry[project.domain];
     if (!adapter) throw badRequest('unknown_domain', `No domain adapter registered for "${project.domain}".`);

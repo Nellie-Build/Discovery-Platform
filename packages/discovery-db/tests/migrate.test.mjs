@@ -6,7 +6,7 @@ import { runMigrations } from '../dist/migrate.js';
 test('runMigrations applies every migration on a clean database and creates every table', async () => {
   const db = new PGlite();
   const { applied } = await runMigrations(db);
-  assert.deepEqual(applied, ['001_init', '002_auth', '003_projects_soft_delete', '004_admin_modules', '005_source_registry', '006_run_records']);
+  assert.deepEqual(applied, ['001_init', '002_auth', '003_projects_soft_delete', '004_admin_modules', '005_source_registry', '006_run_records', '007_tenders_module']);
 
   const { rows } = await db.query(
     "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
@@ -133,5 +133,20 @@ test('foreign keys cascade: deleting a workspace removes its projects, runs and 
   const { rows: remainingRecords } = await db.query('SELECT * FROM discovery_records WHERE project_id = $1', [project.id]);
   assert.deepEqual(remainingProjects, []);
   assert.deepEqual(remainingRecords, []);
+  await db.close();
+});
+
+test('the tenders module is registered but disabled by default, and no tender-specific table or column exists', async () => {
+  const db = new PGlite();
+  await runMigrations(db);
+  const { rows: [tenders] } = await db.query("SELECT id, name, enabled, status FROM modules WHERE id = 'tenders'");
+  assert.equal(tenders.enabled, false);
+  assert.equal(tenders.status, 'coming_soon');
+  const { rows: tables } = await db.query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name ILIKE '%tender%'");
+  assert.deepEqual(tables, []);
+  // Running the migrations again keeps the registry row untouched.
+  await runMigrations(db);
+  const { rows } = await db.query("SELECT count(*)::int AS n FROM modules WHERE id = 'tenders'");
+  assert.equal(rows[0].n, 1);
   await db.close();
 });
