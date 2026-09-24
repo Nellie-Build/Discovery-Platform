@@ -51,7 +51,22 @@ npm run dev                    # API on :3000 and Vite on :5173 (WEB_ORIGIN defa
 `npm run db:local:up` keeps its data in `data/.postgres`; set `LOCAL_POSTGRES_DIR` to use another folder (initdb needs a
 POSIX-style filesystem such as NTFS, not exFAT).
 
-## Verify
+## Optional local login bypass
+
+Set `NODE_ENV=development`, `DEV_AUTH_BYPASS=true`, and `DEV_AUTH_EMAIL` to your existing
+local account's email in the root `.env`, then restart the API. Point the Vite app's
+`VITE_API_URL` at that API's local port. Opening `http://localhost:5173` loads the dashboard
+with that account's existing workspace memberships; no account or workspace is created.
+The remembered workspace selection remains in effect.
+
+The API binds to loopback while bypass is enabled. Remote hosts, non-local browser origins,
+and forwarded requests cannot use it. `NODE_ENV=production` (or a Cloud Run `K_SERVICE`)
+always disables the bypass, regardless of the flag. It creates no persistent session.
+Set `DEV_AUTH_BYPASS=false` and restart to restore the usual login flow; password login,
+registration, logout and normal sessions remain available. While enabled, refreshing after
+logout automatically uses the configured local account again.
+
+## Checks
 
 ```sh
 npm test && npm run build && npm run typecheck

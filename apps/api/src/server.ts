@@ -5,6 +5,7 @@ import { createPool, type TransactionCapable } from '@discovery-platform/db';
 import { configurePassport } from './auth/passport.js';
 import { createSessionMiddleware } from './auth/session.js';
 import { createAuthRouter } from './auth/routes.js';
+import { createDevAuthBypass, devAuthBypassEnabled } from './auth/dev-bypass.js';
 import { authenticate } from './workspace-access.js';
 import { errorHandler } from './http-errors.js';
 import { requestLogger } from './logging.js';
@@ -22,6 +23,8 @@ export interface CreateAppOptions {
   /** The shared development API key from fase 2.1 — local scripts/tests only, never real Web
    * App auth (see workspace-access.ts). Unset in a real deployment. */
   apiKey?: string;
+  /** Existing local account only; runtime environment and loopback checks remain mandatory. */
+  devAuthEmail?: string;
   domainRegistry?: DomainRegistry;
   /** Signs the session cookie — see auth/session.ts. Required; there is no insecure default in
    * production (see main() below). */
@@ -66,6 +69,7 @@ export function createApp(pool: TransactionCapable, options: CreateAppOptions): 
   const passport = configurePassport(pool);
   app.use(passport.initialize());
   app.use(passport.session());
+  if (options.devAuthEmail) app.use(API_PREFIX, createDevAuthBypass(pool, options.devAuthEmail));
 
   app.get(`${API_PREFIX}/health`, (_req, res) => res.json({ status: 'ok' }));
 
@@ -135,7 +139,10 @@ async function main() {
   const sessionSecret = process.env.SESSION_SECRET;
   if (!sessionSecret) throw new Error('SESSION_SECRET is required — see .env.example.');
   const pool = createPool();
+  const bypass = devAuthBypassEnabled(process.env);
+  if (bypass && !process.env.DEV_AUTH_EMAIL) throw new Error('DEV_AUTH_EMAIL must identify an existing local account.');
   const app = createApp(pool, {
+    devAuthEmail: bypass ? process.env.DEV_AUTH_EMAIL : undefined,
     apiKey: process.env.API_DEV_KEY || undefined,
     sessionSecret,
     webOrigin: process.env.WEB_ORIGIN ?? 'http://localhost:5173',
@@ -144,7 +151,7 @@ async function main() {
     webDistDir: process.env.WEB_DIST_DIR || undefined,
   });
   const port = Number(process.env.PORT ?? process.env.API_PORT ?? '3000');
-  app.listen(port, () => {
+  app.listen(port, bypass ? '127.0.0.1' : '::', () => {
     console.log(`Discovery Platform API listening on http://127.0.0.1:${port}${API_PREFIX}`);
   });
 }
