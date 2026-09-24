@@ -146,6 +146,67 @@ test('a search run without a configured search provider fails plainly instead of
   } finally { if (previous !== undefined) process.env.BRAVE_SEARCH_API_KEY = previous; await t.close(); }
 });
 
+test('the server-configuration search provider (no test override) resolves Tavily or Brave from SEARCH_PROVIDER/TAVILY_API_KEY/BRAVE_SEARCH_API_KEY exactly as documented, and an explicit choice without its key still fails plainly rather than silently falling back', async () => {
+  const savedFetch = globalThis.fetch;
+  const savedEnv = { SEARCH_PROVIDER: process.env.SEARCH_PROVIDER, TAVILY_API_KEY: process.env.TAVILY_API_KEY, BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY };
+  const tavilyResult = url => json({ results: [{ url, title: 'Aanbestedingen - Gemeente Voorbeeld', content: 'Lopende aanbestedingen' }] });
+  const braveResult = url => json({ web: { results: [{ url, title: 'Aanbestedingen - Gemeente Voorbeeld', description: 'Lopende aanbestedingen' }] } });
+  // Only the two providers' own external endpoints are faked; everything else (notably the test harness's own HTTP
+  // client below, `t.request`, which itself calls the real global fetch against the local test server) passes through
+  // untouched — replacing global fetch outright would silently hijack those calls too.
+  let respondWith = null;
+  const calls = [];
+  globalThis.fetch = (url, init) => {
+    const href = String(url);
+    if (respondWith && (href.startsWith('https://api.tavily.com/') || href.startsWith('https://api.search.brave.com/'))) {
+      calls.push({ url: href, init });
+      return respondWith(href);
+    }
+    return savedFetch(url, init);
+  };
+  const t = await app(); // no `provider` override: createTendersAdapter falls back to reading process.env itself.
+  try {
+    // 1. Neither SEARCH_PROVIDER nor an explicit choice: whichever key is set wins, Tavily first (its free plan is
+    //    meant for exactly this kind of local run).
+    delete process.env.SEARCH_PROVIDER;
+    process.env.TAVILY_API_KEY = 'test-tavily-key';
+    delete process.env.BRAVE_SEARCH_API_KEY;
+    respondWith = () => tavilyResult(`https://${HOST}/aanbestedingen`);
+    let run = await t.start({ branch: 'Bouw', keywords: 'x', filters: { maxQueries: 1 } });
+    assert.equal(run.status, 'succeeded', run.error);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, 'https://api.tavily.com/search');
+    assert.equal(calls[0].init.headers.authorization, 'Bearer test-tavily-key');
+
+    // 2. Both keys set, but SEARCH_PROVIDER explicitly says brave: the explicit choice wins over the automatic precedence.
+    process.env.SEARCH_PROVIDER = 'brave';
+    process.env.BRAVE_SEARCH_API_KEY = 'test-brave-key';
+    calls.length = 0;
+    respondWith = () => braveResult(`https://${HOST}/aanbestedingen`);
+    run = await t.start({ branch: 'ICT', keywords: 'y', filters: { maxQueries: 1 } });
+    assert.equal(run.status, 'succeeded', run.error);
+    assert.equal(calls.length, 1);
+    const braveUrl = new URL(calls[0].url);
+    assert.equal(braveUrl.origin + braveUrl.pathname, 'https://api.search.brave.com/res/v1/web/search');
+    assert.equal(calls[0].init.headers['x-subscription-token'], 'test-brave-key');
+
+    // 3. An explicit choice whose own key is missing is "nothing configured" — never a silent fallback to the other
+    //    provider's key (BRAVE_SEARCH_API_KEY is still set from step 2), and never a call to either API.
+    process.env.SEARCH_PROVIDER = 'tavily';
+    delete process.env.TAVILY_API_KEY;
+    calls.length = 0;
+    respondWith = () => { throw new Error('must never be called: no provider should be configured'); };
+    run = await t.start({ branch: 'Zorg', keywords: 'z', filters: { maxQueries: 1 } });
+    assert.equal(run.status, 'failed');
+    assert.match(run.error, /zoekprovider/);
+    assert.equal(calls.length, 0);
+  } finally {
+    globalThis.fetch = savedFetch;
+    for (const [key, value] of Object.entries(savedEnv)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    await t.close();
+  }
+});
+
 test('auto: TenderNed, TED and the web search each contribute; keywords narrow the API results; records of different sources are never merged', async () => {
   const t = await app({ provider: searchProvider() });
   try {

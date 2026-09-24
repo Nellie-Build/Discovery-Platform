@@ -46,8 +46,9 @@ export {
   type VisionProvider, type VisionAnalysisConfig, type GeminiVisionProviderOptions,
 } from './vision/provider.js';
 export {
-  createBraveSearchProvider,
+  createBraveSearchProvider, createTavilySearchProvider, createConfiguredSearchProvider,
   type SourceSearchProvider, type SourceSearchInput, type SearchCandidate, type BraveSearchProviderOptions,
+  type TavilySearchProviderOptions, type ConfiguredSearchProviderInput,
 } from './search/provider.js';
 export {
   normalizeCandidateUrls,

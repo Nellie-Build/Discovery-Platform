@@ -90,3 +90,84 @@ export function createBraveSearchProvider(apiKey: string, options: BraveSearchPr
     },
   };
 }
+
+export interface TavilySearchProviderOptions {
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+  /** Override only for testing — the real endpoint otherwise. */
+  endpoint?: string;
+  /** "basic" (the default: cheapest, 1 credit/search on the free plan) or "advanced" (2 credits/search). */
+  searchDepth?: 'basic' | 'advanced';
+}
+
+const TAVILY_DEFAULT_ENDPOINT = 'https://api.tavily.com/search';
+
+/**
+ * Tavily Search API implementation of SourceSearchProvider — the only file in this package that
+ * knows Tavily's REST API shape, exactly the same convention as createBraveSearchProvider right
+ * above. The API key is a required constructor parameter, read from `process.env` by the caller
+ * only (never inside this package), never logged, and never included in any error message this
+ * function throws. Defaults to Tavily's cheapest "basic" search depth (1 credit per call),
+ * because the caller may be on Tavily's free plan.
+ */
+export function createTavilySearchProvider(apiKey: string, options: TavilySearchProviderOptions = {}): SourceSearchProvider {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const endpoint = options.endpoint ?? TAVILY_DEFAULT_ENDPOINT;
+  const doFetch = options.fetchImpl ?? fetch;
+  const searchDepth = options.searchDepth ?? 'basic';
+  return {
+    async search(input: SourceSearchInput): Promise<SearchCandidate[]> {
+      if (!apiKey) throw new Error('TAVILY_API_KEY is niet geconfigureerd.');
+      const signal = AbortSignal.timeout(timeoutMs);
+      const response = await doFetch(endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json', authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          query: input.query,
+          search_depth: searchDepth,
+          max_results: Math.min(Math.max(1, input.count ?? 10), MAX_COUNT),
+        }),
+        signal,
+      });
+      if (!response.ok) throw new Error(`Tavily Search-aanroep mislukt (status ${response.status}).`);
+      let payload: unknown;
+      try { payload = await response.json(); } catch { throw new Error('Tavily-antwoord was geen geldige JSON.'); }
+      const results = (payload as { results?: unknown[] })?.results ?? [];
+      const candidates: SearchCandidate[] = [];
+      for (const entry of Array.isArray(results) ? results : []) {
+        const record = entry as { url?: unknown; title?: unknown; content?: unknown };
+        const candidateUrl = text(record.url, 2000);
+        if (!candidateUrl) continue;
+        candidates.push({ url: candidateUrl, title: text(record.title, 500), snippet: text(record.content, 2000), source: 'tavily' });
+      }
+      return candidates;
+    },
+  };
+}
+
+export interface ConfiguredSearchProviderInput {
+  /** An explicit choice; without one, whichever provider has a key configured wins (Tavily first — it is the one with a
+   * free plan for local acceptance testing — then Brave). */
+  provider?: 'tavily' | 'brave';
+  tavilyApiKey?: string;
+  braveApiKey?: string;
+}
+
+/**
+ * Picks and builds the one SourceSearchProvider a caller's own configuration asks for — Tavily or Brave, never both at
+ * once. This is where "which provider" is decided, kept in this domain-neutral package so no caller (a domain module or
+ * an application adapter) needs its own provider-specific branch. Like createBraveSearchProvider/createTavilySearchProvider,
+ * this never reads `process.env` itself: the caller reads its own environment variables and passes the plain values in.
+ * `options` (timeoutMs, fetchImpl, endpoint, searchDepth) is passed straight through to whichever provider is chosen —
+ * the shared shape between the two providers' own options, so a caller (or a test) never needs to know which one it is.
+ * Returns undefined when nothing is configured (an explicit choice with no matching key counts as nothing configured
+ * too) — every caller already treats a missing provider as "web search contributes nothing", never a failure.
+ */
+export function createConfiguredSearchProvider(
+  config: ConfiguredSearchProviderInput, options: TavilySearchProviderOptions & BraveSearchProviderOptions = {},
+): SourceSearchProvider | undefined {
+  const choice = config.provider ?? (config.tavilyApiKey ? 'tavily' : config.braveApiKey ? 'brave' : undefined);
+  if (choice === 'tavily' && config.tavilyApiKey) return createTavilySearchProvider(config.tavilyApiKey, options);
+  if (choice === 'brave' && config.braveApiKey) return createBraveSearchProvider(config.braveApiKey, options);
+  return undefined;
+}

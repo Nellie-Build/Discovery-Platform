@@ -76,7 +76,7 @@ Proposal: keep two records and store a **link**, not a merge. A link needs, at o
 
 ## Websites and web search (`sourceId: "website"`, `"search"`, `"auto"`)
 
-Tenders that are on no API are found through the same `DiscoverySource` interface, with the platform's one crawl engine (Crawlee by default; no second crawler) and the one search provider (Brave, `BRAVE_SEARCH_API_KEY`).
+Tenders that are on no API are found through the same `DiscoverySource` interface, with the platform's one crawl engine (Crawlee by default; no second crawler) and one configurable search provider — Tavily (`TAVILY_API_KEY`) or Brave (`BRAVE_SEARCH_API_KEY`), picked by `SEARCH_PROVIDER` or by whichever key is set (Tavily first) when it is not; see `createConfiguredSearchProvider` in discovery-core. That resolver is domain-neutral and available to any caller, but today only `apps/api/src/domains/tenders-adapter.ts` uses it — Vacancies' own adapter still resolves Brave only. Neither provider is Tenders-specific: the choice lives entirely in the domain-neutral core, domains/tenders never names either provider.
 
 | sourceId | What it does | Filters |
 |---|---|---|

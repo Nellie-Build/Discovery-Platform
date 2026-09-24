@@ -248,14 +248,16 @@ export function parseSearchSourceFilters(input: Record<string, unknown>): Search
  */
 export function createSearchProviderSource(deps: WebSourceDeps): TenderWebSource {
   const stats = emptyStats();
-  Object.assign(stats, { queries: [] as unknown[], searchCandidates: 0, candidatesFetched: 0, apiCoveredSkipped: 0, overviewCrawls: 0, searchProvider: 'brave', queryErrors: 0 });
+  // Which provider answered is per-result (discovery.searchProvider, from the result's own `source`), never a single
+  // value here: a run may mix providers if the configuration changes mid-run, and this file never names one itself.
+  Object.assign(stats, { queries: [] as unknown[], searchCandidates: 0, candidatesFetched: 0, apiCoveredSkipped: 0, overviewCrawls: 0, queryErrors: 0 });
   return {
     id: SEARCH_SOURCE_ID, kind: 'api',
     stats: () => stats,
     async fetchBatch({ cursor, filters, limit }) {
       const f = parseSearchSourceFilters(filters);
       if (cursor !== null) return { items: [], nextCursor: null, exhausted: true };
-      if (!deps.searchProvider) throw new SourceError('Web-zoeken is niet beschikbaar: er is geen zoekprovider geconfigureerd (BRAVE_SEARCH_API_KEY).', 'invalid_filters');
+      if (!deps.searchProvider) throw new SourceError('Web-zoeken is niet beschikbaar: er is geen zoekprovider geconfigureerd.', 'invalid_filters');
       const country = resolveCountry(f.country);
       const started = Date.now();
       // The single fetches of search results follow robots.txt like the crawl does (one robots.txt request per origin).

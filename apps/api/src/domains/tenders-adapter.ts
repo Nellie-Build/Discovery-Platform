@@ -10,7 +10,7 @@
  * The website and search sources use the platform's crawl engine (server configuration only) and search provider.
  */
 import {
-  collectFromSource, createBraveSearchProvider, createDiscoveryCrawler, parseCrawlerEngine, SourceError,
+  collectFromSource, createConfiguredSearchProvider, createDiscoveryCrawler, parseCrawlerEngine, SourceError,
   type DiscoveryCrawler, type DiscoverySource, type SourceSearchProvider, type HttpTransport,
 } from '@discovery-platform/core';
 import {
@@ -39,10 +39,18 @@ function configuredCrawler(): DiscoveryCrawler {
   const concurrency = Number.parseInt(process.env.DISCOVERY_CRAWLER_CONCURRENCY ?? '', 10);
   return createDiscoveryCrawler(parseCrawlerEngine(process.env.DISCOVERY_CRAWLER_ENGINE), Number.isFinite(concurrency) ? { maxConcurrency: concurrency } : {});
 }
-/** Read lazily so a missing key only matters when a search is actually requested. */
+/**
+ * The web search provider from server-side configuration only: Tavily or Brave, chosen by SEARCH_PROVIDER, or
+ * whichever of TAVILY_API_KEY/BRAVE_SEARCH_API_KEY is set when SEARCH_PROVIDER is not (see createConfiguredSearchProvider
+ * in the core — this file never talks to either provider's API itself). Read lazily so a missing key only matters
+ * when a search is actually requested.
+ */
 function configuredSearchProvider(): SourceSearchProvider | undefined {
-  const apiKey = process.env.BRAVE_SEARCH_API_KEY;
-  return apiKey ? createBraveSearchProvider(apiKey) : undefined;
+  return createConfiguredSearchProvider({
+    provider: process.env.SEARCH_PROVIDER === 'brave' || process.env.SEARCH_PROVIDER === 'tavily' ? process.env.SEARCH_PROVIDER : undefined,
+    tavilyApiKey: process.env.TAVILY_API_KEY,
+    braveApiKey: process.env.BRAVE_SEARCH_API_KEY,
+  });
 }
 
 interface Collected {
