@@ -35,8 +35,12 @@ describe('project page of a tender project', () => {
     vi.mocked(api.runs.startSourceRun).mockReset().mockResolvedValue(startedRun);
   });
 
-  it('offers the TenderNed source run (dates, CPV, NUTS, count) instead of the website/branch form', async () => {
+  it('offers the three ways to look for tenders (search, direct source, automatic) instead of the website/branch form', async () => {
     renderPage();
+    expect(await screen.findByRole('button', { name: 'Zoek aanbestedingen' })).toBeInTheDocument();
+    for (const name of ['Zoeken', 'Directe bron', 'Automatisch']) expect(screen.getByRole('radio', { name })).toBeInTheDocument();
+    for (const label of ['Branche', 'Zoektermen', 'Land', 'Regio', 'CPV-prefix', 'Gewenst aantal resultaten']) expect(screen.getByLabelText(label)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('radio', { name: 'Directe bron' }));
     expect(await screen.findByRole('button', { name: 'Start TenderNed-run' })).toBeInTheDocument();
     for (const label of ['Gepubliceerd vanaf', 'Gepubliceerd tot en met', 'CPV-prefix', 'NUTS-prefix', 'Gewenst aantal resultaten']) expect(screen.getByLabelText(label)).toBeInTheDocument();
     expect(screen.queryByLabelText('Website URL')).not.toBeInTheDocument();
@@ -46,6 +50,7 @@ describe('project page of a tender project', () => {
 
   it('starting the run calls startSourceRun with sourceId "tenderned" and shows the tender run summary, never a website/branch call', async () => {
     renderPage();
+    await userEvent.click(await screen.findByRole('radio', { name: 'Directe bron' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Start TenderNed-run' }));
     expect(api.runs.startSourceRun).toHaveBeenCalledTimes(1);
     const [projectId, input] = vi.mocked(api.runs.startSourceRun).mock.calls[0];
@@ -56,7 +61,7 @@ describe('project page of a tender project', () => {
     expect(api.runs.startBranchSearch).not.toHaveBeenCalled();
     const summary = await screen.findByLabelText('Run-resultaat');
     expect(summary).toHaveTextContent('Publicaties opgehaald');
-    expect(summary).toHaveTextContent('Alle publicaties in de periode verwerkt');
+    expect(summary).toHaveTextContent('Alles in de bron verwerkt');
   });
 
   it('lists the project\'s tenders with the tender columns', async () => {

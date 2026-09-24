@@ -38,6 +38,7 @@ export function storedTenderFacts(domainData: Record<string, unknown>): TenderFa
     location: nullable(domainData.location), publicationDate: nullable(domainData.publicationDate), submissionDeadline: nullable(domainData.submissionDeadline),
     estimatedValue: value && typeof value.amount === 'number' ? value : null, description: nullable(domainData.description),
     sourceUrl: nullable(domainData.sourceUrl) ?? '', publications,
+    ...(domainData.discovery && typeof domainData.discovery === 'object' ? { discovery: domainData.discovery as TenderFacts['discovery'] } : {}),
   };
 }
 
@@ -61,7 +62,10 @@ export function tenderFactsEqual(a: unknown, b: unknown): boolean {
  */
 export function updateStoredTender(stored: TenderFacts, incoming: TenderFacts): TenderUpdate {
   // Incoming first: on the same publication id (a tie) the freshly fetched values win.
-  const [facts] = mergeTenderPublications([incoming, stored]);
+  const [merged] = mergeTenderPublications([incoming, stored]);
+  // Where a page tender was FIRST found stays its provenance: finding the same page again through another mode or with a
+  // different host-role verdict is not new information about the tender.
+  const facts = stored.discovery ? { ...merged, discovery: stored.discovery } : merged;
   const known = new Set(stored.publications.map(p => p.publicationId));
   return {
     facts,

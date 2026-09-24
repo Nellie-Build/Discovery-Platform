@@ -3,6 +3,7 @@ import { fetchPublicUrl, type HttpTransport } from './http.js';
 import { linkPriority, type PriorityTier } from './url-policy.js';
 import { extractContacts, type ContactNormalizers } from '../extract/contacts.js';
 import { CRAWL_POLICY, type CrawlPage } from './website-crawler.js';
+import type { RobotsPolicy } from './robots.js';
 
 export interface SinglePageFetchOptions<TFacts> {
   extract: (page: CrawlPage) => TFacts | TFacts[] | undefined;
@@ -10,6 +11,8 @@ export interface SinglePageFetchOptions<TFacts> {
   linkPriorityExtraTiers?: PriorityTier[];
   userAgent?: string;
   transport?: HttpTransport;
+  /** Opt-in: check robots.txt (see createRobotsPolicy) before the page is requested. Without it the fetch is exactly as before. */
+  robots?: RobotsPolicy;
 }
 
 export interface SinglePageFetchResult<TFacts> {
@@ -18,6 +21,8 @@ export interface SinglePageFetchResult<TFacts> {
   httpStatus: number | null;
   error: string | null;
   data: TFacts[] | undefined;
+  /** Set when the page was not requested because of a policy the caller opted in to. */
+  blockedBy?: 'robots';
 }
 
 /**
@@ -37,6 +42,11 @@ export async function fetchAndExtractPage<TFacts>(url: string, options: SinglePa
   try { parsed = new URL(url); } catch { return { url, status: 'failed', httpStatus: null, error: 'Ongeldige URL.', data: undefined }; }
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
     return { url, status: 'failed', httpStatus: null, error: 'Alleen publieke http(s) URLs worden ondersteund.', data: undefined };
+  }
+
+  if (options.robots) {
+    const verdict = await options.robots.check(url);
+    if (!verdict.allowed) return { url, status: 'failed', httpStatus: null, error: verdict.reason ?? 'Geblokkeerd door robots.txt.', data: undefined, blockedBy: 'robots' };
   }
 
   let response;

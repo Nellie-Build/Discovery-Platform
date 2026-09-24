@@ -8,7 +8,7 @@ import type { DiscoveryRecord, RecordWithDetails } from '@discovery-platform/cli
 import { RecordsTable } from '../../components/records-table';
 import { RecordDetailPage } from '../../pages/record-detail';
 import { getDomainRenderer } from '../registry';
-import { formatTenderDate, isUpdatedRecord } from './renderer';
+import { formatTenderDate, isUpdatedRecord, tenderOrigin, tenderRoleLabel } from './renderer';
 import '../index';
 
 const useAsyncMock = vi.fn();
@@ -82,7 +82,7 @@ function renderDetail(record: RecordWithDetails) {
 describe('tender record detail', () => {
   it('shows every TenderFacts field, the source link and the publication history (newest first)', () => {
     renderDetail(withDetails(tenderRecord()));
-    for (const label of ['Aanbesteding', 'Aanbestedende dienst', 'Kenmerk (tender-identiteit)', 'Bron', 'Referentienummer', 'Laatste publicatie-ID', 'Publicatietype', 'Procedure', 'Soort opdracht',
+    for (const label of ['Aanbesteding', 'Aanbestedende dienst', 'Kenmerk (tender-identiteit)', 'Herkomst', 'Referentienummer', 'Laatste publicatie-ID', 'Publicatietype', 'Procedure', 'Soort opdracht',
       'CPV-codes', 'NUTS', 'Locatie', 'Publicatiedatum', 'Sluitingsdatum', 'Geraamde waarde', 'Beschrijving', 'Bronlink']) {
       expect(screen.getByText(label, { selector: 'dt' })).toBeInTheDocument();
     }
@@ -114,6 +114,44 @@ describe('tender record detail', () => {
     unmount();
     renderDetail(withDetails(tenderRecord()));
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('shows where every tender comes from, in the list and in the detail: TenderNed, TED, or a website with how it was found and why it counts as a tender', () => {
+    const origin = (record: DiscoveryRecord) => tenderOrigin(record.domain_data as never);
+    expect(origin(tenderRecord())).toBe('TenderNed');
+    expect(origin(tenderRecord({ domain_data: { sourceSystem: 'ted' } }))).toBe('TED');
+    expect(origin(tenderRecord({ domain_data: { sourceSystem: 'website', discovery: { via: 'website_crawl' } } }))).toBe('Website van organisatie');
+    expect(origin(tenderRecord({ domain_data: { sourceSystem: 'website', discovery: { via: 'web_search' } } }))).toBe('Website (ontdekt via zoekopdracht)');
+    const page = { sourceSystem: 'website', tenderIdentity: 'gemeente.example/aanbestedingen/x', title: 'Renovatie school', sourceUrl: 'https://gemeente.example/aanbestedingen/x', publications: [],
+      discovery: { via: 'web_search', host: 'gemeente.example', query: 'aanbesteding Bouw renovatie', discoveredFrom: 'https://gemeente.example/aanbestedingen', evidence: ['deadline', 'reference', 'cpv'] } };
+    renderDetail(withDetails(tenderRecord({ domain_data: page, display_name: 'Renovatie school' })));
+    expect(screen.getByText('Website (ontdekt via zoekopdracht)', { selector: 'dd' })).toBeInTheDocument();
+    expect(screen.getByText('gemeente.example', { selector: 'dd' })).toBeInTheDocument();
+    expect(screen.getByText('aanbesteding Bouw renovatie', { selector: 'dd' })).toBeInTheDocument();
+    expect(screen.getByText('sluitingsdatum, kenmerk, CPV', { selector: 'dd' })).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'https://gemeente.example/aanbestedingen/x' })[0]).toHaveAttribute('href', 'https://gemeente.example/aanbestedingen/x');
+  });
+
+  it('shows the source role, the publisher apart from the contracting authority, how the authority was found and the run mode', () => {
+    const aggregator = { sourceSystem: 'website', tenderIdentity: 'platform.example/tenders/x', title: 'Schoonmaak kantoren', contractingAuthority: 'Gemeente Alpha', sourceUrl: 'https://platform.example/tenders/x', publications: [],
+      discovery: { via: 'web_search', mode: 'auto', host: 'platform.example', sourceRole: 'aggregator', roleConfidence: 'high', publisher: 'Tenderplatform Nederland', authoritySource: 'label', query: 'aanbesteding Bouw', evidence: ['deadline'] } };
+    renderDetail(withDetails(tenderRecord({ domain_data: aggregator, display_name: 'Schoonmaak kantoren' })));
+    expect(screen.getByText('Gemeente Alpha', { selector: 'dd' })).toBeInTheDocument();
+    expect(screen.getByText('Tenderplatform Nederland', { selector: 'dd' })).toBeInTheDocument();
+    expect(screen.getByText('Aggregator (verzamelt aanbestedingen van anderen) · zekerheid high', { selector: 'dd' })).toBeInTheDocument();
+    expect(screen.getByText('expliciet label op de pagina', { selector: 'dd' })).toBeInTheDocument();
+    expect(screen.getByText('Automatische run', { selector: 'dd' })).toBeInTheDocument();
+  });
+
+  it('the list shows the role under the origin for website tenders only', () => {
+    expect(tenderRoleLabel({ sourceSystem: 'website', discovery: { sourceRole: 'official_organization_site' } })).toBe('Officiële site van de organisatie');
+    expect(tenderRoleLabel({ sourceSystem: 'website', discovery: { sourceRole: 'aggregator' } })).toBe('Aggregator');
+    expect(tenderRoleLabel({ sourceSystem: 'tenderned' })).toBeNull();
+  });
+
+  it('a TenderNed record shows no website discovery fields', () => {
+    renderDetail(withDetails(tenderRecord()));
+    expect(screen.queryByText('Gevonden met zoekopdracht', { selector: 'dt' })).not.toBeInTheDocument();
   });
 
   it('a record without publications or optional fields still renders', () => {

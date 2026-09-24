@@ -20,6 +20,7 @@ export {
   type DiscoveryCrawler, type DiscoveryCrawlerOptions,
 } from './crawler/discovery-crawler.js';
 export { LegacyHttpCrawler } from './crawler/legacy-http-crawler.js';
+export { createRobotsPolicy, type RobotsPolicy, type RobotsPolicyOptions } from './crawler/robots.js';
 export { stripUrlQueries } from './crawler/crawler-diagnostics.js';
 export { CrawleeCrawler, type CrawleeCrawlerOptions } from './crawler/crawlee-crawler.js';
 export {

@@ -49,6 +49,11 @@ export interface CrawlOptions<TFacts> {
   /** Optional prior-run evidence; absence never means a URL was unchanged. */
   knownCandidates?: ReadonlyMap<string, string | null>;
   /**
+   * Pages the caller has already fetched itself (for example as a search result): the crawl never queues or requests
+   * them again. The page the crawl starts from is always fetched, whatever this contains.
+   */
+  skipUrls?: Iterable<string>;
+  /**
    * The one seam that makes this crawler domain-neutral: called once per successfully fetched
    * HTML page, with everything above already computed. Returns whatever facts the domain cares
    * about for that page — one, several (e.g. one per structured-data node found on the page),
@@ -138,6 +143,10 @@ export function createCrawlSession<TFacts>(website: string, options: CrawlOption
   let candidateLimitReached = false;
   let homepageStatus: number | null = null, homepageBlocked = false;
   const records: CrawlRecord[] = [], visited = new Set<string>();
+  for (const skipped of options.skipUrls ?? []) {
+    const normalized = scope.normalize(skipped);
+    if (normalized && normalized !== scope.requestedPage) visited.add(normalized);
+  }
   const contactPages: { url: string; contacts: ExtractedContacts }[] = [];
   const extractedPages: ExtractedPage<TFacts>[] = [];
   const candidates = new CandidateQueue(maxCandidates);

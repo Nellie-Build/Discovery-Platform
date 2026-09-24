@@ -70,3 +70,16 @@ test('an older publication fills gaps only; on the same publication id the fresh
   assert.equal(changedSame.facts.description, 'Bijgewerkt.');
   assert.deepEqual(changedSame.newPublications, []);
 });
+
+test('the provenance of a page tender stays that of its first discovery; another mode or role verdict is not an update', async () => {
+  const { updateStoredTender } = await import('../dist/index.js');
+  const base = { sourceSystem: 'website', tenderIdentity: 'x.example/a', publicationId: 'x.example/a', title: 'T', contractingAuthority: null, referenceNumber: null, noticeType: 'webpage', noticeTypeLabel: 'Webpagina', procedureType: null, contractType: null, cpvCodes: [], nutsCodes: [], location: null, publicationDate: null, submissionDeadline: '2026-12-01', estimatedValue: null, description: null, sourceUrl: 'https://x.example/a', publications: [{ publicationId: 'x.example/a', noticeType: 'webpage', noticeTypeLabel: 'Webpagina', publicationDate: null, submissionDeadline: '2026-12-01', sourceUrl: 'https://x.example/a' }] };
+  const discovery = mode => ({ via: 'web_search', host: 'x.example', query: null, searchProvider: null, discoveredFrom: null, evidence: ['deadline'], mode, sourceRole: 'unknown_web_source' });
+  const stored = { ...base, discovery: discovery('website') };
+  const again = updateStoredTender(stored, { ...base, discovery: { ...discovery('auto'), sourceRole: 'aggregator' } });
+  assert.equal(again.changed, false);
+  assert.equal(again.facts.discovery.mode, 'website');
+  const changed = updateStoredTender(stored, { ...base, submissionDeadline: '2026-12-15', publications: [{ ...base.publications[0], submissionDeadline: '2026-12-15' }], discovery: discovery('auto') });
+  assert.equal(changed.changed, true);
+  assert.equal(changed.facts.discovery.mode, 'website', 'a real change updates the facts, not the provenance');
+});

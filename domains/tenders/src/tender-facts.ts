@@ -31,6 +31,35 @@ export interface TenderPublication {
   sourceUrl: string;
 }
 
+/**
+ * How a tender that was not published by an API source was found: on a website crawled directly, or as a
+ * search result. Provenance only, never identity. Absent on TenderNed and TED tenders.
+ */
+export interface TenderDiscovery {
+  via: 'website_crawl' | 'web_search';
+  /** The host the tender page is on. */
+  host: string;
+  /** The search query that surfaced the page (web search only). */
+  query: string | null;
+  searchProvider: string | null;
+  /** The page a crawl followed a link from, when the page was not the requested one. */
+  discoveredFrom: string | null;
+  /** The generic signals that made the page count as one concrete tender (deadline, reference, cpv, ...). */
+  evidence: string[];
+  /** How the run that found it was started: a website URL, a search, or the automatic mode. */
+  mode?: 'website' | 'search' | 'auto';
+  /** What kind of web source the host is (see source-role.ts); never derived from a hostname. */
+  sourceRole?: SourceRole;
+  roleConfidence?: 'high' | 'medium' | 'low';
+  roleEvidence?: string[];
+  /** The organisation that runs the site, when the page says so. Never the contracting authority by itself. */
+  publisher?: string | null;
+  /** Where `contractingAuthority` came from: structured data, an explicit label, or a labeled sentence. */
+  authoritySource?: 'structured' | 'label' | 'prose_label' | null;
+}
+
+export type SourceRole = 'official_organization_site' | 'aggregator' | 'unknown_web_source';
+
 export interface TenderFacts {
   /** Where the tender was found; part of its identity (an id is only unique within one publisher). */
   sourceSystem: string;
@@ -59,4 +88,6 @@ export interface TenderFacts {
   description: string | null;
   sourceUrl: string;
   publications: TenderPublication[];
+  /** Only for tenders found on a website (see TenderDiscovery). */
+  discovery?: TenderDiscovery | null;
 }

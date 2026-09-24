@@ -18,6 +18,20 @@ export interface TenderPublication {
   submissionDeadline?: string | null;
   sourceUrl?: string | null;
 }
+export interface TenderDiscovery {
+  via?: 'website_crawl' | 'web_search';
+  host?: string | null;
+  query?: string | null;
+  searchProvider?: string | null;
+  discoveredFrom?: string | null;
+  evidence?: string[];
+  mode?: 'website' | 'search' | 'auto';
+  sourceRole?: 'official_organization_site' | 'aggregator' | 'unknown_web_source';
+  roleConfidence?: 'high' | 'medium' | 'low';
+  roleEvidence?: string[];
+  publisher?: string | null;
+  authoritySource?: 'structured' | 'label' | 'prose_label' | null;
+}
 export interface TenderFacts {
   sourceSystem?: string | null;
   tenderIdentity?: string | null;
@@ -38,7 +52,27 @@ export interface TenderFacts {
   description?: string | null;
   sourceUrl?: string | null;
   publications?: TenderPublication[];
+  discovery?: TenderDiscovery | null;
 }
+
+/** Where a tender comes from, in the words a user knows: TenderNed, TED, or a website (of an organisation, or found by a search). */
+export function tenderOrigin(facts: TenderFacts): string {
+  if (facts.sourceSystem === 'tenderned') return 'TenderNed';
+  if (facts.sourceSystem === 'ted') return 'TED';
+  if (facts.sourceSystem === 'website') return facts.discovery?.via === 'web_search' ? 'Website (ontdekt via zoekopdracht)' : 'Website van organisatie';
+  return facts.sourceSystem ?? 'Onbekend';
+}
+const ROLE_LABELS: Record<string, string> = {
+  official_organization_site: 'Officiële site van de organisatie', aggregator: 'Aggregator (verzamelt aanbestedingen van anderen)', unknown_web_source: 'Onbekende webbron',
+};
+const MODE_LABELS: Record<string, string> = { website: 'Website-run', search: 'Zoek-run', auto: 'Automatische run' };
+const AUTHORITY_SOURCE_LABELS: Record<string, string> = { structured: 'gestructureerde data', label: 'expliciet label op de pagina', prose_label: 'benoemd in de tekst' };
+/** Short role label for the list; empty for TenderNed and TED. */
+export const tenderRoleLabel = (facts: TenderFacts): string | null => (facts.discovery?.sourceRole ? ROLE_LABELS[facts.discovery.sourceRole].split(' (')[0] : null);
+const EVIDENCE_LABELS: Record<string, string> = {
+  deadline: 'sluitingsdatum', reference: 'kenmerk', cpv: 'CPV', procedure: 'procedure', documents: 'documenten', publication_date: 'publicatiedatum',
+  labeled_authority: 'aanbestedende dienst', tender_word_in_title: 'aanbesteding in titel', tender_word_in_lead: 'aanbesteding in tekst',
+};
 
 export const tenderData = (record: DiscoveryRecord): TenderFacts => record.domain_data as TenderFacts;
 
@@ -134,6 +168,7 @@ const tendersRenderer: DomainRenderer = {
     { key: 'cpv', label: 'CPV' },
     { key: 'location', label: 'Locatie / NUTS' },
     { key: 'notice', label: 'Laatste publicatie' },
+    { key: 'origin', label: 'Herkomst' },
   ],
   renderCell(record, columnKey) {
     const facts = tenderData(record);
@@ -150,6 +185,7 @@ const tendersRenderer: DomainRenderer = {
       case 'cpv': return cpvSummary(facts);
       case 'location': return locationSummary(facts);
       case 'notice': return noticeLabel(facts) ?? EmptyValue;
+      case 'origin': return <span>{tenderOrigin(facts)}{tenderRoleLabel(facts) ? <span className="block text-xs text-slate-500">{tenderRoleLabel(facts)}</span> : null}</span>;
       default: return EmptyValue;
     }
   },
@@ -161,7 +197,17 @@ const tendersRenderer: DomainRenderer = {
       { label: 'Aanbesteding', value: facts.title ?? EmptyValue },
       { label: 'Aanbestedende dienst', value: facts.contractingAuthority ?? EmptyValue },
       { label: 'Kenmerk (tender-identiteit)', value: facts.tenderIdentity ?? EmptyValue },
-      { label: 'Bron', value: facts.sourceSystem ?? EmptyValue },
+      { label: 'Herkomst', value: tenderOrigin(facts) },
+      ...(facts.discovery ? [
+        { label: 'Bronrol', value: facts.discovery.sourceRole ? `${ROLE_LABELS[facts.discovery.sourceRole]}${facts.discovery.roleConfidence ? ` · zekerheid ${facts.discovery.roleConfidence}` : ''}` : EmptyValue },
+        { label: 'Uitgever van de site (publisher)', value: facts.discovery.publisher ?? EmptyValue },
+        { label: 'Aanbestedende dienst gevonden via', value: facts.discovery.authoritySource ? AUTHORITY_SOURCE_LABELS[facts.discovery.authoritySource] : EmptyValue },
+        { label: 'Run-modus', value: facts.discovery.mode ? MODE_LABELS[facts.discovery.mode] : EmptyValue },
+        { label: 'Gevonden op', value: facts.discovery.host ?? EmptyValue },
+        { label: 'Gevonden met zoekopdracht', value: facts.discovery.query ?? EmptyValue },
+        { label: 'Gevonden via pagina', value: <SourceLink url={facts.discovery.discoveredFrom} /> },
+        { label: 'Bewijs voor "concrete aanbesteding"', value: facts.discovery.evidence && facts.discovery.evidence.length > 0 ? facts.discovery.evidence.map(item => EVIDENCE_LABELS[item] ?? item).join(', ') : EmptyValue },
+      ] : []),
       { label: 'Referentienummer', value: facts.referenceNumber ?? EmptyValue },
       { label: 'Laatste publicatie-ID', value: facts.publicationId ?? EmptyValue },
       { label: 'Publicatietype', value: noticeLabel(facts) ? `${noticeLabel(facts)}${facts.noticeType && facts.noticeTypeLabel ? ` (${facts.noticeType})` : ''}` : EmptyValue },
