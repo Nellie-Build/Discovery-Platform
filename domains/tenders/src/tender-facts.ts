@@ -57,6 +57,14 @@ export interface TenderDiscovery {
   /** Where `contractingAuthority` came from: structured data, an explicit label, or a labeled sentence. */
   authoritySource?: 'structured' | 'label' | 'prose_label' | null;
   /**
+   * Only set when this discovery had a target country to check against (a `search`/`auto` run — a `website` run
+   * crawls one given site and has none): 'confirmed' when the page's own evidence explicitly names that country,
+   * 'unconfirmed' when the page states nothing reliable about where it is. A page that explicitly names a DIFFERENT
+   * country is never a record at all (see tender-page.ts's PageCountryEvidence and web-sources.ts) — this field is
+   * therefore never 'foreign': a caller never has to guard against a foreign result being labelled anything else.
+   */
+  locationConfidence?: 'confirmed' | 'unconfirmed';
+  /**
    * A human-readable pointer to the specific procurement within the page, when the page inline-lists several (see
    * domains/tenders' splitTenderPageSections) — typically its own heading text. Null for an ordinary one-tender page.
    */

@@ -13,7 +13,23 @@ import { classifySourceRole, type RoleAssessment } from './source-role.js';
  */
 export type TenderPageKind = 'detail' | 'overview' | 'general' | 'none';
 
-export type TenderPageRejection = 'overview_page' | 'general_procurement_information' | 'insufficient_evidence' | 'no_tender_evidence';
+export type TenderPageRejection = 'overview_page' | 'general_procurement_information' | 'insufficient_evidence' | 'no_tender_evidence' | 'foreign_country';
+
+/**
+ * Where a page's own site says it is — evidence only, never a guess from its language or wording (Dutch
+ * tender-sounding text is written by organisations everywhere Dutch is spoken, not only in the Netherlands; English
+ * text says even less). Two generic, page-language-neutral signals go into `code`: the host's own country-code
+ * top-level domain, read only from a curated safe subset (many ccTLDs are sold and used as generic/vanity domains —
+ * ".io", ".ai", ".co", ".me", ".tv", ... — so a domain ending in one of those says nothing reliable about where the
+ * organisation actually is, and is deliberately left out), and a structured `addressCountry` the page's own
+ * JSON-LD/microdata states as a plain ISO 3166-1 alpha-2 code (the value schema.org itself recommends). Several
+ * distinct countries found this way is itself "unknown": the page's own signals disagree, so nothing is asserted.
+ */
+export interface PageCountryEvidence {
+  /** ISO 3166-1 alpha-2 — set only together with confidence 'explicit'. */
+  code: string | null;
+  confidence: 'explicit' | 'unknown';
+}
 
 export interface TenderPageFacts {
   title: string | null;
@@ -46,6 +62,8 @@ export interface TenderPageAssessment {
   authoritySource: 'structured' | 'label' | 'prose_label' | null;
   /** What kind of web source the page is on (see source-role.ts). */
   role: RoleAssessment;
+  /** Where the page's own site says it is (see PageCountryEvidence) — evidence only, a caller with a target country decides what to do with it. */
+  countryEvidence: PageCountryEvidence;
   /**
    * Set only for one procurement split out of a page that inline-lists several (see splitTenderPageSections): the
    * characteristic that identifies this one within the page — a real DOM anchor id, else the procurement's own reference
@@ -415,6 +433,45 @@ function documentLinksOf(scope: any): number {
 }
 
 /**
+ * ccTLDs safe to read as "this site's own country": the ISO 3166-1 alpha-2 code each one maps to. Limited to ccTLDs
+ * that are not routinely resold and used as a generic/vanity domain for something unrelated to that country — the
+ * United Kingdom's ".uk" is included (with its ISO code "GB", not "uk") because it is not one of those; ".io", ".ai",
+ * ".co", ".me", ".tv" and the like are deliberately left out (see PageCountryEvidence).
+ */
+const COUNTRY_CCTLD: Record<string, string> = Object.fromEntries([
+  ['uk', 'GB'],
+  ...['nl', 'be', 'de', 'fr', 'es', 'it', 'pt', 'at', 'ch', 'dk', 'se', 'no', 'fi', 'ie', 'lu', 'cz', 'sk', 'hu', 'pl', 'gr', 'ro', 'bg', 'hr', 'si', 'lt', 'lv', 'ee', 'mt', 'cy',
+    'us', 'ca', 'au', 'nz', 'jp', 'cn', 'in', 'br', 'mx', 'za', 'kr', 'sg', 'ae', 'il', 'tr', 'ua'].map(cc => [cc, cc.toUpperCase()]),
+]);
+
+/** A clean ISO 3166-1 alpha-2 code, if `value` is nothing more than one — schema.org's own recommendation for `addressCountry`. */
+function isoCountryCode(value: unknown): string | null {
+  return typeof value === 'string' && /^[A-Za-z]{2}$/.test(value.trim()) ? value.trim().toUpperCase() : null;
+}
+
+/** Every `addressCountry` value in the page's own structured data (schema.org PostalAddress, nested at any depth). */
+function structuredAddressCountries(data: Record<string, unknown>[]): string[] {
+  const found: string[] = [];
+  const visit = (value: unknown, depth: number) => {
+    if (depth > 6 || value === null || typeof value !== 'object') return;
+    if (Array.isArray(value)) { for (const item of value) visit(item, depth + 1); return; }
+    const record = value as Record<string, unknown>;
+    if ('addressCountry' in record) { const code = isoCountryCode(record.addressCountry); if (code) found.push(code); }
+    for (const nested of Object.values(record)) visit(nested, depth + 1);
+  };
+  for (const object of data) visit(object, 0);
+  return found;
+}
+
+/** See PageCountryEvidence. */
+function detectPageCountry(url: string, data: Record<string, unknown>[]): PageCountryEvidence {
+  const codes = new Set<string>();
+  try { const tld = new URL(url).hostname.toLowerCase().split('.').at(-1) ?? ''; const cc = COUNTRY_CCTLD[tld]; if (cc) codes.add(cc); } catch { /* an unparsable URL states nothing */ }
+  for (const code of structuredAddressCountries(data)) codes.add(code);
+  return codes.size === 1 ? { code: [...codes][0], confidence: 'explicit' } : { code: null, confidence: 'unknown' };
+}
+
+/**
  * Decides what one page is. Strong evidence of a concrete tender: a submission deadline, a reference number, CPV codes,
  * a named procedure, downloadable documents. Supporting evidence: a publication date, an authority under a
  * "contracting authority" style label, tender wording in the title or the first lines.
@@ -450,6 +507,7 @@ export function assessTenderPage(page: Pick<CrawlPage, '$' | 'url'>): TenderPage
   let host = '';
   try { host = new URL(url).hostname.toLowerCase().replace(/^www\./, ''); } catch { /* keep empty */ }
   const role = classifySourceRole({ host, publisher, siteName: findSiteName($, data), authority: authorityLabeled, selfDescription: selfDescription($), firstPersonProcurement: FIRST_PERSON_PROCUREMENT.test(text) });
+  const countryEvidence = detectPageCountry(url, data);
   const lead = text.slice(0, 700);
   const tenderWordInTitle = title !== null && EXPLICIT_TENDER_WORD.test(title);
   const tenderWordInUrl = EXPLICIT_TENDER_WORD.test(path.replace(/[-_/]+/g, ' '));
@@ -481,7 +539,7 @@ export function assessTenderPage(page: Pick<CrawlPage, '$' | 'url'>): TenderPage
     };
   };
   const result = (kind: TenderPageKind, rejection: TenderPageRejection | null, withFacts = false): TenderPageAssessment =>
-    ({ url, kind, rejection, signals, tenderLinks, facts: withFacts ? facts() : null, publisher, authoritySource: authority?.source ?? null, role });
+    ({ url, kind, rejection, signals, tenderLinks, facts: withFacts ? facts() : null, publisher, authoritySource: authority?.source ?? null, role, countryEvidence });
 
   // One page that lists several tenders is an overview, even when every item shows a date.
   const listingPath = LISTING_SEGMENT.test(lastSegment);
@@ -591,7 +649,7 @@ function headingRunSections($: CrawlPage['$'], contentRoot: ReturnType<CrawlPage
  * data, which is not item-specific); `publisher` and `role` are the page's own (one page belongs to one site).
  */
 function buildSectionAssessment(
-  $: CrawlPage['$'], section: RawSection, url: string, pagePublisher: string | null, pageRole: RoleAssessment,
+  $: CrawlPage['$'], section: RawSection, url: string, pagePublisher: string | null, pageRole: RoleAssessment, pageCountryEvidence: PageCountryEvidence,
 ): TenderPageAssessment | null {
   const { headingText, anchor, scope } = section;
   if (!headingText || headingText.length < 4 || headingText.length > 200 || GENERAL_INFORMATION.test(headingText)) return null;
@@ -621,7 +679,7 @@ function buildSectionAssessment(
       cpvCodes, location: valueOf(pairs, LOCATION_LABEL)?.slice(0, 120) ?? null, publicationDate, submissionDeadline: deadline,
       estimatedValue: amount(valueOf(pairs, VALUE_LABEL)), description: description ? description.slice(0, 2000) : null, documentCount,
     },
-    publisher: pagePublisher, authoritySource: authority?.source ?? null, role: pageRole,
+    publisher: pagePublisher, authoritySource: authority?.source ?? null, role: pageRole, countryEvidence: pageCountryEvidence,
     sectionId, sectionAnchor: anchor, sectionHeading: headingText,
   };
 }
@@ -632,8 +690,8 @@ function buildSectionAssessment(
  * with neither is simply left out, not turned into a record. Duplicate identities (two sections that resolve to the
  * same heading slug) are disambiguated by position, never by inventing a new value for a field.
  */
-function buildAndDedupe($: CrawlPage['$'], sections: RawSection[], url: string, pagePublisher: string | null, pageRole: RoleAssessment): TenderPageAssessment[] {
-  const built = sections.map(section => buildSectionAssessment($, section, url, pagePublisher, pageRole)).filter((item): item is TenderPageAssessment => item !== null);
+function buildAndDedupe($: CrawlPage['$'], sections: RawSection[], url: string, pagePublisher: string | null, pageRole: RoleAssessment, pageCountryEvidence: PageCountryEvidence): TenderPageAssessment[] {
+  const built = sections.map(section => buildSectionAssessment($, section, url, pagePublisher, pageRole, pageCountryEvidence)).filter((item): item is TenderPageAssessment => item !== null);
   if (built.length < 2) return [];
   const seen = new Map<string, number>();
   for (const item of built) {
@@ -645,15 +703,15 @@ function buildAndDedupe($: CrawlPage['$'], sections: RawSection[], url: string, 
   return built;
 }
 
-export function splitTenderPageSections($: CrawlPage['$'], url: string, pagePublisher: string | null, pageRole: RoleAssessment): TenderPageAssessment[] {
+export function splitTenderPageSections($: CrawlPage['$'], url: string, pagePublisher: string | null, pageRole: RoleAssessment, pageCountryEvidence: PageCountryEvidence): TenderPageAssessment[] {
   const contentRoot = pickContentRoot($);
   // Several same-shaped sibling groups can exist on one real page (a cookie-consent widget can look like a card list
   // too) — the largest is tried first, but any group that actually yields two or more real procurements will do.
   for (const group of cardSections($, contentRoot)) {
-    const built = buildAndDedupe($, group, url, pagePublisher, pageRole);
+    const built = buildAndDedupe($, group, url, pagePublisher, pageRole, pageCountryEvidence);
     if (built.length >= 2) return built;
   }
-  return buildAndDedupe($, headingRunSections($, contentRoot), url, pagePublisher, pageRole);
+  return buildAndDedupe($, headingRunSections($, contentRoot), url, pagePublisher, pageRole, pageCountryEvidence);
 }
 
 /**
@@ -665,7 +723,7 @@ export function splitTenderPageSections($: CrawlPage['$'], url: string, pagePubl
 export function assessTenderPageMulti(page: Pick<CrawlPage, '$' | 'url'>): TenderPageAssessment | TenderPageAssessment[] {
   const single = assessTenderPage(page);
   if (single.kind !== 'overview' || single.tenderLinks >= 2) return single;
-  const items = splitTenderPageSections(page.$, page.url, single.publisher, single.role);
+  const items = splitTenderPageSections(page.$, page.url, single.publisher, single.role, single.countryEvidence);
   return items.length >= 2 ? items : single;
 }
 

@@ -126,6 +126,13 @@ export function createTavilySearchProvider(apiKey: string, options: TavilySearch
           query: input.query,
           search_depth: searchDepth,
           max_results: Math.min(Math.max(1, input.count ?? 10), MAX_COUNT),
+          // input.country is deliberately never forwarded: measured against the real API, Tavily's "country" field
+          // does not merely bias results as documented — it silently drops otherwise-good results down to zero for
+          // some queries (verified against several real tender queries, with and without it). input.language carries
+          // no such risk (verified the same way) and is forwarded — the actual "is this really the right country"
+          // question is answered by judging the result page itself (see domains/tenders/src/tender-page.ts), never
+          // by trusting a provider's own geographic filtering.
+          ...(input.language ? { language: input.language } : {}),
         }),
         signal,
       });

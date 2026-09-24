@@ -4,7 +4,7 @@ import { load } from 'cheerio';
 import { assessTenderPage, mapTenderPage, tenderPageIdentity } from '../dist/index.js';
 import { DETAIL_BOUW, DETAIL_RFP, DETAIL_OFFERTE, OVERVIEW, GENERAL, GENERAL_WITH_DOCS, EVENT_NOT_TENDER, NEWS, page } from './fake-web.mjs';
 
-const assess = (html, path = '/aanbestedingen/voorbeeld-opdracht') => assessTenderPage({ $: load(html), url: `https://gemeente-voorbeeld.example${path}` });
+const assess = (html, path = '/aanbestedingen/voorbeeld-opdracht', host = 'gemeente-voorbeeld.example') => assessTenderPage({ $: load(html), url: `https://${host}${path}` });
 
 test('a concrete tender page: title, deadline (with time), reference, CPV, authority, procedure, publication date and location are extracted', () => {
   const a = assess(DETAIL_BOUW);
@@ -187,4 +187,33 @@ test('a page that lists several procurements inline (several different reference
   // One tender with its own slug that mentions a second reference (a predecessor) stays a detail.
   const one = assess(page('Aanbesteding', '<h1>Aanbesteding renovatie kantoor</h1><dl><dt>Kenmerk</dt><dd>AB-100</dd><dt>Sluitingsdatum</dt><dd>1 december 2026</dd></dl><p>Vervangt eerdere aanbesteding, kenmerk AB-099.</p>'), '/aanbestedingen/renovatie-kantoor-hoofdgebouw');
   assert.equal(one.kind, 'detail');
+});
+
+// ─── countryEvidence: where a page's own site says it is (never guessed from language or wording) ──────────────────
+
+test('countryEvidence: a host on a real country-code domain is explicit; the reserved ".example" test TLD (like most ordinary TLDs) says nothing', () => {
+  assert.deepEqual(assess(DETAIL_BOUW).countryEvidence, { code: null, confidence: 'unknown' }, '.example is not in the safe ccTLD list');
+  assert.deepEqual(assess(DETAIL_BOUW, '/aanbestedingen/x', 'some-authority.nl').countryEvidence, { code: 'NL', confidence: 'explicit' });
+  // The United Kingdom's ccTLD is "uk", mapped to its actual ISO code "GB", not the TLD label itself.
+  assert.deepEqual(assess(DETAIL_RFP, '/notice/x', 'find-tender.service.gov.uk').countryEvidence, { code: 'GB', confidence: 'explicit' });
+});
+
+test('countryEvidence: vanity ccTLDs sold and used generically (.io, .ai, .co, .me, .tv) are deliberately never read as a country', () => {
+  for (const host of ['acme-tenders.io', 'some-buyer.ai', 'procurement.co', 'buyer.me', 'notices.tv']) {
+    assert.deepEqual(assess(DETAIL_BOUW, '/x', host).countryEvidence, { code: null, confidence: 'unknown' }, host);
+  }
+});
+
+test('countryEvidence: a structured addressCountry (JSON-LD, the ISO code schema.org itself recommends) is explicit evidence, even on an otherwise silent domain', () => {
+  const ldJson = country => `<script type="application/ld+json">${JSON.stringify({ '@type': 'Organization', name: 'Buyer', address: { '@type': 'PostalAddress', addressCountry: country } })}</script>`;
+  const body = '<h1>Aanbesteding renovatie kantoor</h1><dl><dt>Kenmerk</dt><dd>AB-100</dd><dt>Sluitingsdatum</dt><dd>1 december 2026</dd></dl>';
+  assert.deepEqual(assess(page('Aanbesteding', body, ldJson('DE')), '/x', 'some-authority.example').countryEvidence, { code: 'DE', confidence: 'explicit' });
+  // A country name instead of a clean ISO code is not trusted (too ambiguous across languages) — stays unknown, never guessed.
+  assert.deepEqual(assess(page('Aanbesteding', body, ldJson('Germany')), '/x', 'some-authority.example').countryEvidence, { code: null, confidence: 'unknown' });
+});
+
+test('countryEvidence: the host\'s ccTLD and a structured addressCountry disagreeing is itself "unknown" — the page\'s own signals conflict, so nothing is asserted', () => {
+  const ldJson = '<script type="application/ld+json">' + JSON.stringify({ '@type': 'Organization', address: { '@type': 'PostalAddress', addressCountry: 'FR' } }) + '</script>';
+  const body = '<h1>Aanbesteding renovatie kantoor</h1><dl><dt>Kenmerk</dt><dd>AB-100</dd><dt>Sluitingsdatum</dt><dd>1 december 2026</dd></dl>';
+  assert.deepEqual(assess(page('Aanbesteding', body, ldJson), '/x', 'some-authority.de').countryEvidence, { code: null, confidence: 'unknown' });
 });

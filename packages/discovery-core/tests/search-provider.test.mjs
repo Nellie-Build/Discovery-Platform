@@ -148,6 +148,16 @@ test('Tavily: a result missing its own url is silently dropped; no results at al
   await assert.rejects(malformed.search({ query: 'x' }), /geen geldige JSON/);
 });
 
+test('createTavilySearchProvider forwards language when the caller gives it, but never country — measured against the real API, Tavily\'s "country" field silently drops good results to zero rather than merely biasing them', async () => {
+  const { fetchImpl, calls } = fakeFetch(tavilyResponse);
+  await createTavilySearchProvider('test-key', { fetchImpl }).search({ query: 'x', country: 'NL', language: 'nl' });
+  assert.deepEqual(JSON.parse(calls[0].init.body), { query: 'x', search_depth: 'basic', max_results: 10, language: 'nl' }, 'country is silently dropped, language forwarded');
+
+  const { fetchImpl: noneFetch, calls: noneCalls } = fakeFetch(tavilyResponse);
+  await createTavilySearchProvider('test-key', { fetchImpl: noneFetch }).search({ query: 'x' });
+  assert.ok(!('language' in JSON.parse(noneCalls[0].init.body)), 'no language given: never sent, never a null placeholder');
+});
+
 test('Tavily search() refuses to call the API at all when no key is configured', async () => {
   const provider = createTavilySearchProvider('', { fetchImpl: async () => { throw new Error('must never be called'); } });
   await assert.rejects(provider.search({ query: 'x' }), /TAVILY_API_KEY is niet geconfigureerd/);

@@ -132,6 +132,28 @@ test('SearchProviderSource: discovers concrete tender pages from search results 
   assert.match(result.items[0].raw.discovery.query, /^aanbesteding Bouw renovatie schoolgebouwen Zuid-Holland$/);
 });
 
+test('SearchProviderSource: an explicitly foreign result is excluded and counted, never presented as a Dutch tender; a domestic ccTLD confirms the match, an ordinary domain stays "unconfirmed"', async () => {
+  const allow = { '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nAllow: /' } };
+  const foreignHost = 'find-tender.service.gov.uk';
+  const nlHost = 'buyer-authority.nl';
+  const sites = { [HOST]: SITE, [foreignHost]: { ...allow, '/notice/uk-1': { body: DETAIL_RFP } }, [nlHost]: { ...allow, '/aanbesteding/nl-1': { body: DETAIL_BOUW } } };
+  const provider = fakeSearchProvider([['aanbesteding', [
+    [URLS.detail, 'Aanbesteding renovatie basisschool De Ster'],
+    [`https://${foreignHost}/notice/uk-1`, 'Cybersecurity tender'],
+    [`https://${nlHost}/aanbesteding/nl-1`, 'Aanbesteding renovatie'],
+  ]]]);
+  const { deps } = setup(sites, provider);
+  const source = createSearchProviderSource(deps);
+  const result = await run(source, search({ branch: 'ICT', keywords: 'cybersecurity', region: null, maxQueries: 1, maxOverviewCrawls: 0 }));
+  const byHost = Object.fromEntries(result.items.map(item => [item.raw.discovery.host, item]));
+  assert.ok(!(foreignHost in byHost), 'the explicitly British result is never presented as a Dutch tender');
+  assert.equal(byHost[nlHost].raw.discovery.locationConfidence, 'confirmed', 'a .nl host, requested country NL: confirmed');
+  assert.equal(byHost[HOST].raw.discovery.locationConfidence, 'unconfirmed', 'a plain domain with no country evidence at all: kept, but never silently presented as confirmed');
+  const stats = source.stats();
+  assert.equal(stats.rejectionReasons.foreign_country, 1);
+  assert.equal(stats.concreteTenders, 2, 'the foreign page is not a concrete tender at all, not just "not Dutch"');
+});
+
 test('SearchProviderSource: source discovery — an overview found by search leads to one brief crawl of that site, which finds the tenders behind it', async () => {
   const provider = fakeSearchProvider([['aanbesteding', [[URLS.overview, 'Aanbestedingen - Gemeente Voorbeeld', 'Lopende aanbestedingen']]]]);
   const { deps } = setup(undefined, provider);

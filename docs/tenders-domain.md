@@ -76,7 +76,9 @@ Proposal: keep two records and store a **link**, not a merge. A link needs, at o
 
 ## Websites and web search (`sourceId: "website"`, `"search"`, `"auto"`)
 
-Tenders that are on no API are found through the same `DiscoverySource` interface, with the platform's one crawl engine (Crawlee by default; no second crawler) and one configurable search provider — Tavily (`TAVILY_API_KEY`) or Brave (`BRAVE_SEARCH_API_KEY`), picked by `SEARCH_PROVIDER` or by whichever key is set (Tavily first) when it is not; see `createConfiguredSearchProvider` in discovery-core. That resolver is domain-neutral and available to any caller, but today only `apps/api/src/domains/tenders-adapter.ts` uses it — Vacancies' own adapter still resolves Brave only. Neither provider is Tenders-specific: the choice lives entirely in the domain-neutral core, domains/tenders never names either provider.
+Tenders that are on no API are found through the same `DiscoverySource` interface, with the platform's one crawl engine (Crawlee by default; no second crawler) and one configurable search provider — Tavily (`TAVILY_API_KEY`) or Brave (`BRAVE_SEARCH_API_KEY`), picked by `SEARCH_PROVIDER` or by whichever key is set (Tavily first) when it is not; see `createConfiguredSearchProvider` in discovery-core. That resolver is domain-neutral and available to any caller, but today only `apps/api/src/domains/tenders-adapter.ts` uses it — Vacancies' own adapter still resolves Brave only. Neither provider is Tenders-specific: the choice lives entirely in the domain-neutral core, domains/tenders never names either provider. `language` is forwarded to whichever provider is configured; `country` is forwarded to Brave (it genuinely only biases Brave's ranking) but deliberately never to Tavily — measured against Tavily's real API, its own `country` field does not merely bias results as documented, it silently drops otherwise-good results to zero for some queries. Either way, no provider's own geographic filtering is trusted as the actual answer to "is this the right country" — a `search`/`auto` run also judges the actual result itself (see below).
+
+A `search`/`auto` run never presents an explicitly foreign page as a tender of the requested country: `tender-page.ts`'s `assessTenderPage` reads a page's own country evidence (its host's country-code top-level domain, from a curated safe subset that excludes ccTLDs commonly resold as vanity domains such as `.io`/`.ai`/`.co`/`.me`/`.tv`; or a structured `addressCountry` the page's own JSON-LD states as a plain ISO code) and `web-sources.ts` excludes a page that explicitly names a different country (rejection reason `foreign_country`), never merely deprioritises it. A page with no reliable country evidence of its own is not rejected for that alone — it is kept, but its record's `discovery.locationConfidence` is `'unconfirmed'` rather than `'confirmed'`, so a caller/UI can tell the two apart instead of presenting every web result as equally certain. A `website` run has no target country (it crawls one already-chosen site) and never sets this field at all.
 
 | sourceId | What it does | Filters |
 |---|---|---|
@@ -100,6 +102,15 @@ Tenders that are on no API are found through the same `DiscoverySource` interfac
 **Web UI**: three modes, clearly apart: *Zoeken* (branch, keywords, country, region, CPV, count), *Directe bron* (TenderNed, TED, Website-URL) and *Automatisch*. The list and detail show the origin (TenderNed, TED, website of an organisation, website found via a search) and, for websites, how it was found.
 
 **Known weak spots**: see the report of the run that introduced this; in short, the source discovery is only as good as the search provider's results (aggregators dominate), free-form pages can lack labels, and there is no JavaScript rendering.
+
+**Backlog — geographic filtering** (known limits of the country check above, not yet addressed):
+- Most results end up `unconfirmed`: generic TLDs (`.com`, `.app`, `.eu`, ...) and vanity ccTLDs carry no country, and few pages publish a structured `addressCountry`. The check only removes *explicitly* foreign pages; it does not prove a page is domestic.
+- No other evidence is read yet: a postal code or address in the page text, a NUTS code, a Dutch KvK number, the contracting authority's own name, or the page's `lang`. Each needs care to avoid guessing (Dutch text is not a Dutch buyer; Belgium also writes Dutch).
+- Supranational buyers (EU institutions on `europa.eu`) are neither foreign nor domestic; they stay `unconfirmed` and there is no rule yet for whether they belong in a national run.
+- An aggregator's ccTLD or `addressCountry` describes the aggregator, not the buyer of the tender it lists: a Dutch aggregator listing a Belgian tender reads as `confirmed`.
+- The ccTLD safe list and the vanity exclusions are a hand-kept table in `tender-page.ts`.
+- Tavily's `country` parameter is not used (it drops good results). Whether a query-side bias (e.g. adding the country name to the query) helps recall without hurting it is unmeasured.
+- `locationConfidence` is stored but not yet shown or filterable in the web UI, and `foreign_country` rejections are only visible in the run statistics.
 
 ## Source role, publisher and contracting authority (hardening)
 

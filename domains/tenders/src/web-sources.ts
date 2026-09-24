@@ -100,8 +100,22 @@ function visitKey(url: string): string | null {
   try { const parsed = new URL(url); return `${parsed.protocol}//${tenderPageIdentity(url)}`; } catch { return null; }
 }
 
-/** Records one assessment in the statistics; returns whether it is a concrete tender that passes the CPV filter. */
-function tally(stats: WebSourceStats, assessment: TenderPageAssessment, cpvPrefixes: string[]): boolean {
+/**
+ * Whether a page's own location evidence (see tender-page.ts's PageCountryEvidence) is trustworthy enough to present
+ * it as a `targetCountry` result, and if so, with what confidence: 'confirmed' (the page explicitly names
+ * `targetCountry` itself), 'unconfirmed' (the page states no reliable country of its own — kept, but never silently
+ * presented as if it matched), or 'foreign' (the page explicitly names a DIFFERENT country — never presented as a
+ * `targetCountry` match at all). Null for a run with no target country of its own (a `website` run: one
+ * already-chosen site, not narrowed to any country) — there is nothing to check the page against, so nothing is said.
+ */
+function locationStatus(evidence: TenderPageAssessment['countryEvidence'], targetCountry: string | null): 'confirmed' | 'unconfirmed' | 'foreign' | null {
+  if (!targetCountry) return null;
+  if (evidence.confidence === 'unknown') return 'unconfirmed';
+  return evidence.code === targetCountry ? 'confirmed' : 'foreign';
+}
+
+/** Records one assessment in the statistics; returns whether it is a concrete tender that passes the country and CPV filters. */
+function tally(stats: WebSourceStats, assessment: TenderPageAssessment, cpvPrefixes: string[], targetCountry: string | null = null): boolean {
   stats.pagesAssessed++;
   voteFor(stats, assessment);
   if (stats.pageDiagnostics.length < 80) stats.pageDiagnostics.push({ url: stripUrlQueries(assessment.url), kind: assessment.kind, rejection: assessment.rejection, signals: assessment.signals, tenderLinks: assessment.tenderLinks });
@@ -110,6 +124,13 @@ function tally(stats: WebSourceStats, assessment: TenderPageAssessment, cpvPrefi
     else if (assessment.kind === 'general') stats.generalInformationPages++;
     stats.rejectedPages++;
     if (assessment.rejection) stats.rejectionReasons[assessment.rejection] = (stats.rejectionReasons[assessment.rejection] ?? 0) + 1;
+    return false;
+  }
+  // An explicitly foreign page is never presented as a targetCountry tender, however good its other evidence — a
+  // page whose own location cannot be determined is not rejected for that alone (see locationStatus).
+  if (locationStatus(assessment.countryEvidence, targetCountry) === 'foreign') {
+    stats.rejectedPages++;
+    stats.rejectionReasons.foreign_country = (stats.rejectionReasons.foreign_country ?? 0) + 1;
     return false;
   }
   const codes: CpvCode[] = assessment.facts?.cpvCodes ?? [];
@@ -124,7 +145,11 @@ function tally(stats: WebSourceStats, assessment: TenderPageAssessment, cpvPrefi
   return true;
 }
 
-interface CrawlSettings { maxPages: number; maxCandidates: number; maxDurationMs: number; cpvPrefixes: string[]; target: number }
+interface CrawlSettings {
+  maxPages: number; maxCandidates: number; maxDurationMs: number; cpvPrefixes: string[]; target: number;
+  /** The country a `search`/`auto` run is looking for, so an explicitly foreign page can be excluded (see tally); null for a `website` run (one given site, not narrowed to any country). */
+  targetCountry: string | null;
+}
 
 /** One crawl of a website through the platform's crawl engine, ranked and extracted the tender way. */
 async function crawlSite(
@@ -154,7 +179,7 @@ async function crawlSite(
       const result = assessTenderPageMulti(page);
       const list = Array.isArray(result) ? result : [result];
       if (Array.isArray(result)) stats.multiItemPages++;
-      const acceptedItems = list.filter(item => tally(stats, item, settings.cpvPrefixes));
+      const acceptedItems = list.filter(item => tally(stats, item, settings.cpvPrefixes, settings.targetCountry));
       if (acceptedItems.length > 0) accepted.add(page.url);
       return acceptedItems.length > 0 ? acceptedItems : undefined;
     },
@@ -172,12 +197,17 @@ async function crawlSite(
   for (const page of crawl.extractedPages as ExtractedPage<TenderPageAssessment>[]) {
     if (!accepted.has(page.url)) continue;
     const from = crawl.candidates.find(candidate => candidate.canonicalUrl === page.url)?.discoveredFrom ?? null;
-    items.push(rawItem(page.data, fetchedAt, { ...context, discoveredFrom: from && from !== page.url ? from : null }));
+    // 'foreign' never reaches here: tally() (called just above, inside extract()) already excluded it from `accepted`.
+    const locationConfidence = locationStatus(page.data.countryEvidence, settings.targetCountry) as 'confirmed' | 'unconfirmed' | null;
+    items.push(rawItem(page.data, fetchedAt, { ...context, discoveredFrom: from && from !== page.url ? from : null, locationConfidence: locationConfidence ?? undefined }));
   }
   return items;
 }
 
-function rawItem(assessment: TenderPageAssessment, fetchedAt: string, context: { via: TenderPageRaw['discovery']['via']; query: string | null; searchProvider: string | null; discoveredFrom: string | null }): SourceItem<TenderPageRaw> {
+function rawItem(
+  assessment: TenderPageAssessment, fetchedAt: string,
+  context: { via: TenderPageRaw['discovery']['via']; query: string | null; searchProvider: string | null; discoveredFrom: string | null; locationConfidence?: 'confirmed' | 'unconfirmed' },
+): SourceItem<TenderPageRaw> {
   // A procurement split out of a page that inline-lists several (see tender-page.ts) needs its own section-scoped
   // identity: several such items share the same page URL, so the plain page identity alone would collide.
   const identity = assessment.sectionId !== undefined ? tenderPageItemIdentity(assessment.url, assessment.sectionId) : tenderPageIdentity(assessment.url);
@@ -190,6 +220,7 @@ function rawItem(assessment: TenderPageAssessment, fetchedAt: string, context: {
         discoveredFrom: context.discoveredFrom, evidence: assessment.signals, publisher: assessment.publisher, authoritySource: assessment.authoritySource,
         // Where possible, a pointer to the specific procurement within the page (see tender-page.ts's splitTenderPageSections); absent for an ordinary one-tender page.
         pageSection: assessment.sectionHeading ?? null,
+        locationConfidence: context.locationConfidence,
       },
     },
   };
@@ -220,7 +251,7 @@ export function createWebsiteCrawlerSource(deps: WebSourceDeps): TenderWebSource
     async fetchBatch({ cursor, filters, limit }) {
       const f = parseWebsiteFilters(filters);
       if (cursor !== null) return { items: [], nextCursor: null, exhausted: true };
-      const items = await crawlSite(deps, f.url, { ...f, target: Math.min(f.target, Math.max(1, limit)) }, { via: 'website_crawl', query: null, searchProvider: null }, new Set(), stats);
+      const items = await crawlSite(deps, f.url, { ...f, target: Math.min(f.target, Math.max(1, limit)), targetCountry: null }, { via: 'website_crawl', query: null, searchProvider: null }, new Set(), stats);
       finalizeRoles(stats, items);
       return { items, nextCursor: null, exhausted: true };
     },
@@ -343,8 +374,10 @@ export function createSearchProviderSource(deps: WebSourceDeps): TenderWebSource
         // assessments; an ordinary page is still just the one, of whatever kind it turned out to be.
         if (results.length > 1) stats.multiItemPages++;
         for (const assessment of results) {
-          if (tally(stats, assessment, f.cpvPrefixes)) {
-            items.push(rawItem(assessment, fetchedAt, { via: 'web_search', query: queryOf.get(candidate.url) ?? null, searchProvider: candidate.source, discoveredFrom: null }));
+          if (tally(stats, assessment, f.cpvPrefixes, f.country)) {
+            // 'foreign' never reaches here: tally() just above already rejected it instead of returning true.
+            const locationConfidence = locationStatus(assessment.countryEvidence, f.country) as 'confirmed' | 'unconfirmed' | null;
+            items.push(rawItem(assessment, fetchedAt, { via: 'web_search', query: queryOf.get(candidate.url) ?? null, searchProvider: candidate.source, discoveredFrom: null, locationConfidence: locationConfidence ?? undefined }));
           } else if (assessment.kind === 'overview' || assessment.kind === 'general') {
             leads.push(candidate.url);
           }
@@ -360,7 +393,7 @@ export function createSearchProviderSource(deps: WebSourceDeps): TenderWebSource
         crawledOrigins.add(origin);
         stats.overviewCrawls = (stats.overviewCrawls as number) + 1;
         try {
-          const found = await crawlSite(deps, lead, { maxPages: f.overviewPages, maxCandidates: 100, maxDurationMs: Math.max(5_000, f.maxDurationMs - (Date.now() - started)), cpvPrefixes: f.cpvPrefixes, target: target - items.length },
+          const found = await crawlSite(deps, lead, { maxPages: f.overviewPages, maxCandidates: 100, maxDurationMs: Math.max(5_000, f.maxDurationMs - (Date.now() - started)), cpvPrefixes: f.cpvPrefixes, target: target - items.length, targetCountry: f.country },
             { via: 'web_search', query: queryOf.get(lead) ?? null, searchProvider: providerOf.get(lead) ?? null }, visited, stats, fetchedUrls);
           items.push(...found.filter(item => !items.some(existing => existing.externalId === item.externalId)));
         } catch { /* one unreachable site never fails the whole search */ stats.rejectionReasons.overview_crawl_failed = (stats.rejectionReasons.overview_crawl_failed ?? 0) + 1; }
