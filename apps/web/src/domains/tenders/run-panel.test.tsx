@@ -38,12 +38,12 @@ describe('buildTenderRunRequest: direct source', () => {
     expect(buildTenderRunRequest(direct({ source: 'website', url: 'ftp://voorbeeld.nl' }))).toHaveProperty('error');
     expect(buildTenderRunRequest(direct({ source: 'website', url: 'geen url' }))).toHaveProperty('error');
   });
-  it('defaults to yesterday and today, in search mode', () => {
-    expect(defaults).toMatchObject({ mode: 'search', publishedFrom: '2026-09-20', publishedTo: '2026-09-21', target: '20', country: 'NL' });
+  it('defaults to the last 30 days, in search mode', () => {
+    expect(defaults).toMatchObject({ mode: 'search', publishedFrom: '2026-08-23', publishedTo: '2026-09-21', target: '20', country: 'NL' });
   });
   it('refuses what the server would refuse, with a message the user can act on', () => {
     expect(buildTenderRunRequest(direct({ publishedFrom: '2026-09-22' }))).toEqual({ error: 'De einddatum ligt voor de begindatum.' });
-    expect(buildTenderRunRequest(direct({ publishedFrom: '2026-08-01' }))).toEqual({ error: 'De periode mag maximaal 14 dagen beslaan.' });
+    expect(buildTenderRunRequest(direct({ publishedFrom: '2026-01-01' }))).toEqual({ error: 'De periode mag maximaal 90 dagen beslaan.' });
     expect(buildTenderRunRequest(direct({ publishedFrom: '2026-09-08' }))).toHaveProperty('request');
     expect(buildTenderRunRequest(direct({ cpvPrefixes: '4' }))).toHaveProperty('error');
     expect(buildTenderRunRequest(direct({ cpvPrefixes: 'abc' }))).toHaveProperty('error');
@@ -54,15 +54,15 @@ describe('buildTenderRunRequest: direct source', () => {
 
 describe('buildTenderRunRequest: search and automatic', () => {
   const search = (over: Partial<TenderRunFields> = {}): TenderRunFields => ({ ...defaults, mode: 'search', branch: 'Bouw', keywords: 'renovatie schoolgebouwen', region: 'Zuid-Holland', ...over });
-  it('search keeps branch and keywords as separate fields, with country, region and CPV, and no publication period', () => {
+  it('search keeps branch and keywords as separate fields, with country, region and CPV, and a publication period', () => {
     expect(buildTenderRunRequest(search({ cpvPrefixes: '45' }))).toEqual({
-      request: { sourceId: 'search', filters: { branch: 'Bouw', keywords: 'renovatie schoolgebouwen', region: 'Zuid-Holland', country: 'NL', cpvPrefixes: ['45'] }, runConfig: { targetRecords: 20 } },
+      request: { sourceId: 'search', filters: { publishedFrom: defaults.publishedFrom, publishedTo: defaults.publishedTo, branch: 'Bouw', keywords: 'renovatie schoolgebouwen', region: 'Zuid-Holland', country: 'NL', cpvPrefixes: ['45'] }, runConfig: { targetRecords: 20 } },
     });
   });
   it('search needs a branch or keywords; either one is enough', () => {
     expect(buildTenderRunRequest(search({ branch: '', keywords: '' }))).toEqual({ error: 'Geef een branche of zoektermen op om naar aanbestedingen te zoeken.' });
     expect(buildTenderRunRequest(search({ branch: '  ', keywords: 'onderhoud scholen', region: '' }))).toEqual({
-      request: { sourceId: 'search', filters: { keywords: 'onderhoud scholen', country: 'NL' }, runConfig: { targetRecords: 20 } },
+      request: { sourceId: 'search', filters: { publishedFrom: defaults.publishedFrom, publishedTo: defaults.publishedTo, keywords: 'onderhoud scholen', country: 'NL' }, runConfig: { targetRecords: 20 } },
     });
   });
   it('automatic sends the text fields and the publication period for the API sources; the text is optional', () => {
@@ -70,7 +70,7 @@ describe('buildTenderRunRequest: search and automatic', () => {
       request: { sourceId: 'auto', filters: { publishedFrom: '2026-09-19', publishedTo: '2026-09-21', nutsPrefixes: ['NL33'], branch: 'Bouw', keywords: 'renovatie schoolgebouwen', region: 'Zuid-Holland', country: 'NL' }, runConfig: { targetRecords: 20 } },
     });
     expect(buildTenderRunRequest(search({ mode: 'auto', branch: '', keywords: '', region: '' }))).toHaveProperty('request');
-    expect(buildTenderRunRequest(search({ mode: 'auto', publishedFrom: '2026-08-01' }))).toEqual({ error: 'De periode mag maximaal 14 dagen beslaan.' });
+    expect(buildTenderRunRequest(search({ mode: 'auto', publishedFrom: '2026-01-01' }))).toEqual({ error: 'De periode mag maximaal 90 dagen beslaan.' });
   });
 });
 
@@ -81,7 +81,7 @@ describe('TenderRunPanel', () => {
     render(<TenderRunPanel projectId="p1" onStarted={vi.fn()} />);
     expect(screen.getByRole('radio', { name: 'Zoeken' })).toBeChecked();
     for (const label of ['Branche', 'Zoektermen', 'Land', 'Regio', 'CPV-prefix', 'Gewenst aantal resultaten']) expect(screen.getByLabelText(label)).toBeInTheDocument();
-    for (const label of ['Gepubliceerd vanaf', 'NUTS-prefix', 'Website-URL']) expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
+    for (const label of ['Website-URL']) expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
     expect(screen.queryByRole('radio', { name: 'TenderNed' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Zoek aanbestedingen' })).toBeInTheDocument();
   });
@@ -98,7 +98,7 @@ describe('TenderRunPanel', () => {
     await fill('CPV-prefix', '45');
     await userEvent.click(screen.getByRole('button', { name: 'Zoek aanbestedingen' }));
     expect(api.runs.startSourceRun).toHaveBeenCalledWith('p1', {
-      sourceId: 'search', filters: { branch: 'Bouw', keywords: 'renovatie schoolgebouwen', region: 'Zuid-Holland', country: 'BE', cpvPrefixes: ['45'] }, runConfig: { targetRecords: 20 },
+      sourceId: 'search', filters: { publishedFrom: expect.any(String), publishedTo: expect.any(String), branch: 'Bouw', keywords: 'renovatie schoolgebouwen', region: 'Zuid-Holland', country: 'BE', cpvPrefixes: ['45'] }, runConfig: { targetRecords: 20 },
     });
     expect(onStarted).toHaveBeenCalledWith(started);
   });

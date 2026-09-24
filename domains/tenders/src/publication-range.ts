@@ -5,7 +5,8 @@ import { SourceError } from '@discovery-platform/core';
  * days, a lone start date gets a two-day window (never beyond today), and a range longer than the maximum is
  * refused rather than silently shortened. Plain-string dates only (YYYY-MM-DD).
  */
-export const MAX_RANGE_DAYS = 14;
+export const MAX_RANGE_DAYS = 90;
+export const DATE_BLOCK_DAYS = 7;
 export const DEFAULT_RANGE_DAYS = 2;
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -33,6 +34,18 @@ export function resolvePublicationRange(input: Record<string, unknown>, today: D
   return { publishedFrom: isoDate(start), publishedTo: isoDate(end) };
 }
 
+/** Inclusive, non-overlapping windows, newest first. Keeps national-source requests small. */
+export function publicationBlocks(range: { publishedFrom: string; publishedTo: string }) {
+  const blocks: Array<{ publishedFrom: string; publishedTo: string }> = [];
+  const first = Date.parse(range.publishedFrom);
+  for (let end = Date.parse(range.publishedTo); end >= first;) {
+    const start = Math.max(first, end - (DATE_BLOCK_DAYS - 1) * 86_400_000);
+    blocks.push({ publishedFrom: isoDate(new Date(start)), publishedTo: isoDate(new Date(end)) });
+    end = start - 86_400_000;
+  }
+  return blocks;
+}
+
 /** A list of code prefixes (at most 50, each matching `pattern`), or an empty list when absent. */
 export function parsePrefixes(value: unknown, name: string, pattern: RegExp): string[] {
   if (value === undefined || value === null) return [];
@@ -40,4 +53,12 @@ export function parsePrefixes(value: unknown, name: string, pattern: RegExp): st
     throw new SourceError(`${name} must be a list of valid code prefixes.`, 'invalid_filters');
   }
   return [...new Set(value as string[])];
+}
+
+/**
+ * CPV prefixes as categories: a full code's trailing zeros are hierarchy padding, so 92111000 means "92111…" and also
+ * covers its subcategory 92111200, as TenderNed's own filter does. Never shorter than the two-digit division.
+ */
+export function parseCpvPrefixes(value: unknown): string[] {
+  return [...new Set(parsePrefixes(value, 'cpvPrefixes', /^\d{2,8}$/).map(prefix => prefix.replace(/0+$/, '').padEnd(2, '0')))];
 }

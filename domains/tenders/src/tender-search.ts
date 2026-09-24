@@ -1,5 +1,5 @@
 import { SourceError } from '@discovery-platform/core';
-import { parsePrefixes, resolvePublicationRange } from './publication-range.js';
+import { parseCpvPrefixes, resolvePublicationRange } from './publication-range.js';
 import type { TenderFacts } from './tender-facts.js';
 
 /**
@@ -60,7 +60,7 @@ export function parseTenderSearchFilters(filters: Record<string, unknown>): Tend
   const range = hasPeriod ? resolvePublicationRange(filters, new Date()) : null;
   return {
     branch, keywords, region: text(filters.region, 'region', 80), country: country.code,
-    cpvPrefixes: parsePrefixes(filters.cpvPrefixes, 'cpvPrefixes', /^\d{2,8}$/),
+    cpvPrefixes: parseCpvPrefixes(filters.cpvPrefixes),
     publishedFrom: range?.publishedFrom ?? null, publishedTo: range?.publishedTo ?? null,
   };
 }

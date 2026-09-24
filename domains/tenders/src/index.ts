@@ -29,3 +29,5 @@ export {
   type WebSourceDeps, type WebSourceStats, type TenderWebSource, type WebsiteFilters, type SearchSourceFilters,
 } from './web-sources.js';
 export { classifySourceRole, hostRole, namesMatch, hostMatchesPublisher, type RoleInput, type RoleAssessment } from './source-role.js';
+export { planTenderSearch } from './search-plan.js';
+export { suggestCpv, tenderOpportunityStatus } from './presentation.js';

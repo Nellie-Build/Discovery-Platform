@@ -1,3 +1,4 @@
+import { tenderOpportunityStatus } from '@discovery-platform/domain-tenders/presentation';
 import type { ReactNode } from 'react';
 import type { DiscoveryRecord, RecordWithDetails } from '@discovery-platform/client';
 import { registerDomainRenderer, EmptyValue, type DomainRenderer } from '../registry';
@@ -164,6 +165,7 @@ const tendersRenderer: DomainRenderer = {
     { key: 'title', label: 'Aanbesteding' },
     { key: 'authority', label: 'Aanbestedende dienst' },
     { key: 'deadline', label: 'Sluitingsdatum' },
+    { key: 'opportunity', label: 'Opdrachtstatus' },
     { key: 'procedure', label: 'Procedure' },
     { key: 'cpv', label: 'CPV' },
     { key: 'location', label: 'Locatie / NUTS' },
@@ -180,6 +182,10 @@ const tendersRenderer: DomainRenderer = {
         </span>
       );
       case 'authority': return facts.contractingAuthority ?? EmptyValue;
+      case 'opportunity': {
+        const state = tenderOpportunityStatus(facts);
+        return <Badge tone={state === 'open' ? 'success' : 'neutral'}>{{ open: 'Open', expired: 'Verlopen / gegund', unknown: 'Onbekend' }[state]}</Badge>;
+      }
       case 'deadline': return formatTenderDate(facts.submissionDeadline) ?? EmptyValue;
       case 'procedure': return facts.procedureType ?? EmptyValue;
       case 'cpv': return cpvSummary(facts);

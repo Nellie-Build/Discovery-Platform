@@ -29,7 +29,7 @@ test('the official Search API is called with POST, an expert query, exactly the 
   const [call] = fake.calls;
   assert.equal(call.url, 'https://api.ted.europa.eu/v3/notices/search');
   assert.equal(call.method, 'POST');
-  assert.deepEqual(call.body, { query: 'buyer-country=NLD AND publication-date>=20260919 AND publication-date<=20260921', fields: [...TED_FIELDS], page: 1, limit: 10, paginationMode: 'PAGE_NUMBER' });
+  assert.deepEqual(call.body, { query: 'buyer-country=NLD AND publication-date>=20260919 AND publication-date<=20260921', fields: [...TED_FIELDS], page: 1, limit: 10, paginationMode: 'PAGE_NUMBER', scope: 'ALL' });
   assert.ok(TED_FIELDS.includes('procedure-identifier') && TED_FIELDS.includes('deadline-receipt-tender-date-lot') && TED_FIELDS.includes('estimated-value-proc'));
 });
 
@@ -70,14 +70,14 @@ test('filters -> query: publication date, country (default NLD) and CPV / NUTS p
   assert.equal(buildTedQuery(parseTedFilters({ ...FILTERS, country: 'BEL' }, today)), 'buyer-country=BEL AND publication-date>=20260919 AND publication-date<=20260921');
   assert.equal(buildTedQuery(parseTedFilters({ ...FILTERS, cpvPrefixes: ['45'] }, today)), 'buyer-country=NLD AND publication-date>=20260919 AND publication-date<=20260921 AND classification-cpv=45*');
   assert.equal(buildTedQuery(parseTedFilters({ ...FILTERS, cpvPrefixes: ['45', '72000000'], nutsPrefixes: ['NL41'] }, today)),
-    'buyer-country=NLD AND publication-date>=20260919 AND publication-date<=20260921 AND (classification-cpv=45* OR classification-cpv=72000000*) AND place-of-performance=NL41*');
+    'buyer-country=NLD AND publication-date>=20260919 AND publication-date<=20260921 AND (classification-cpv=45* OR classification-cpv=72*) AND place-of-performance=NL41*');
 });
 
 test('filters are validated: a bad country, an over-long or inverted range, malformed prefixes are refused, not sent', () => {
   const today = new Date('2026-09-21T12:00:00Z');
   const refuse = filters => assert.throws(() => parseTedFilters(filters, today), error => error instanceof SourceError && error.code === 'invalid_filters', JSON.stringify(filters));
   for (const country of ['NL', 'nld', 'NLDX', 5, 'N1D']) refuse({ country });
-  refuse({ publishedFrom: '2026-08-01', publishedTo: '2026-09-21' });
+  refuse({ publishedFrom: '2026-01-01', publishedTo: '2026-09-21' });
   refuse({ publishedFrom: '2026-09-21', publishedTo: '2026-09-20' });
   refuse({ publishedFrom: '21-09-2026' });
   refuse({ cpvPrefixes: ['45*'] });

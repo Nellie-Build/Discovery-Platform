@@ -1,5 +1,5 @@
 import { createJsonClient } from './json-client.js';
-import { DEFAULT_RANGE_DAYS, MAX_RANGE_DAYS, parsePrefixes, resolvePublicationRange } from './publication-range.js';
+import { DEFAULT_RANGE_DAYS, MAX_RANGE_DAYS, parseCpvPrefixes, parsePrefixes, resolvePublicationRange, publicationBlocks } from './publication-range.js';
 import {
   SourceError,
   type DiscoverySource, type FetchBatchRequest, type FetchBatchResult, type SourceItem,
@@ -20,6 +20,14 @@ const TENDERNED_ORIGIN = 'https://www.tenderned.nl/';
 const PUBLICATION_PAGE_URL = 'https://www.tenderned.nl/aankondigingen/overzicht/';
 
 export { DEFAULT_RANGE_DAYS, MAX_RANGE_DAYS };
+
+/**
+ * The list endpoint filters on CPV server-side and hierarchically (92000000 covers every 92xxxxxx code); repeated
+ * parameters are OR-ed. It needs the "12345678-9" format but matches on the eight digits only (verified 2026-09-24),
+ * so the check digit is sent as 0. Should TenderNed start validating it, the request fails loudly (the run marks
+ * the source failed) instead of silently returning less; the client-side check below stays as the safety net.
+ */
+export const cpvQuery = (prefixes: string[]) => prefixes.map(prefix => `&cpvCodes=${prefix.padEnd(8, '0')}-0`).join('');
 const MAX_PAGE_SIZE = 100;
 
 /** What one batch item carries: the list entry and (when fetched and available) the detail document. */
@@ -35,7 +43,8 @@ export interface TenderNedFilters {
   publishedFrom: string;
   /** Last publication date to include (YYYY-MM-DD). */
   publishedTo: string;
-  /** Keep only publications with a CPV code starting with one of these (digits). Decided client-side from the detail. */
+  /** Keep only publications with a CPV code starting with one of these (digits). Sent to the list endpoint (`cpvCodes`,
+   * hierarchical) and checked again client-side from the detail. */
   cpvPrefixes: string[];
   /** Keep only publications with a NUTS code starting with one of these (e.g. "NL33"). Decided client-side from the detail. */
   nutsPrefixes: string[];
@@ -47,6 +56,8 @@ export interface TenderNedSourceStats {
   detailFailures: number;
   /** Publications dropped by the client-side CPV/NUTS filter. */
   filteredOut: number;
+  publicationsScanned: number;
+  dateBlocks: number;
 }
 
 export interface TenderNedSourceOptions {
@@ -73,7 +84,7 @@ export function parseTenderNedFilters(filters: Record<string, unknown> | undefin
   const input = filters ?? {};
   return {
     ...resolvePublicationRange(input, today),
-    cpvPrefixes: parsePrefixes(input.cpvPrefixes, 'cpvPrefixes', /^\d{2,8}$/),
+    cpvPrefixes: parseCpvPrefixes(input.cpvPrefixes),
     nutsPrefixes: parsePrefixes(input.nutsPrefixes, 'nutsPrefixes', /^[A-Z]{2}[A-Z0-9]{0,3}$/),
   };
 }
@@ -87,7 +98,7 @@ export function createTenderNedSource(options: TenderNedSourceOptions = {}): Ten
   const clock = options.clock ?? { now: Date.now, sleep: (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)) };
   const fetchDetails = options.fetchDetails ?? true;
   const client = createJsonClient({ serviceName: 'TenderNed', fetch: options.fetch, clock, minIntervalMs: options.minIntervalMs, timeoutMs: options.timeoutMs, maxRetries: options.maxRetries });
-  const counters = { detailFailures: 0, filteredOut: 0 };
+  const counters = { detailFailures: 0, filteredOut: 0, publicationsScanned: 0, dateBlocks: 0 };
   const getJson = (url: string, signal: AbortSignal | undefined) => client.request(url, { signal });
 
   const matches = (codes: unknown, wanted: string[]) =>
@@ -102,18 +113,25 @@ export function createTenderNedSource(options: TenderNedSourceOptions = {}): Ten
     stats: () => ({ ...client.stats(), ...counters }),
     async fetchBatch(request: FetchBatchRequest): Promise<FetchBatchResult<TenderNedRaw>> {
       const filters = parseTenderNedFilters(request.filters, new Date(clock.now()));
+      const blocks = publicationBlocks(filters);
+      counters.dateBlocks = blocks.length;
+      let block = 0;
       let page = 0;
       let size = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(request.limit)));
       if (request.cursor !== null) {
-        const match = /^(\d{1,5}):(\d{1,3})$/.exec(request.cursor);
+        const match = /^(\d{1,5}):(\d{1,3})(?::(\d{1,2}))?$/.exec(request.cursor);
         if (!match || Number(match[2]) < 1 || Number(match[2]) > MAX_PAGE_SIZE) throw new SourceError('Invalid cursor.', 'invalid_filters');
         page = Number(match[1]);
         size = Number(match[2]);
+        block = Number(match[3] ?? 0);
+        if (block >= blocks.length) throw new SourceError('Invalid date-block cursor.', 'invalid_filters');
         if (size > request.limit) throw new SourceError('The batch limit is smaller than the page size this cursor was created with.', 'invalid_filters');
       }
-      const listUrl = `${baseUrl}/publicaties?page=${page}&size=${size}&publicatieDatumVanaf=${filters.publishedFrom}&publicatieDatumTot=${filters.publishedTo}`;
+      const range = blocks[block];
+      const listUrl = `${baseUrl}/publicaties?page=${page}&size=${size}&publicatieDatumVanaf=${range.publishedFrom}&publicatieDatumTot=${range.publishedTo}${cpvQuery(filters.cpvPrefixes)}`;
       const list = record(await getJson(listUrl, request.signal));
       if (!list || !Array.isArray(list.content)) throw new SourceError('TenderNed returned an unexpected list shape.', 'invalid_response');
+      counters.publicationsScanned += list.content.length;
       const wantsDetail = fetchDetails || filters.cpvPrefixes.length > 0 || filters.nutsPrefixes.length > 0;
       const items: SourceItem<TenderNedRaw>[] = [];
       for (const entry of list.content) {
@@ -141,8 +159,10 @@ export function createTenderNedSource(options: TenderNedSourceOptions = {}): Ten
         });
       }
       const totalPages = typeof list.totalPages === 'number' ? list.totalPages : null;
-      const exhausted = list.last === true || list.content.length === 0 || (totalPages !== null && page + 1 >= totalPages);
-      return { items, nextCursor: exhausted ? null : `${page + 1}:${size}`, exhausted };
+      const blockDone = list.last === true || list.content.length === 0 || (totalPages !== null && page + 1 >= totalPages);
+      const exhausted = blockDone && block + 1 >= blocks.length;
+      const nextCursor = blocks.length === 1 ? `${page + 1}:${size}` : `${blockDone ? 0 : page + 1}:${size}:${blockDone ? block + 1 : block}`;
+      return { items, nextCursor: exhausted ? null : nextCursor, exhausted };
     },
   };
 }

@@ -86,6 +86,14 @@ policy. Discovery Platform will never install this package; any future Playwrigh
 simply does without automatic cookie-banner dismissal. This is a deliberate exclusion, not an
 oversight — recorded here so the decision doesn't need re-litigating later.
 
+## CPV 2008 vocabulary (European Union, reuse with attribution)
+
+Used by: `domains/tenders/src/cpv-data.ts` — code list with the official Dutch and English labels, transformed from the
+official XML (`https://ted.europa.eu/documents/d/ted/cpv_2008_xml`, Regulation (EC) No 213/2008). © European Union;
+reused under the EU reuse policy (Commission Decision 2011/833/EU; see `https://ted.europa.eu/en/legal-notice`).
+Source, checksum and transformation: `domains/tenders/data/README.md`. Data only; no third-party code was copied for
+the API-first tender search (GitHub projects with unclear licences were used, at most, as inspiration).
+
 ## License policy
 
 - Only permissive licenses (MIT, Apache-2.0, BSD, ISC, and similar) are used for dependencies.

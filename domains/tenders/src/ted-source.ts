@@ -3,7 +3,7 @@ import {
   type DiscoverySource, type FetchBatchRequest, type FetchBatchResult, type SourceItem,
 } from '@discovery-platform/core';
 import { createJsonClient } from './json-client.js';
-import { parsePrefixes, resolvePublicationRange } from './publication-range.js';
+import { parseCpvPrefixes, parsePrefixes, resolvePublicationRange } from './publication-range.js';
 
 /**
  * TED (Tenders Electronic Daily, the EU's procurement journal) through its official Search API v3:
@@ -34,6 +34,7 @@ export const TED_FIELDS = [
 export type TedNoticeRaw = Record<string, unknown>;
 
 export interface TedFilters {
+  keywords: string;
   publishedFrom: string;
   publishedTo: string;
   /** ISO 3166-1 alpha-3 country of the buyer (the "land"); default NLD. */
@@ -60,10 +61,12 @@ export interface TedSource extends DiscoverySource<TedNoticeRaw> { stats(): TedS
 export function parseTedFilters(filters: Record<string, unknown> | undefined, today: Date = new Date()): TedFilters {
   const input = filters ?? {};
   const country = input.country === undefined || input.country === null || input.country === '' ? 'NLD' : input.country;
+  const keywords = input.keywords ?? '';
+  if (typeof keywords !== 'string' || keywords.length > 300 || /[\x00-\x1f]/.test(keywords)) throw new SourceError('keywords must be text of at most 300 characters.', 'invalid_filters');
   if (typeof country !== 'string' || !/^[A-Z]{3}$/.test(country)) throw new SourceError('country must be an ISO 3166-1 alpha-3 code (for example NLD).', 'invalid_filters');
   return {
-    ...resolvePublicationRange(input, today), country,
-    cpvPrefixes: parsePrefixes(input.cpvPrefixes, 'cpvPrefixes', /^\d{2,8}$/),
+    ...resolvePublicationRange(input, today), country, keywords: keywords.trim(),
+    cpvPrefixes: parseCpvPrefixes(input.cpvPrefixes),
     nutsPrefixes: parsePrefixes(input.nutsPrefixes, 'nutsPrefixes', /^[A-Z]{2}[A-Z0-9]{0,3}$/),
   };
 }
@@ -76,6 +79,9 @@ export function buildTedQuery(filters: TedFilters): string {
   const anyOf = (field: string, prefixes: string[]) => (prefixes.length === 1 ? `${field}=${prefixes[0]}*` : `(${prefixes.map(prefix => `${field}=${prefix}*`).join(' OR ')})`);
   if (filters.cpvPrefixes.length > 0) clauses.push(anyOf('classification-cpv', filters.cpvPrefixes));
   if (filters.nutsPrefixes.length > 0) clauses.push(anyOf('place-of-performance', filters.nutsPrefixes));
+  // Only literal words are interpolated, never user-supplied expert-query operators.
+  const words = filters.keywords?.match(/[\p{L}\p{N}]+/gu) ?? [];
+  if (words.length > 0) clauses.push(`(${words.map(word => `FT~"${word}"`).join(' OR ')})`);
   return clauses.join(' AND ');
 }
 
@@ -113,7 +119,7 @@ export function createTedSource(options: TedSourceOptions = {}): TedSource {
       }
       const answer = record(await client.request(searchUrl, {
         method: 'POST', signal: request.signal,
-        body: { query: buildTedQuery(filters), fields: TED_FIELDS, page, limit, paginationMode: 'PAGE_NUMBER' },
+        body: { query: buildTedQuery(filters), fields: TED_FIELDS, page, limit, paginationMode: 'PAGE_NUMBER', scope: 'ALL' },
       }));
       if (!answer || !Array.isArray(answer.notices) || typeof answer.totalNoticeCount !== 'number') throw new SourceError('TED returned an unexpected answer shape.', 'invalid_response');
       if (answer.timedOut === true) throw new SourceError('TED reported that the search timed out.', 'timeout', true);

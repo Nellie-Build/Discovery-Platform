@@ -136,7 +136,7 @@ test('date filter and CPV filter reach the source; a range that is too long fail
   assert.equal(none.records.length, 0);
   const tooLong = await adapterFor(publications).adapter.runDiscovery(input({ filters: { publishedFrom: '2026-01-01', publishedTo: '2026-09-21' } }));
   assert.equal(tooLong.status, 'failed');
-  assert.match(tooLong.error, /at most 14 days/);
+  assert.match(tooLong.error, /at most 90 days/);
 });
 
 test('failures are reported, not thrown: an unknown source, a wrong mode and a source that is down', async () => {

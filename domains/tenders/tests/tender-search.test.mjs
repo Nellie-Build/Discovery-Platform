@@ -39,11 +39,11 @@ test('the number of queries is bounded and there are no duplicate queries', () =
   assert.equal(new Set(queries).size, queries.length);
 });
 
-test('search filters are validated: a branch or keywords is required, the country must be known, CPV prefixes must be digits, the period at most 14 days', () => {
+test('search filters are validated: a branch or keywords is required, the country must be known, CPV prefixes must be digits, the period at most 90 days', () => {
   assert.throws(() => parseTenderSearchFilters({}), /branche of zoektermen/);
   assert.throws(() => parseTenderSearchFilters({ branch: 'Bouw', country: 'Atlantis' }), /Onbekend land/);
   assert.throws(() => parseTenderSearchFilters({ branch: 'Bouw', cpvPrefixes: ['abc'] }), /cpvPrefixes/);
-  assert.throws(() => parseTenderSearchFilters({ branch: 'Bouw', publishedFrom: '2026-01-01', publishedTo: '2026-03-01' }), /at most 14 days/);
+  assert.throws(() => parseTenderSearchFilters({ branch: 'Bouw', publishedFrom: '2026-01-01', publishedTo: '2026-09-01' }), /at most 90 days/);
   const ok = parseTenderSearchFilters({ keywords: '  onderhoud   scholen ', cpvPrefixes: ['45', '72'] });
   assert.equal(ok.keywords, 'onderhoud scholen');
   assert.equal(ok.branch, null);

@@ -2,7 +2,7 @@ import {
   SourceError, createRobotsPolicy, normalizeCandidateUrls, stripUrlQueries,
   type DiscoveryCrawler, type DiscoverySource, type ExtractedPage, type HttpTransport, type SourceItem, type SourceSearchProvider,
 } from '@discovery-platform/core';
-import { parsePrefixes } from './publication-range.js';
+import { parseCpvPrefixes } from './publication-range.js';
 import type { CpvCode, SourceRole } from './tender-facts.js';
 import { hostRole, type RoleAssessment } from './source-role.js';
 import { assessTenderPageMulti, SEARCH_SOURCE_ID, tenderPageIdentity, tenderPageItemIdentity, WEBSITE_SOURCE_ID, type TenderPageAssessment, type TenderPageRaw } from './tender-page.js';
@@ -237,7 +237,7 @@ export function parseWebsiteFilters(input: Record<string, unknown>): WebsiteFilt
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new SourceError('Alleen publieke http(s)-URLs worden ondersteund.', 'invalid_filters');
   return {
     url: url.href, maxPages: clampInt(input.maxPages, 10, 1, 60), maxCandidates: clampInt(input.maxCandidates, 200, 1, 500),
-    maxDurationMs: clampInt(input.maxDurationMs, 120_000, 5_000, 300_000), cpvPrefixes: parsePrefixes(input.cpvPrefixes, 'cpvPrefixes', /^\d{2,8}$/),
+    maxDurationMs: clampInt(input.maxDurationMs, 120_000, 5_000, 300_000), cpvPrefixes: parseCpvPrefixes(input.cpvPrefixes),
     target: clampInt(input.targetRecords, 20, 1, 200),
   };
 }

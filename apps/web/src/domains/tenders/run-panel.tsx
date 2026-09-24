@@ -1,3 +1,4 @@
+import { suggestCpv, CPV_SOURCE_URL } from '@discovery-platform/domain-tenders/presentation';
 import { useState, type FormEvent } from 'react';
 import { ApiError, type DiscoveryRun, type SourceRunInput } from '@discovery-platform/client';
 import { api } from '../../lib/api';
@@ -15,7 +16,7 @@ import { SegmentedControl, type SegmentedControlOption } from '../../components/
  * Every mode is one `source` run against the API; nothing tender-specific lives outside this folder.
  */
 export const TENDER_SOURCE_ID = 'tenderned';
-export const MAX_RANGE_DAYS = 14;
+export const MAX_RANGE_DAYS = 90;
 export const MAX_TARGET = 200;
 
 export type TenderRunMode = 'search' | 'direct' | 'auto';
@@ -47,14 +48,14 @@ const SOURCE_OPTIONS: SegmentedControlOption<TenderDirectSource>[] = [
   { value: 'tenderned', label: 'TenderNed' }, { value: 'ted', label: 'TED' }, { value: 'website', label: 'Website-URL' },
 ];
 const MODE_HELP: Record<TenderRunMode, string> = {
-  search: 'Geef een branche en/of zoektermen op. Discovery zoekt zelf op het web naar aanbestedingen en leest alleen pagina’s die één concrete opdracht beschrijven.',
+  search: 'Geef een branche en/of zoektermen op. Discovery doorzoekt eerst de officiële bronnen (TED en TenderNed) en vult daarna aan met webresultaten: alleen pagina’s die één concrete opdracht beschrijven.',
   direct: 'Haal aanbestedingen uit één bekende bron: TenderNed, TED of de website van een organisatie.',
-  auto: 'Gebruikt alle geschikte bronnen tegelijk: TenderNed, TED en (als die is ingesteld) het zoeken op het web. Zoektermen filteren de resultaten van TenderNed en TED.',
+  auto: 'Gebruikt dezelfde API-first volgorde: TED, TenderNed en aanvullende webresultaten. Zonder tekst of CPV is de zoekopdracht breed.',
 };
 
 const localDate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 export function defaultTenderRunFields(now: Date = new Date()): TenderRunFields {
-  const yesterday = new Date(now.getTime() - 86_400_000);
+  const yesterday = new Date(now.getTime() - 29 * 86_400_000);
   return {
     mode: 'search', source: 'tenderned', branch: '', keywords: '', country: 'NL', region: '', url: '',
     publishedFrom: localDate(yesterday), publishedTo: localDate(now), cpvPrefixes: '', nutsPrefixes: '', target: '20',
@@ -65,7 +66,7 @@ const list = (value: string) => value.split(/[\s,;]+/).map(item => item.trim()).
 /** Returns the request for the API, or the first thing the user has to fix. */
 export function buildTenderRunRequest(fields: TenderRunFields): { request: SourceRunInput } | { error: string } {
   const filters: Record<string, unknown> = {};
-  const usesPeriod = fields.mode === 'auto' || (fields.mode === 'direct' && fields.source !== 'website');
+  const usesPeriod = fields.mode !== 'direct' || (fields.mode === 'direct' && fields.source !== 'website');
   if (usesPeriod) {
     if (fields.publishedFrom) filters.publishedFrom = fields.publishedFrom;
     if (fields.publishedTo) filters.publishedTo = fields.publishedTo;
@@ -80,7 +81,7 @@ export function buildTenderRunRequest(fields: TenderRunFields): { request: Sourc
   const nuts = list(fields.nutsPrefixes).map(prefix => prefix.toUpperCase());
   if (nuts.some(prefix => !/^[A-Z]{2}[A-Z0-9]{0,3}$/.test(prefix))) return { error: 'Een NUTS-prefix begint met twee letters (bijvoorbeeld NL33).' };
   if (cpv.length > 0) filters.cpvPrefixes = cpv;
-  const usesNuts = fields.mode === 'auto' || (fields.mode === 'direct' && fields.source !== 'website');
+  const usesNuts = fields.mode !== 'direct' || (fields.mode === 'direct' && fields.source !== 'website');
   if (usesNuts && nuts.length > 0) filters.nutsPrefixes = nuts;
   const target = Number(fields.target);
   if (!Number.isInteger(target) || target < 1 || target > MAX_TARGET) return { error: `Het gewenste aantal is een getal van 1 tot ${MAX_TARGET}.` };
@@ -89,7 +90,7 @@ export function buildTenderRunRequest(fields: TenderRunFields): { request: Sourc
   if (fields.mode === 'search' || fields.mode === 'auto') {
     const branch = fields.branch.trim();
     const keywords = fields.keywords.trim();
-    if (fields.mode === 'search' && !branch && !keywords) return { error: 'Geef een branche of zoektermen op om naar aanbestedingen te zoeken.' };
+    if (fields.mode === 'search' && !branch && !keywords && cpv.length === 0) return { error: 'Geef een branche of zoektermen op om naar aanbestedingen te zoeken.' };
     if (branch) filters.branch = branch;
     if (keywords) filters.keywords = keywords;
     if (fields.region.trim()) filters.region = fields.region.trim();
@@ -118,8 +119,9 @@ export function TenderRunPanel({ projectId, onStarted }: { projectId: string; on
   const [submitting, setSubmitting] = useState(false);
   const set = (key: keyof TenderRunFields) => (event: { target: { value: string } }) => setFields(current => ({ ...current, [key]: event.target.value }));
   const showText = fields.mode === 'search' || fields.mode === 'auto';
-  const showPeriod = fields.mode === 'auto' || (fields.mode === 'direct' && fields.source !== 'website');
+  const showPeriod = fields.mode !== 'direct' || (fields.mode === 'direct' && fields.source !== 'website');
   const showNuts = showPeriod;
+  const suggestions = suggestCpv(fields.keywords || fields.branch);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -205,9 +207,17 @@ export function TenderRunPanel({ projectId, onStarted }: { projectId: string; on
               <Input id="tender-target" type="number" min={1} max={MAX_TARGET} value={fields.target} onChange={set('target')} />
             </div>
           </div>
+          {showText && suggestions.length > 0 && (
+            <div className="rounded-lg border border-slate-200 p-3" aria-label="Officiële CPV-suggesties">
+              <p className="mb-2 text-sm">Kies een categorie uit de <a href={CPV_SOURCE_URL} target="_blank" rel="noreferrer" className="underline">officiële CPV-vocabulaire</a>. Deze keuze vervangt de vrije zoekterm; categorieën worden niet automatisch gecombineerd.</p>
+              <div className="flex flex-wrap gap-2">
+                {suggestions.map(item => <button key={item.code} type="button" className="rounded border px-2 py-1 text-sm" onClick={() => setFields(current => ({ ...current, cpvPrefixes: item.code, keywords: '', branch: '' }))}>{item.code} — {item.label}</button>)}
+              </div>
+            </div>
+          )}
           <p className="text-xs text-slate-500">
             {showPeriod ? `Alleen publicaties van de gekozen periode (maximaal ${MAX_RANGE_DAYS} dagen); ` : ''}
-            CPV{showNuts ? ' en NUTS' : ''} worden na het ophalen gefilterd; een pagina zonder CPV blijft staan.
+            CPV filtert TED en TenderNed bij de bron (inclusief subcategorieën){showNuts ? '; NUTS wordt na het ophalen gefilterd' : ''}; een webpagina zonder CPV blijft staan.
             Een aanbesteding die al is opgeslagen wordt bijgewerkt in plaats van opnieuw aangemaakt; dezelfde aanbesteding uit verschillende bronnen blijft apart.
           </p>
           <FieldError>{error}</FieldError>
@@ -237,12 +247,17 @@ export function TenderRunSummary({ run }: { run: DiscoveryRun }) {
   const stats = run.stats ?? {};
   const created = run.recordsCreated ?? num(stats.recordsCreated);
   const sourceId = typeof stats.sourceId === 'string' ? stats.sourceId : 'tenderned';
-  const isWeb = sourceId === 'website' || sourceId === 'search';
+  const apiFirst = stats.strategy === 'api_first';
+  const isWeb = sourceId === 'website' || (sourceId === 'search' && !apiFirst);
   const isAuto = sourceId === 'auto';
   const reasons = Object.entries((stats.rejectionReasons ?? {}) as Record<string, number>);
   const rows: Array<[string, string | number]> = [];
+  if (stats.opportunityStatus) {
+    const statuses = stats.opportunityStatus as Record<string, number>;
+    rows.push(['Officiële aanbestedingen', num(stats.officialTenders)], ['Aanvullende webresultaten', num(stats.webResults)], ['Open', num(statuses.open)], ['Verlopen / gegund', num(statuses.expired)], ['Status onbekend', num(statuses.unknown)], ['Bevestigd open en relevant', num(stats.openRelevant)]);
+  }
   if (!isWeb) rows.push(['Periode', stats.publishedFrom ? `${String(stats.publishedFrom)} t/m ${String(stats.publishedTo)}` : '—']);
-  if (sourceId === 'search') rows.push(['Zoekopdrachten', Array.isArray(stats.queries) ? stats.queries.length : 0], ['Kandidaat-pagina’s', num(stats.searchCandidates)], ['Site-crawls', num(stats.overviewCrawls)]);
+  if (sourceId === 'search' && !apiFirst) rows.push(['Zoekopdrachten', Array.isArray(stats.queries) ? stats.queries.length : 0], ['Kandidaat-pagina’s', num(stats.searchCandidates)], ['Site-crawls', num(stats.overviewCrawls)]);
   if (sourceId === 'website') rows.push(['Website', typeof stats.websiteUrl === 'string' ? stats.websiteUrl : '—']);
   if (isWeb) rows.push(
     ['Pagina’s bekeken', num(stats.pagesVisited)], ['Concrete aanbestedingen', num(stats.concreteTenders)], ['Overzichtspagina’s', num(stats.overviewPages)],
@@ -266,6 +281,9 @@ export function TenderRunSummary({ run }: { run: DiscoveryRun }) {
       </CardHeader>
       <CardContent>
         {run.error && <p role="alert" className="mb-3 text-sm text-red-700">{run.error}</p>}
+        {stats.yield === 'no_matches' && <p role="status" className="mb-3 text-sm">{stats.coverageComplete ? 'Uitvoering geslaagd, maar geen aanbestedingen gevonden met deze filters. Pas de periode, CPV of zoekterm aan.' : 'Geen treffers in het verwerkte deel. De zoekopdracht is niet volledig uitgevoerd; bekijk de bronmeldingen en limieten.'}</p>}
+        {stats.yield === 'no_confirmed_open_matches' && <p className="mb-3 text-sm">Resultaten gevonden, maar geen bevestigde open relevante opdrachten. Verlopen opdrachten en onbekende statussen tellen niet als open kansen.</p>}
+        {stats.coverageComplete === false && <p className="mb-3 text-sm">Beperkte dekking: een bron mislukte of een limiet werd bereikt. De getoonde aantallen zijn geen volledig marktoverzicht.</p>}
         <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           {rows.map(([label, value]) => (
             <div key={label}>

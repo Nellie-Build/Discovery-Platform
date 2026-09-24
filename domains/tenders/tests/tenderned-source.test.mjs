@@ -76,8 +76,8 @@ test('date filter: without dates it is the last two days (never everything); a l
 test('date filter: a range longer than the maximum, an inverted range and malformed dates are refused, not shortened', () => {
   const today = new Date('2026-09-21T00:00:00Z');
   const refuse = filters => assert.throws(() => parseTenderNedFilters(filters, today), error => error instanceof SourceError && error.code === 'invalid_filters', JSON.stringify(filters));
-  refuse({ publishedFrom: '2026-08-01', publishedTo: '2026-09-21' });
-  refuse({ publishedFrom: '2026-09-07', publishedTo: '2026-09-21' });
+  refuse({ publishedFrom: '2026-01-01', publishedTo: '2026-09-21' });
+  refuse({ publishedFrom: '2026-06-01', publishedTo: '2026-09-21' });
   refuse({ publishedFrom: '2026-09-21', publishedTo: '2026-09-20' });
   refuse({ publishedFrom: '21-09-2026' });
   refuse({ publishedFrom: '2026-02-30' });
@@ -85,7 +85,7 @@ test('date filter: a range longer than the maximum, an inverted range and malfor
   refuse({ cpvPrefixes: ['abc'] });
   refuse({ nutsPrefixes: ['n l'] });
   assert.doesNotThrow(() => parseTenderNedFilters({ publishedFrom: '2026-09-08', publishedTo: '2026-09-21' }, today), 'exactly 14 days is allowed');
-  assert.equal(MAX_RANGE_DAYS, 14);
+  assert.equal(MAX_RANGE_DAYS, 90);
 });
 
 test('client-side CPV and NUTS filters: only matching publications are returned, and the dropped ones are counted', async () => {

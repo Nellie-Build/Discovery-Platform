@@ -38,6 +38,8 @@ const tedNotice = (number, title) => ({
 });
 const tedFetch = notices => async (_url, init) => {
   const body = JSON.parse(init.body);
+  const words = [...body.query.matchAll(/FT~"([^"]+)"/g)].map(m => m[1].toLowerCase());
+  notices = notices.filter(n => !words.length || words.some(w => JSON.stringify(n).toLowerCase().includes(w)));
   return json({ notices: notices.slice((body.page - 1) * body.limit, body.page * body.limit).map(n => Object.fromEntries(Object.entries(n).filter(([key]) => body.fields.includes(key)))), totalNoticeCount: notices.length, iterationNextToken: null, timedOut: false });
 };
 
@@ -113,13 +115,13 @@ test('a branch run (branch + keywords + region + country) searches with tender i
   const provider = searchProvider();
   const t = await app({ provider });
   try {
-    const run = await t.start({ branch: 'Bouw', keywords: 'renovatie schoolgebouwen', region: 'Zuid-Holland', country: 'Nederland', filters: { maxQueries: 2 } });
+    const run = await t.start({ branch: 'Bouw', keywords: 'renovatie schoolgebouwen', region: 'Zuid-Holland', country: 'Nederland', filters: { maxQueries: 2, sources: ['search'] } });
     assert.equal(run.status, 'succeeded', run.error);
     assert.equal(run.stats.searchMode, 'branch');
     assert.equal(run.stats.sourceId, 'search');
     assert.deepEqual(provider.queries.map(q => q.query), ['aanbesteding Bouw renovatie schoolgebouwen Zuid-Holland', 'tender Bouw renovatie schoolgebouwen Zuid-Holland']);
     assert.equal(run.recordsCreated, 4);
-    assert.equal(run.stats.overviewCrawls, 1, 'the overview found by search led to one crawl of that site');
+    assert.equal(run.stats.source_search.overviewCrawls, 1, 'the overview found by search led to one crawl of that site');
     const records = await t.records();
     assert.ok(records.every(r => r.domain_data.discovery.via === 'web_search'));
     const found = records.find(r => r.domain_data.sourceUrl.endsWith('/renovatie-basisschool-de-ster'));
@@ -127,20 +129,20 @@ test('a branch run (branch + keywords + region + country) searches with tender i
     const { rows } = await t.db.query("SELECT DISTINCT source_label, source_type FROM record_sources");
     assert.deepEqual(rows.map(r => [r.source_label, r.source_type]), [['search', 'website']]);
     // Idempotent: the same search again creates nothing.
-    const again = await t.start({ branch: 'Bouw', keywords: 'renovatie schoolgebouwen', region: 'Zuid-Holland', country: 'Nederland', filters: { maxQueries: 2 } });
+    const again = await t.start({ branch: 'Bouw', keywords: 'renovatie schoolgebouwen', region: 'Zuid-Holland', country: 'Nederland', filters: { maxQueries: 2, sources: ['search'] } });
     assert.equal(again.recordsCreated, 0);
     assert.equal(again.stats.duplicatesUnchanged, 4);
   } finally { await t.close(); }
 });
 
-test('a search run without a configured search provider fails plainly instead of returning nothing', async () => {
+test('a search run without a search provider still uses official APIs and reports skipped web enrichment', async () => {
   const t = await app();
   const previous = process.env.BRAVE_SEARCH_API_KEY;
   delete process.env.BRAVE_SEARCH_API_KEY;
   try {
     const run = await t.start({ branch: 'Bouw' });
-    assert.equal(run.status, 'failed');
-    assert.match(run.error, /zoekprovider/);
+    assert.equal(run.status, 'succeeded');
+    assert.match(run.stats.sources.find(s => s.sourceId === 'search').reason, /zoekprovider/);
     const bad = await t.start({ sourceId: 'search', filters: {} });
     assert.match(bad.error, /branche of zoektermen/);
   } finally { if (previous !== undefined) process.env.BRAVE_SEARCH_API_KEY = previous; await t.close(); }
@@ -197,8 +199,8 @@ test('the server-configuration search provider (no test override) resolves Tavil
     calls.length = 0;
     respondWith = () => { throw new Error('must never be called: no provider should be configured'); };
     run = await t.start({ branch: 'Zorg', keywords: 'z', filters: { maxQueries: 1 } });
-    assert.equal(run.status, 'failed');
-    assert.match(run.error, /zoekprovider/);
+    assert.equal(run.status, 'succeeded');
+    assert.match(run.stats.sources.find(s => s.sourceId === 'search').reason, /zoekprovider/);
     assert.equal(calls.length, 0);
   } finally {
     globalThis.fetch = savedFetch;
@@ -212,8 +214,8 @@ test('auto: TenderNed, TED and the web search each contribute; keywords narrow t
   try {
     const run = await t.start({ sourceId: 'auto', filters: { branch: 'Bouw', keywords: 'onderhoud scholen', country: 'NL', publishedFrom: '2026-09-21', publishedTo: '2026-09-21', maxQueries: 2 } });
     assert.equal(run.status, 'succeeded', run.error);
-    assert.deepEqual(run.stats.sources.map(s => [s.sourceId, s.status]), [['tenderned', 'ok'], ['ted', 'ok'], ['search', 'ok']]);
-    assert.equal(run.stats.filteredByKeywords, 2, 'the office furniture and cleaning tenders do not match "onderhoud scholen"');
+    assert.deepEqual(run.stats.sources.map(s => [s.sourceId, s.status]), [['ted', 'ok'], ['tenderned', 'ok'], ['search', 'ok']]);
+    assert.equal(run.stats.filteredByKeywords, 1, 'the office furniture and cleaning tenders do not match "onderhoud scholen"');
     const records = await t.records();
     const bySystem = {};
     for (const r of records) (bySystem[r.domain_data.sourceSystem] ??= []).push(r.domain_data.title);
@@ -231,7 +233,7 @@ test('auto: TenderNed, TED and the web search each contribute; keywords narrow t
   } finally { await t.close(); }
 });
 
-test('auto shares the wanted number between sources instead of letting one source fill it', async () => {
+test('auto prioritizes official sources before web supplementation', async () => {
   const t = await app({ provider: searchProvider() });
   try {
     const run = await t.start({ sourceId: 'auto', filters: { keywords: 'onderhoud scholen', branch: 'Bouw', publishedFrom: '2026-09-21', publishedTo: '2026-09-21', maxQueries: 2 }, runConfig: { targetRecords: 3 } });

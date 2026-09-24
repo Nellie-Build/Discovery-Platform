@@ -14,7 +14,7 @@ import {
   type DiscoveryCrawler, type DiscoverySource, type SourceSearchProvider, type HttpTransport,
 } from '@discovery-platform/core';
 import {
-  mergeTenderPublications, resolveCountry, storedTenderFacts, storedTenderIdentityKey, tenderCompletenessScore, tenderIdentityKey, tenderMatchesKeywords,
+  mergeTenderPublications, planTenderSearch, tenderOpportunityStatus, storedTenderFacts, storedTenderIdentityKey, tenderCompletenessScore, tenderIdentityKey, tenderMatchesKeywords,
   updateStoredTender, TENDER_SOURCES, type TenderFacts, type TenderSourceDefinition,
 } from '@discovery-platform/domain-tenders';
 import type { DiscoveredRecord, DiscoveryRunInput, DiscoveryRunOutcome, DomainAdapter } from '../domain-registry.js';
@@ -32,7 +32,6 @@ export interface TendersAdapterOptions {
 const BATCH_SIZE = 25;
 const MAX_ITEMS_PER_RUN = 200;
 export const AUTO_SOURCE_ID = 'auto';
-const AUTO_SOURCES = ['tenderned', 'ted', 'search'] as const;
 
 /** The crawl engine from server-side configuration only, exactly as the vacancies module does. */
 function configuredCrawler(): DiscoveryCrawler {
@@ -89,9 +88,19 @@ export function createTendersAdapter(options: TendersAdapterOptions = {}): Domai
     Object.assign(stats, definition.describeFilters(filters));
     let collected;
     try {
-      collected = await collectFromSource(source, {
+      const signal = AbortSignal.timeout(Math.max(1, Math.floor(config.maxDurationMs)));
+      const bounded: TenderSource = { ...source, async fetchBatch(request) {
+        try { return await source.fetchBatch(request); }
+        catch (error) {
+          if (signal.aborted) return { items: [], nextCursor: request.cursor, exhausted: false };
+          throw error;
+        }
+      } };
+      collected = await collectFromSource(bounded, {
         filters, batchSize: BATCH_SIZE, maxItems: Math.min(config.maxCandidates, MAX_ITEMS_PER_RUN), maxDurationMs: config.maxDurationMs,
+        maxBatches: 20, signal,
       });
+      if (signal.aborted) collected.stopReason = 'time_limit';
     } catch (error) {
       throw new CollectFailure(error, { ...stats, ...source.stats?.(), durationMs: Date.now() - start });
     }
@@ -133,17 +142,27 @@ export function createTendersAdapter(options: TendersAdapterOptions = {}): Domai
       const sourceReports: Array<Record<string, unknown>> = [];
       const baseStats: Record<string, unknown> = { ...modeStats, sourceId, targetRecords: config.targetRecords, maxCandidates: config.maxCandidates, maxDurationMs: config.maxDurationMs };
       let keywordFilter: string | null = null;
+      let cpvCategories: string[] = [];
 
-      if (sourceId === AUTO_SOURCE_ID) {
-        const plan = planAuto(filters, web().searchProvider !== undefined || overrides.search !== undefined);
-        if ('error' in plan) return failure(plan.error, baseStats);
+      const apiFirst = sourceId === AUTO_SOURCE_ID || sourceId === 'search';
+      if (sourceId === 'search' && ![filters.branch, filters.keywords].some(v => typeof v === 'string' && v.trim()) && !(Array.isArray(filters.cpvPrefixes) && filters.cpvPrefixes.length)) {
+        return failure('Geef een branche of zoektermen of CPV-categorie op.', baseStats);
+      }
+      if (apiFirst) {
+        let plan;
+        try { plan = planTenderSearch(filters, web().searchProvider !== undefined || overrides.search !== undefined); }
+        catch (error) { return failure(describe(error), baseStats); }
         Object.assign(baseStats, plan.stats);
-        keywordFilter = plan.keywords;
+        keywordFilter = plan.stats.keywords;
+        cpvCategories = plan.stats.cpvPrefixes;
         for (const step of plan.steps) {
           try {
-            const collected = await collect(step.sourceId, filtersFor(step.sourceId, step.filters, config), config, start, 'auto');
+            const remaining = config.maxDurationMs - (Date.now() - start);
+            if (remaining <= 0) { sourceReports.push({ sourceId: step.sourceId, status: 'skipped', reason: 'Tijdslimiet bereikt.' }); continue; }
+            const budget = { ...config, maxDurationMs: Math.max(1, Math.min(remaining, Math.floor(config.maxDurationMs / plan.steps.length))) };
+            const collected = await collect(step.sourceId, filtersFor(step.sourceId, step.filters, budget), budget, start, sourceId === 'search' ? 'search' : 'auto');
             groups.push(collected);
-            sourceReports.push({ sourceId: step.sourceId, status: 'ok', publications: collected.fetched, stopReason: collected.stopReason });
+            sourceReports.push({ sourceId: step.sourceId, status: 'ok', publications: collected.fetched, stopReason: collected.stopReason, exhausted: collected.exhausted });
           } catch (error) {
             const reason = error instanceof CollectFailure ? error.reason : error;
             sourceReports.push({ sourceId: step.sourceId, status: 'failed', error: describe(reason).slice(0, 300), ...(error instanceof CollectFailure ? { stats: error.stats } : {}) });
@@ -189,9 +208,9 @@ export function createTendersAdapter(options: TendersAdapterOptions = {}): Domai
       let tenders = mergeTenderPublications(allPublications);
       let filteredByKeywords = 0;
       if (keywordFilter) {
-        // Keywords narrow what the API sources return (they cannot search by text); pages found by the search already matched them.
+        // TenderNed keeps its existing client-side text check; TED already applied full-text server-side.
         const before = tenders.length;
-        tenders = tenders.filter(fact => fact.sourceSystem === 'website' || tenderMatchesKeywords(fact, keywordFilter));
+        tenders = tenders.filter(fact => fact.sourceSystem !== 'tenderned' || tenderMatchesKeywords(fact, keywordFilter));
         filteredByKeywords = before - tenders.length;
       }
       const freshBySource = new Map<string, DiscoveredRecord[]>();
@@ -213,13 +232,11 @@ export function createTendersAdapter(options: TendersAdapterOptions = {}): Domai
         if (update.changed) updated.push(recordFor(update.facts, existing.id, update.newPublications));
         else unchanged.push(recordFor(stored, existing.id));
       }
-      // The target is shared fairly between sources (one each in turn) so a large API result never crowds out a website or search result.
-      const lists = [...freshBySource.values()];
+      // Official records take priority; web results supplement remaining capacity.
+      const lists = [...freshBySource].sort(([a], [b]) => Number(a === 'website') - Number(b === 'website')).map(([, list]) => list);
       const totalFresh = lists.reduce((sum, list) => sum + list.length, 0);
       const records: DiscoveredRecord[] = [];
-      for (let index = 0; records.length < config.targetRecords && records.length < totalFresh; index++) {
-        for (const list of lists) if (index < list.length && records.length < config.targetRecords) records.push(list[index]);
-      }
+      for (const list of lists) records.push(...list.slice(0, Math.max(0, config.targetRecords - records.length)));
       const primary = groups[0];
       const anyCut = groups.some(group => group.stopReason === 'item_limit');
       const stopReason = totalFresh > config.targetRecords ? 'target_reached'
@@ -227,12 +244,18 @@ export function createTendersAdapter(options: TendersAdapterOptions = {}): Domai
         : anyCut ? 'candidate_limit'
         : groups.some(group => group.stopReason === 'time_limit') ? 'time_limit' : primary.stopReason;
       const failedSources = sourceReports.filter(report => report.status === 'failed').length;
-      const single = groups.length === 1 && sourceId !== AUTO_SOURCE_ID;
+      const single = groups.length === 1 && !apiFirst;
+      const coverageComplete = groups.every(group => group.exhausted && group.stopReason !== 'time_limit' && Number(group.stats.detailFailures ?? 0) === 0) && failedSources === 0 && !sourceReports.some(r => r.reason === 'Tijdslimiet bereikt.');
+      const opportunityStatus = { open: 0, expired: 0, unknown: 0 };
+      for (const fact of tenders) opportunityStatus[tenderOpportunityStatus(fact)]++;
+      const officialTenders = tenders.filter(fact => fact.sourceSystem !== 'website').length;
+      const webResults = tenders.length - officialTenders;
+      const openRelevant = tenders.filter(fact => tenderOpportunityStatus(fact) === 'open' && (fact.sourceSystem !== 'website' || (fact.discovery?.locationConfidence === 'confirmed' && (cpvCategories.length === 0 || fact.cpvCodes.some(c => cpvCategories.some(p => c.code.startsWith(p))))))).length;
       return {
         records,
         observedRecords: unchanged,
         updatedRecords: updated,
-        ...(failedSources > 0 ? { status: 'partial' as const } : {}),
+        ...(!coverageComplete ? { status: 'partial' as const } : {}),
         stats: {
           ...(single ? primary.stats : { ...baseStats, ...Object.assign({}, ...groups.map(group => ({ [`source_${group.sourceId}`]: group.stats }))) }),
           searchMode: modeStats.searchMode,
@@ -241,6 +264,8 @@ export function createTendersAdapter(options: TendersAdapterOptions = {}): Domai
           publicationsFetched: groups.reduce((sum, group) => sum + group.fetched, 0),
           publicationsMapped: allPublications.length,
           tendersFound: tenders.length,
+          officialTenders, webResults, opportunityStatus, openRelevant, coverageComplete,
+          yield: tenders.length === 0 ? 'no_matches' : openRelevant > 0 ? 'open_matches' : 'no_confirmed_open_matches',
           publicationsMergedIntoOtherPublications: allPublications.length - mergeTenderPublications(allPublications).length,
           filteredByKeywords,
           // recordsCreated is set by the run route from what it actually stored, next to recordsUpdated.
@@ -260,38 +285,6 @@ export function createTendersAdapter(options: TendersAdapterOptions = {}): Domai
       };
     },
   };
-}
-
-interface AutoStep { sourceId: string; filters: Record<string, unknown> }
-type AutoPlan = { steps: AutoStep[]; skipped: Array<{ sourceId: string; reason: string }>; keywords: string | null; stats: Record<string, unknown> } | { error: string };
-
-/**
- * `auto`: every source that suits the request. TenderNed for the Netherlands, TED for the country, and the web search when a
- * branch or keywords were given and a search provider is configured. Each step gets only the filters it understands.
- */
-function planAuto(filters: Record<string, unknown>, searchAvailable: boolean): AutoPlan {
-  let country;
-  try { country = resolveCountry(filters.country); } catch (error) { return { error: error instanceof SourceError ? error.message : 'Ongeldig land.' }; }
-  const wanted = Array.isArray(filters.sources) ? filters.sources.filter((id): id is string => typeof id === 'string') : [...AUTO_SOURCES];
-  const unknown = wanted.filter(id => !(AUTO_SOURCES as readonly string[]).includes(id));
-  if (unknown.length > 0) return { error: `Onbekende bron in "sources": ${unknown.join(', ').slice(0, 80)}.` };
-  const period = { ...(filters.publishedFrom !== undefined ? { publishedFrom: filters.publishedFrom } : {}), ...(filters.publishedTo !== undefined ? { publishedTo: filters.publishedTo } : {}) };
-  const cpv = filters.cpvPrefixes !== undefined ? { cpvPrefixes: filters.cpvPrefixes } : {};
-  const nuts = filters.nutsPrefixes !== undefined ? { nutsPrefixes: filters.nutsPrefixes } : {};
-  const hasText = [filters.branch, filters.keywords].some(value => typeof value === 'string' && value.trim());
-  const steps: AutoStep[] = [];
-  const skipped: Array<{ sourceId: string; reason: string }> = [];
-  for (const id of AUTO_SOURCES) {
-    if (!wanted.includes(id)) continue;
-    if (id === 'tenderned') { if (country.code === 'NL') steps.push({ sourceId: id, filters: { ...period, ...cpv, ...nuts } }); else skipped.push({ sourceId: id, reason: 'TenderNed publiceert alleen Nederlandse aanbestedingen.' }); }
-    else if (id === 'ted') steps.push({ sourceId: id, filters: { ...period, ...cpv, ...nuts, country: country.alpha3 } });
-    else if (!hasText) skipped.push({ sourceId: id, reason: 'Web-zoeken heeft een branche of zoektermen nodig.' });
-    else if (!searchAvailable) skipped.push({ sourceId: id, reason: 'Er is geen zoekprovider geconfigureerd.' });
-    else steps.push({ sourceId: id, filters: { ...filters, ...period } });
-  }
-  if (steps.length === 0) return { error: 'Geen enkele bron past bij deze zoekopdracht.' };
-  const keywords = typeof filters.keywords === 'string' && filters.keywords.trim() ? filters.keywords.trim() : null;
-  return { steps, skipped, keywords, stats: { branch: filters.branch ?? null, keywords, region: filters.region ?? null, country: country.code, cpvPrefixes: filters.cpvPrefixes ?? [] } };
 }
 
 export const tendersAdapter: DomainAdapter = createTendersAdapter();
