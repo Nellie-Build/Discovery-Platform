@@ -4,7 +4,7 @@ import { createDiscoveryCrawler } from '@discovery-platform/core';
 import { createTenderNedSource, createTedSource } from '@discovery-platform/domain-tenders';
 import { createTendersAdapter } from '../dist/domains/tenders-adapter.js';
 import { startTestApp } from './helpers/test-app.mjs';
-import { SITE, page, webTransport, fakeSearchProvider } from '../../../domains/tenders/tests/fake-web.mjs';
+import { SITE, page, webTransport, fakeSearchProvider, MULTI_TENDER_CARDS } from '../../../domains/tenders/tests/fake-web.mjs';
 
 /**
  * Tenders beyond the APIs: an organisation's website, a web search by branch/keywords/region and the `auto` source that combines
@@ -231,6 +231,32 @@ test('the same tender text on a website and in TenderNed stays two records (no a
     assert.equal(same.length, 2);
     assert.deepEqual(same.map(r => r.domain_data.sourceSystem).sort(), ['tenderned', 'website']);
     assert.ok(same.every(r => r.domain_data.referenceNumber === '900' || r.domain_data.tenderIdentity === '900'), 'even an equal reference number does not merge them');
+  } finally { await t.close(); }
+});
+
+test('a page that inline-lists several procurements (an organisation\'s own "open opdrachten" page, no separate links) yields one record per procurement; a repeated run creates nothing new', async () => {
+  const multiHost = 'meerdere-opdrachten.example';
+  const sites = { [multiHost]: { '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nAllow: /' }, '/': { body: MULTI_TENDER_CARDS } } };
+  const t = await app({ sites });
+  try {
+    const run = await t.start({ sourceUrl: `https://${multiHost}/`, runConfig: { maxPages: 1 } });
+    assert.equal(run.status, 'succeeded', run.error);
+    assert.equal(run.recordsCreated, 4, 'all four procurements on the page are recognised, not merged into one');
+    const records = await t.records();
+    assert.equal(records.length, 4);
+    assert.equal(new Set(records.map(r => r.domain_data.tenderIdentity)).size, 4, 'each has its own identity');
+    assert.ok(records.every(r => r.domain_data.sourceUrl.startsWith(`https://${multiHost}/`)), 'the original page URL is kept for every record');
+    assert.ok(records.every(r => r.domain_data.discovery.pageSection), 'a human-readable pointer to the specific section is kept');
+    const onboarding = records.find(r => r.domain_data.title === 'Onboarding nieuwe leveranciers');
+    assert.equal(onboarding.domain_data.referenceNumber, null, 'no reference stated for this one: stays null, never invented');
+    assert.ok(onboarding.domain_data.submissionDeadline);
+
+    const after = await t.snapshot();
+    const again = await t.start({ sourceUrl: `https://${multiHost}/`, runConfig: { maxPages: 1 } });
+    assert.equal(again.recordsCreated, 0, 'recrawling the identical page creates nothing new');
+    assert.equal(again.recordsUpdated, 0);
+    assert.equal(again.stats.duplicatesUnchanged, 4);
+    assert.equal(await t.snapshot(), after, 'the record tables are byte-for-byte identical after the second run');
   } finally { await t.close(); }
 });
 

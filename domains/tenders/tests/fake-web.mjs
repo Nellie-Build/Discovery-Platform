@@ -91,6 +91,65 @@ export function fakeSearchProvider(answers) {
   };
 }
 
+// ─── Inline multi-tender pages: one organisation page that lists several concrete procurements itself, no separate
+// links to follow — the generic pattern behind FMO's own /open-tenders page, without copying its content or hostname.
+
+/** Card-style: each procurement in its own <article>, with its own heading, reference, deadline and document link. */
+export const MULTI_TENDER_CARDS = page('Open opdrachten', `
+  <h1>Open opdrachten</h1>
+  <p>Onze organisatie werkt momenteel aan de volgende openbare inkooptrajecten.</p>
+  <article id="opdracht-raamovereenkomst-technische-bijstand">
+    <h2>Raamovereenkomst technische bijstand</h2>
+    <p>Referentie: ABC-XX-1</p>
+    <p>Sluitingsdatum: 13 augustus 2026 om 17:00 uur</p>
+    <a href="/documenten/abc-xx-1-aankondiging.pdf">Aankondiging</a>
+  </article>
+  <article id="opdracht-coordinator-programma-uitvoering">
+    <h2>Coördinator programma-uitvoering</h2>
+    <p>Referentie: DEF-XX-2</p>
+    <p>Sluitingsdatum: 17 mei 2026 om 23:59 uur</p>
+    <a href="/documenten/def-xx-2-aankondiging.pdf">Aankondiging</a>
+    <a href="/documenten/def-xx-2-bijlagen.zip">Bijlagen</a>
+  </article>
+  <article id="opdracht-capaciteitsopbouw-esg">
+    <h2>Capaciteitsopbouw ESG</h2>
+    <p>Referentie: GHI-TA-3</p>
+    <p>Sluitingsdatum: 24 april 2026 om 17:00 uur</p>
+    <a href="/documenten/ghi-ta-3-aankondiging.pdf">Aankondiging</a>
+  </article>
+  <article id="opdracht-onboarding-nieuwe-leveranciers">
+    <h2>Onboarding nieuwe leveranciers</h2>
+    <p>Sluitingsdatum: 6 februari 2026 om 17:00 uur</p>
+    <a href="/documenten/onboarding-aankondiging.pdf">Aankondiging</a>
+  </article>`);
+
+/**
+ * Flat markup: no card containers, just a run of h2 headings and paragraphs, direct siblings under <main>. Two distinct
+ * reference numbers make the PAGE itself read as several procurements (as assessTenderPage already decides on its own —
+ * see distinctReferenceAndDeadlines); one item states only a reference (no deadline of its own), one only a deadline
+ * (no reference), and a third heading with neither must be left out.
+ */
+export const MULTI_TENDER_HEADINGS = page('Lopende opdrachten', `
+  <h1>Lopende opdrachten</h1>
+  <h2>Onderhoud technische installaties</h2>
+  <p>Referentie: ONH-2026-09</p>
+  <p>Deze opdracht betreft het jaarlijks onderhoud van de technische installaties.</p>
+  <a href="/downloads/onh-2026-09-bestek.pdf">Bestek</a>
+  <h2>Levering kantoormeubilair</h2>
+  <p>Referentie: LKM-2026-14</p>
+  <a href="/downloads/meubilair-programma-van-eisen.pdf">Programma van eisen</a>
+  <h2>Nieuwsbrief inkoop</h2>
+  <p>Blijf op de hoogte van onze inkoopactiviteiten door u aan te melden voor de nieuwsbrief.</p>`);
+
+/** Only one of the two headings has its own reference or deadline: not enough to split (needs at least two qualifying items). */
+export const SINGLE_QUALIFYING_HEADING = page('Inkoopinformatie', `
+  <h1>Inkoopinformatie</h1>
+  <h2>Onderhoud technische installaties</h2>
+  <p>Referentie: ONH-2026-09</p>
+  <p>Sluitingsdatum: 30 november 2026.</p>
+  <h2>Over onze inkooporganisatie</h2>
+  <p>Wij werken met een team van inkoopadviseurs die de aanbestedingen begeleiden.</p>`);
+
 /** A site that collects the tenders of many buyers: it presents itself as a tender platform and every page names another buyer. Reserved ".example" host. */
 export const platformPage = (title, buyer, reference) => `<!doctype html><html lang="nl"><head><meta charset="utf-8"><meta property="og:site_name" content="Tenderplatform Nederland"><title>${title} | Tenderplatform Nederland</title></head><body><header><a href="/">Tenderplatform Nederland</a> <span>Alle actuele aanbestedingen op één plek</span></header><main>
   <h1>${title}</h1><p>Aanbesteding gepubliceerd op het platform. Bekijk de aanbestedingsdocumenten.</p>

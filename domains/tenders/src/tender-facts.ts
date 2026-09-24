@@ -56,6 +56,11 @@ export interface TenderDiscovery {
   publisher?: string | null;
   /** Where `contractingAuthority` came from: structured data, an explicit label, or a labeled sentence. */
   authoritySource?: 'structured' | 'label' | 'prose_label' | null;
+  /**
+   * A human-readable pointer to the specific procurement within the page, when the page inline-lists several (see
+   * domains/tenders' splitTenderPageSections) — typically its own heading text. Null for an ordinary one-tender page.
+   */
+  pageSection?: string | null;
 }
 
 export type SourceRole = 'official_organization_site' | 'aggregator' | 'unknown_web_source';

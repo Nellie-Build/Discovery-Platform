@@ -20,7 +20,7 @@ export {
   type TenderSearchInput, type PlannedQuery,
 } from './tender-search.js';
 export {
-  assessTenderPage, mapTenderPage, tenderPageIdentity, WEBSITE_SOURCE_ID, SEARCH_SOURCE_ID,
+  assessTenderPage, assessTenderPageMulti, splitTenderPageSections, mapTenderPage, tenderPageIdentity, tenderPageItemIdentity, WEBSITE_SOURCE_ID, SEARCH_SOURCE_ID,
   type TenderPageAssessment, type TenderPageFacts, type TenderPageKind, type TenderPageRejection, type TenderPageRaw,
 } from './tender-page.js';
 export { rankTenderCandidate, TENDER_LINK_TIER } from './tender-rank.js';

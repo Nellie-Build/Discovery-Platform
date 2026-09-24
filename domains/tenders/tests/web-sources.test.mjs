@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createDiscoveryCrawler, collectFromSource, SourceError } from '@discovery-platform/core';
 import { createWebsiteCrawlerSource, createSearchProviderSource, TENDER_SOURCES, mergeTenderPublications } from '../dist/index.js';
-import { SITE, DETAIL_BOUW, DETAIL_RFP, GENERAL, page, webTransport, fakeClock, fakeSearchProvider } from './fake-web.mjs';
+import { SITE, DETAIL_BOUW, DETAIL_RFP, GENERAL, MULTI_TENDER_CARDS, page, webTransport, fakeClock, fakeSearchProvider } from './fake-web.mjs';
 
 /** The real crawl engine (legacy, serial) over in-memory websites: robots.txt, sitemap, ranking and page budget all apply. */
 const HOST = 'gemeente-voorbeeld.example';
@@ -193,4 +193,46 @@ test('two different websites with the same tender text stay two tenders: identit
   const tenders = mergeTenderPublications(result.items.map(item => TENDER_SOURCES.search.map(item)));
   assert.equal(tenders.length, 2);
   assert.ok(page && DETAIL_RFP && GENERAL);
+});
+
+// ─── Inline multi-tender pages through the real sources (WebsiteCrawlerSource / SearchProviderSource) ────────────────
+
+const MULTI_HOST = 'meerdere-opdrachten.example';
+function multiSite(overrides = {}) {
+  return { [MULTI_HOST]: { '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nAllow: /' }, '/': { body: MULTI_TENDER_CARDS }, ...overrides } };
+}
+
+test('WebsiteCrawlerSource: a page that inline-lists several procurements yields one SourceItem per procurement, each with its own URL and identity', async () => {
+  const { deps } = setup(multiSite());
+  const source = createWebsiteCrawlerSource(deps);
+  const result = await run(source, { url: `https://${MULTI_HOST}/`, maxPages: 1 });
+  assert.equal(result.items.length, 4);
+  assert.equal(new Set(result.items.map(i => i.externalId)).size, 4, 'every item has its own identity');
+  assert.deepEqual(new Set(result.items.map(i => new URL(i.sourceUrl).pathname)), new Set(['/']), 'the original page URL is kept for every item');
+  assert.ok(result.items.every(i => i.sourceUrl.includes('#')), 'each item also keeps its own section anchor');
+  const facts = result.items.map(item => TENDER_SOURCES.website.map(item));
+  assert.equal(new Set(facts.map(f => f.tenderIdentity)).size, 4);
+  assert.ok(facts.every(f => f.referenceNumber === null || /^[A-Za-z0-9./_-]+$/.test(f.referenceNumber)), 'no fabricated reference values');
+  assert.equal(source.stats().multiItemPages, 1);
+  assert.equal(source.stats().concreteTenders, 4);
+});
+
+test('WebsiteCrawlerSource: a page is fetched once even though it yields several items; recrawling the same site (a fresh run) gives back the identical identities', async () => {
+  const { deps, pageCalls } = setup(multiSite());
+  const first = await run(createWebsiteCrawlerSource(deps), { url: `https://${MULTI_HOST}/`, maxPages: 1 });
+  assert.equal(pageCalls().length, 1, 'one physical fetch of the page, however many items it yielded');
+  const { deps: deps2 } = setup(multiSite());
+  const again = await run(createWebsiteCrawlerSource(deps2), { url: `https://${MULTI_HOST}/`, maxPages: 1 });
+  assert.deepEqual(again.items.map(i => i.externalId).sort(), first.items.map(i => i.externalId).sort());
+});
+
+test('SearchProviderSource: a search result that inline-lists several procurements yields one item per procurement, with search provenance on each', async () => {
+  const provider = fakeSearchProvider([['aanbesteding', [[`https://${MULTI_HOST}/`, 'Open opdrachten']]]]);
+  const { deps } = setup(multiSite(), provider);
+  const source = createSearchProviderSource(deps);
+  const result = await run(source, { branch: 'Bouw', keywords: 'technische bijstand', maxQueries: 1 });
+  assert.equal(result.items.length, 4);
+  assert.ok(result.items.every(item => item.raw.discovery.via === 'web_search' && item.raw.discovery.pageSection));
+  assert.equal(new Set(result.items.map(i => i.raw.discovery.pageSection)).size, 4, 'each item keeps its own section as a human-readable pointer');
+  assert.equal(source.stats().multiItemPages, 1);
 });

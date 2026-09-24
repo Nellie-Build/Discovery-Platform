@@ -5,7 +5,7 @@ import {
 import { parsePrefixes } from './publication-range.js';
 import type { CpvCode, SourceRole } from './tender-facts.js';
 import { hostRole, type RoleAssessment } from './source-role.js';
-import { assessTenderPage, SEARCH_SOURCE_ID, tenderPageIdentity, WEBSITE_SOURCE_ID, type TenderPageAssessment, type TenderPageRaw } from './tender-page.js';
+import { assessTenderPageMulti, SEARCH_SOURCE_ID, tenderPageIdentity, tenderPageItemIdentity, WEBSITE_SOURCE_ID, type TenderPageAssessment, type TenderPageRaw } from './tender-page.js';
 import { rankTenderCandidate, TENDER_LINK_TIER } from './tender-rank.js';
 import { buildTenderSearchQueries, countTermHits, parseTenderSearchFilters, resolveCountry, searchTerms, type TenderSearchInput } from './tender-search.js';
 
@@ -41,6 +41,8 @@ export interface WebSourceStats {
   duplicateUrlsSkipped: number;
   /** Pages a search step did not fetch because robots.txt forbids it. */
   robotsBlocked: number;
+  /** Pages recognised as inline-listing several procurements (no separate links) and split into that many item assessments (see tender-page.ts). */
+  multiItemPages: number;
   /** Hosts seen in the run per source role (a host counts once). */
   sourceRoles: Record<SourceRole, number>;
   hostRoles: Record<string, RoleAssessment>;
@@ -53,7 +55,7 @@ export type TenderWebSource = DiscoverySource<TenderPageRaw> & { stats(): WebSou
 
 const emptyStats = (): WebSourceStats => ({
   pagesVisited: 0, candidatesDiscovered: 0, pagesAssessed: 0, concreteTenders: 0, overviewPages: 0, generalInformationPages: 0, rejectedPages: 0,
-  rejectionReasons: {}, filteredByCpv: 0, cpvUnknown: 0, duplicateUrlsSkipped: 0, robotsBlocked: 0,
+  rejectionReasons: {}, filteredByCpv: 0, cpvUnknown: 0, duplicateUrlsSkipped: 0, robotsBlocked: 0, multiItemPages: 0,
   sourceRoles: { official_organization_site: 0, aggregator: 0, unknown_web_source: 0 }, hostRoles: {}, pageDiagnostics: [],
 });
 
@@ -147,10 +149,14 @@ async function crawlSite(
       const key = visitKey(page.url);
       if (key && visited.has(key)) { stats.duplicateUrlsSkipped++; return undefined; }
       if (key) visited.add(key);
-      const assessment = assessTenderPage(page);
-      if (!tally(stats, assessment, settings.cpvPrefixes)) return undefined;
-      accepted.add(page.url);
-      return assessment;
+      // A page that inline-lists several procurements (no separate links to follow) comes back as one assessment per
+      // procurement; an ordinary page is still just the one assessment it always was.
+      const result = assessTenderPageMulti(page);
+      const list = Array.isArray(result) ? result : [result];
+      if (Array.isArray(result)) stats.multiItemPages++;
+      const acceptedItems = list.filter(item => tally(stats, item, settings.cpvPrefixes));
+      if (acceptedItems.length > 0) accepted.add(page.url);
+      return acceptedItems.length > 0 ? acceptedItems : undefined;
     },
     shouldContinue: () => accepted.size < settings.target,
   });
@@ -172,7 +178,9 @@ async function crawlSite(
 }
 
 function rawItem(assessment: TenderPageAssessment, fetchedAt: string, context: { via: TenderPageRaw['discovery']['via']; query: string | null; searchProvider: string | null; discoveredFrom: string | null }): SourceItem<TenderPageRaw> {
-  const identity = tenderPageIdentity(assessment.url);
+  // A procurement split out of a page that inline-lists several (see tender-page.ts) needs its own section-scoped
+  // identity: several such items share the same page URL, so the plain page identity alone would collide.
+  const identity = assessment.sectionId !== undefined ? tenderPageItemIdentity(assessment.url, assessment.sectionId) : tenderPageIdentity(assessment.url);
   return {
     externalId: identity, sourceUrl: assessment.url, fetchedAt,
     raw: {
@@ -180,6 +188,8 @@ function rawItem(assessment: TenderPageAssessment, fetchedAt: string, context: {
       discovery: {
         via: context.via, host: new URL(assessment.url).hostname.toLowerCase().replace(/^www\./, ''), query: context.query, searchProvider: context.searchProvider,
         discoveredFrom: context.discoveredFrom, evidence: assessment.signals, publisher: assessment.publisher, authoritySource: assessment.authoritySource,
+        // Where possible, a pointer to the specific procurement within the page (see tender-page.ts's splitTenderPageSections); absent for an ordinary one-tender page.
+        pageSection: assessment.sectionHeading ?? null,
       },
     },
   };
@@ -310,7 +320,7 @@ export function createSearchProviderSource(deps: WebSourceDeps): TenderWebSource
         stats.candidatesFetched = (stats.candidatesFetched as number) + 1;
         fetchedUrls.add(candidate.url);
         const result = await deps.crawler.fetchPage<TenderPageAssessment>(candidate.url, {
-          extract: page => assessTenderPage(page), contactNormalizers: NO_CONTACTS, transport: deps.transport, robots,
+          extract: page => assessTenderPageMulti(page), contactNormalizers: NO_CONTACTS, transport: deps.transport, robots,
         });
         if (result.blockedBy === 'robots') {
           stats.robotsBlocked++;
@@ -327,11 +337,15 @@ export function createSearchProviderSource(deps: WebSourceDeps): TenderWebSource
           if (stats.pageDiagnostics.length < 80) stats.pageDiagnostics.push({ url: stripUrlQueries(candidate.url), kind: 'none', rejection: 'fetch_failed', signals: [], tenderLinks: 0 });
           continue;
         }
-        const assessment = results[0];
-        if (tally(stats, assessment, f.cpvPrefixes)) {
-          items.push(rawItem(assessment, fetchedAt, { via: 'web_search', query: queryOf.get(candidate.url) ?? null, searchProvider: candidate.source, discoveredFrom: null }));
-        } else if (assessment.kind === 'overview' || assessment.kind === 'general') {
-          leads.push(candidate.url);
+        // A page split into several inline procurements (see assessTenderPageMulti) always arrives as several 'detail'
+        // assessments; an ordinary page is still just the one, of whatever kind it turned out to be.
+        if (results.length > 1) stats.multiItemPages++;
+        for (const assessment of results) {
+          if (tally(stats, assessment, f.cpvPrefixes)) {
+            items.push(rawItem(assessment, fetchedAt, { via: 'web_search', query: queryOf.get(candidate.url) ?? null, searchProvider: candidate.source, discoveredFrom: null }));
+          } else if (assessment.kind === 'overview' || assessment.kind === 'general') {
+            leads.push(candidate.url);
+          }
         }
       }
 

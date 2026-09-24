@@ -7,6 +7,9 @@ import { classifySourceRole, type RoleAssessment } from './source-role.js';
  * information, or nothing of the kind. Generic rules only: no host is ever special-cased. A page counts as one concrete
  * tender only with enough independent evidence (see assessTenderPage); a page of general purchasing information
  * ("Informatie voor leveranciers", "Zo koopt onze organisatie in") never does.
+ *
+ * A page that itself lists several DIFFERENT procurements inline (not as links to other pages, but written out on the
+ * page itself — see assessTenderPageMulti) can still yield one record per procurement: see splitTenderPageSections.
  */
 export type TenderPageKind = 'detail' | 'overview' | 'general' | 'none';
 
@@ -43,9 +46,24 @@ export interface TenderPageAssessment {
   authoritySource: 'structured' | 'label' | 'prose_label' | null;
   /** What kind of web source the page is on (see source-role.ts). */
   role: RoleAssessment;
+  /**
+   * Set only for one procurement split out of a page that inline-lists several (see splitTenderPageSections): the
+   * characteristic that identifies this one within the page — a real DOM anchor id, else the procurement's own reference
+   * number, else its heading text. Never an invented tender number. Absent (undefined) for an ordinary, whole-page assessment.
+   */
+  sectionId?: string;
+  /** The real `id` attribute of the section's container/heading, when it has one — used to build a navigable URL fragment. */
+  sectionAnchor?: string | null;
+  /** The section's own heading text — kept as a human-readable pointer to it, even when there is no real anchor. */
+  sectionHeading?: string | null;
 }
 
 const collapse = (value: string) => value.replace(/\s+/g, ' ').trim();
+const norm = (value: string) => value.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+/** A stable, readable identity fragment from arbitrary text (a heading, typically) — never a fabricated number. */
+const slugify = (value: string): string => norm(value).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'item';
+/** `scope` may be a section (several sibling nodes, not just their descendants): include nodes IN `scope` itself, not only inside them. */
+const querySelf = (scope: any, selector: string): any => scope.filter(selector).add(scope.find(selector));
 
 /** A word that says the page is about a concrete procurement procedure. */
 const EXPLICIT_TENDER_WORD = /\b(?:aanbesteding\w*|offerte-?aanvra\w+|uitnodiging tot (?:inschrijving|het doen van een offerte)|tender\w*|rfp|rfq|request for (?:proposals?|quotations?|quotes?)|marktconsultatie|inschrijving)\b/i;
@@ -109,28 +127,32 @@ const CONTRACT_LABEL = /^(?:soort\s+opdracht|type\s+opdracht|opdrachtsoort|contr
 const LOCATION_LABEL = /^(?:plaats|locatie|uitvoeringslocatie|plaats\s+van\s+uitvoering|regio|place\s+of\s+performance|location)$/i;
 const VALUE_LABEL = /^(?:geraamde\s+waarde|raming|waarde|geschatte\s+waarde|estimated\s+value|contract\s+value)$/i;
 
-/** All "label: value" pairs on the page: definition lists, two-cell table rows, short "Label: value" text blocks, and a
- * label element directly followed by its value element (label/value grids without a dl or table). */
-function labelPairs($: CrawlPage['$']): Array<[string, string]> {
+/**
+ * All "label: value" pairs within `scope`: definition lists, two-cell table rows, short "Label: value" text blocks, and a
+ * label element directly followed by its value element (label/value grids without a dl or table). `scope` is usually the
+ * whole document (`$.root()`), but can be one section's own nodes — a `querySelf`-based scope, so a label/value pair that
+ * IS one of the scope's own top-level nodes (not just nested inside them) is still found.
+ */
+function labelPairs($: CrawlPage['$'], scope: any): Array<[string, string]> {
   const pairs: Array<[string, string]> = [];
   const add = (label: string, value: string) => {
     const l = collapse(label).replace(/[:：]\s*$/, '');
     const v = collapse(value);
     if (l && v && l.length <= 60 && v.length <= 300) pairs.push([l, v]);
   };
-  $('dt').slice(0, 200).each((_, element) => { add($(element).text(), $(element).nextAll('dd').first().text()); });
-  $('tr').slice(0, 400).each((_, element) => {
+  querySelf(scope, 'dt').slice(0, 200).each((_: number, element: any) => { add($(element).text(), $(element).nextAll('dd').first().text()); });
+  querySelf(scope, 'tr').slice(0, 400).each((_: number, element: any) => {
     const cells = $(element).children('th,td');
     if (cells.length === 2) add($(cells[0]).text(), $(cells[1]).text());
   });
-  $('li,p,div,span').slice(0, 1500).each((_, element) => {
+  querySelf(scope, 'li,p,div,span').slice(0, 1500).each((_: number, element: any) => {
     const node = $(element);
     if (node.children('li,p,div,ul,ol,table,section,article').length > 0) return;
     const match = /^([^:：]{2,50})[:：]\s*(.{1,300})$/.exec(collapse(node.text()));
     if (match) add(match[1], match[2]);
   });
   // A label element directly followed by its value element (label/value grids without a dl or table).
-  $('div,span,p,strong,b,label,h3,h4,dt,th').slice(0, 1500).each((_, element) => {
+  querySelf(scope, 'div,span,p,strong,b,label,h3,h4,dt,th').slice(0, 1500).each((_: number, element: any) => {
     const node = $(element);
     if (node.children().not('svg,i,img').length > 0) return; // an icon next to the label text is fine
     const label = collapse(node.text());
@@ -145,12 +167,20 @@ function labelPairs($: CrawlPage['$']): Array<[string, string]> {
 
 const valueOf = (pairs: Array<[string, string]>, label: RegExp) => pairs.find(([name]) => label.test(name.trim()))?.[1] ?? null;
 
-/** The page's own text, scripts/styles/navigation stripped. */
-function bodyText($: CrawlPage['$']): string {
-  const root = $('main').length > 0 ? $('main').first() : $('article').length > 0 ? $('article').first() : $('body');
-  const clone = root.clone();
+/** `scope`'s own text, scripts/styles/navigation stripped — the whole page (via pickContentRoot) or just one section. */
+function textOf(scope: any): string {
+  const clone = scope.clone();
   clone.find('script,style,noscript,svg,iframe,nav,footer,form,[role="navigation"],[aria-hidden="true"]').remove();
   return collapse(clone.text()).slice(0, 80_000);
+}
+
+/** The element the page's own content lives in: `<main>`, else `<article>`, else the whole body. */
+function pickContentRoot($: CrawlPage['$']): any {
+  return $('main').length > 0 ? $('main').first() : $('article').length > 0 ? $('article').first() : $('body');
+}
+
+function bodyText($: CrawlPage['$']): string {
+  return textOf(pickContentRoot($));
 }
 
 /** A plausible organisation name: short, no sentence, not a date or a placeholder. */
@@ -257,21 +287,79 @@ function amount(value: string | null): { amount: number; currency: string } | nu
   return Number.isFinite(number) && number > 0 ? { amount: number, currency: 'EUR' } : null;
 }
 
+/**
+ * Words that mean flowing text has moved past the reference value itself — another field's own label (a deadline,
+ * a date, a procedure, a location, an authority, ...) or an ordinary connecting word that starts a new clause.
+ * Generic vocabulary, not tied to any one organisation's page. A reference span (see referenceSpanAt) never
+ * extends across one of these: it would otherwise risk swallowing the next sentence or the next field.
+ */
+const REFERENCE_BOUNDARY_WORD = /^(?:sluitingsdatum|sluitingstijdstip|sluitingstermijn|uiterste|uiterlijk|inschrijfdatum|inschrijftermijn|inschrijven|indiendatum|indienen|termijn|deadline|closing|submission|gepubliceerd|publicatiedatum|geplaatst|plaatsingsdatum|published|publication|procedure|aanbestedingsvorm|aanbestedingsprocedure|opdrachtsoort|soort|type|plaats|locatie|regio|location|waarde|raming|geraamde|geschatte|estimated|value|cpv|opdrachtgever|aanbestedende|uitvragende|contracting|issuing|procuring|buyer|en|of|de|het|een|op|in|na|tot|voor|door|met|bij|aan|uit|als|dat|die|dit|deze|onze|wordt|worden|moet|kan|heeft|is|zijn|and|or|the|a|an|to|for|by|with|at|on|was|were|will|must|can|has|have)$/i;
+const REFERENCE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9+]*/;
+/**
+ * What joins two segments of one reference: a dash/dot/slash/underscore with no surrounding space at all (glued
+ * tight, as in "2026.04.041" or "GV/2026/041" — no genuine sentence break can look like this); a dash padded by
+ * spaces ("2025 - SA"); or plain whitespace alone ("Nasira+ OS"). A dot, slash or underscore padded by spaces is
+ * NOT a join — that is what an ordinary sentence boundary looks like (". Meer informatie ..."), never a reference.
+ */
+const REFERENCE_JOIN = /^[-–—./_](?=[A-Za-z0-9])|^[ \t]*[-–—][ \t]*|^[ \t]+/;
+
+/** True when a recognisable date starts exactly at the beginning of `fragment` (used to keep a bare date out of a reference span). */
+function looksLikeDateStart(fragment: string): boolean {
+  return DATE_PATTERNS.some(([pattern]) => { const m = pattern.exec(fragment); return m !== null && m.index === 0; });
+}
+
+/**
+ * The reference token starting at `from` in `text`: one or more alphanumeric segments joined by a dash, dot,
+ * slash, underscore or plain space, e.g. "ABC-XX-1" or "2025 - SA - Nasira+ OS - 005". Stops before it would
+ * swallow another field's label, a bare date, or an ordinary word — it never absorbs the next sentence.
+ */
+function referenceSpanAt(text: string, from: number): string | null {
+  const first = REFERENCE_SEGMENT.exec(text.slice(from));
+  if (!first) return null;
+  let end = from + first[0].length;
+  for (let segments = 1; segments < 8 && end - from < 60; segments++) {
+    const join = REFERENCE_JOIN.exec(text.slice(end));
+    if (!join) break;
+    const afterJoin = end + join[0].length;
+    const rest = text.slice(afterJoin);
+    const next = REFERENCE_SEGMENT.exec(rest);
+    if (!next || REFERENCE_BOUNDARY_WORD.test(next[0]) || looksLikeDateStart(rest)) break;
+    end = afterJoin + next[0].length;
+  }
+  return text.slice(from, end);
+}
+
+/** Trims trailing punctuation and validates a candidate reference span: too short, too long or digit-free is not a reference. */
+function cleanReferenceToken(raw: string | null): string | null {
+  if (!raw) return null;
+  const trimmed = collapse(raw).replace(/[.,;:]+$/, '');
+  return trimmed.length >= 3 && trimmed.length <= 60 && /\d/.test(trimmed) ? trimmed : null;
+}
+
 /** The value written after a label in flowing text, e.g. "Kenmerk: 2026-041". A reference always contains a digit. */
 function referenceIn(text: string, pairs: Array<[string, string]>): string | null {
   const fromPair = pairs.find(([label]) => REFERENCE_LABEL.test(label) && label.length <= 40)?.[1];
-  const clean = (value: string) => { const token = /[A-Za-z0-9][A-Za-z0-9./_-]{2,40}/.exec(value)?.[0]; return token && /\d/.test(token) ? token.replace(/[.,;]$/, '') : null; };
-  if (fromPair) { const value = clean(fromPair); if (value) return value; }
-  const match = new RegExp(`${REFERENCE_LABEL.source}\\s*[:#-]?\\s*([A-Za-z0-9][A-Za-z0-9./_-]{2,40})`, 'i').exec(text);
-  return match ? clean(match[1]) : null;
+  if (fromPair) {
+    const at = /[A-Za-z0-9]/.exec(fromPair)?.index;
+    const token = at !== undefined ? cleanReferenceToken(referenceSpanAt(fromPair, at)) : null;
+    if (token) return token;
+  }
+  const match = new RegExp(`${REFERENCE_LABEL.source}\\s*[:#-]?\\s*([A-Za-z0-9])`, 'i').exec(text);
+  return match ? cleanReferenceToken(referenceSpanAt(text, match.index + match[0].length - 1)) : null;
 }
 
 /** Every distinct reference number and every distinct labeled deadline on the page: several of either means the page shows several procurements. */
 function distinctReferenceAndDeadlines(text: string, pairs: Array<[string, string]>): { references: string[]; deadlines: string[] } {
-  const clean = (value: string) => { const token = /[A-Za-z0-9][A-Za-z0-9./_-]{2,40}/.exec(value)?.[0]; return token && /\d/.test(token) ? token.replace(/[.,;]$/, '') : null; };
   const references = new Set<string>();
-  for (const [label, value] of pairs) if (REFERENCE_LABEL.test(label) && label.length <= 40) { const token = clean(value); if (token) references.add(token); }
-  for (const match of text.matchAll(new RegExp(REFERENCE_LABEL.source + '\\s*[:#-]?\\s*([A-Za-z0-9][A-Za-z0-9./_-]{2,40})', 'gi'))) { const token = clean(match[1]); if (token) references.add(token); }
+  for (const [label, value] of pairs) if (REFERENCE_LABEL.test(label) && label.length <= 40) {
+    const at = /[A-Za-z0-9]/.exec(value)?.index;
+    const token = at !== undefined ? cleanReferenceToken(referenceSpanAt(value, at)) : null;
+    if (token) references.add(token);
+  }
+  for (const match of text.matchAll(new RegExp(REFERENCE_LABEL.source + '\\s*[:#-]?\\s*([A-Za-z0-9])', 'gi'))) {
+    const token = cleanReferenceToken(referenceSpanAt(text, match.index + match[0].length - 1));
+    if (token) references.add(token);
+  }
   const deadlines = new Set<string>();
   for (const [label, value] of pairs) if (DEADLINE_LABEL.test(label)) { const parsed = firstDate(value)?.date; if (parsed) deadlines.add(parsed); }
   for (const match of text.matchAll(new RegExp(DEADLINE_LABEL.source, 'gi'))) { const parsed = firstDate(text.slice(match.index + match[0].length, match.index + match[0].length + 90))?.date; if (parsed) deadlines.add(parsed); }
@@ -316,11 +404,11 @@ function countTenderLinks($: CrawlPage['$'], url: string): number {
   return seen.size;
 }
 
-/** Distinct document links (pdf/doc/xls/zip) on the page. */
-function documentLinksOf($: CrawlPage['$']): number {
+/** Distinct document links (pdf/doc/xls/zip) within `scope` — the whole page, or just one section. */
+function documentLinksOf(scope: any): number {
   const seen = new Set<string>();
-  $('a[href]').slice(0, 800).each((_, element) => {
-    const href = $(element).attr('href') ?? '';
+  querySelf(scope, 'a[href]').slice(0, 800).each((_: number, element: any) => {
+    const href: string = element.attribs?.href ?? '';
     if (/\.(?:pdf|docx?|xlsx?|zip)(?:[?#].*)?$/i.test(href)) seen.add(href);
   });
   return seen.size;
@@ -341,7 +429,7 @@ export function assessTenderPage(page: Pick<CrawlPage, '$' | 'url'>): TenderPage
   const { $, url } = page;
   const text = bodyText($);
   const title = pageTitle($);
-  const pairs = labelPairs($);
+  const pairs = labelPairs($, $.root());
   let path = '';
   try { path = decodeURIComponent(new URL(url).pathname).toLowerCase(); } catch { /* keep empty */ }
   const lastSegment = path.split('/').filter(Boolean).at(-1) ?? '';
@@ -353,7 +441,7 @@ export function assessTenderPage(page: Pick<CrawlPage, '$' | 'url'>): TenderPage
   // A procedure under a label is evidence; the same words in running text (news, policy pages) are not.
   const procedureLabeled = valueOf(pairs, PROCEDURE_LABEL);
   const procedure = procedureLabeled ?? PROCEDURE_TEXT.exec(text)?.[0] ?? null;
-  const documentCount = documentLinksOf($);
+  const documentCount = documentLinksOf($.root());
   const publicationDate = publicationDateIn(text, pairs);
   const data = structuredData($);
   const authority = findAuthority($, pairs, text, data);
@@ -417,12 +505,181 @@ export function assessTenderPage(page: Pick<CrawlPage, '$' | 'url'>): TenderPage
   return result('none', 'insufficient_evidence');
 }
 
+// ─── Several procurements inline on one page (no separate links to follow — see domains/tenders/tests/inline-tender-items.test.mjs) ──
+
+interface RawSection { headingText: string | null; anchor: string | null; scope: ReturnType<CrawlPage['$']> }
+
+/**
+ * The best group of "card" containers (article/li/section) that each carry their own heading: siblings under the same
+ * parent, innermost only (an outer wrapper around several cards is never itself counted). The largest qualifying group
+ * wins, in document order.
+ */
+const HEADINGS = 'h1,h2,h3,h4,h5,h6';
+/** How many of `scope`'s own descendants (or `scope` itself) are one of the page's candidate headings. */
+function headingsWithin($: CrawlPage['$'], scope: any, headingSet: Set<unknown>): number {
+  return querySelf(scope, HEADINGS).toArray().filter((h: unknown) => headingSet.has(h)).length;
+}
+
+/**
+ * Real markup rarely puts a heading directly inside the repeating item container: a CMS typically wraps each item in
+ * one or more single-child divs first (an "item" div containing a "body" div containing the heading and its text).
+ * So for every heading, this climbs from the heading itself, testing at each level whether that ancestor has two or
+ * more siblings that also each contain a heading of their own — the first level (closest to the heading) where that
+ * holds is the item boundary. Different headings on the same page can (and usually do) all resolve to the very same
+ * group; only the distinct groups actually found are returned, largest first.
+ */
+function cardSections($: CrawlPage['$'], contentRoot: ReturnType<CrawlPage['$']>): RawSection[][] {
+  const headings = querySelf(contentRoot, HEADINGS).toArray().filter((h: any) => $(h).closest('nav,header,footer').length === 0);
+  if (headings.length < 2) return [];
+  const headingSet = new Set(headings);
+  const groups = new Map<unknown, any[]>();
+  for (const heading of headings) {
+    let container = $(heading);
+    for (let depth = 0; depth < 8; depth++) {
+      const parent = container.parent();
+      if (parent.length === 0 || parent.is('body,html')) break;
+      const siblings = parent.children().toArray();
+      const matching = siblings.filter((s: any) => headingsWithin($, $(s), headingSet) >= 1);
+      if (matching.length >= 2) { groups.set(parent[0], matching); break; }
+      container = parent;
+    }
+  }
+  // Every group of two or more siblings, largest first: a real "list of procurements" wrapper is rarely the only
+  // same-shaped group on a page (a cookie-consent widget or a set of promo cards can look like one too), so
+  // splitTenderPageSections tries each in turn and keeps the first one whose sections actually qualify.
+  return [...groups.values()].sort((a, b) => b.length - a.length).map(list => {
+    const parent = $(list[0]).parent();
+    const order = parent.children().toArray();
+    const sorted = [...list].sort((a: any, b: any) => order.indexOf(a) - order.indexOf(b));
+    return sorted.map((el: any) => {
+      const c = $(el);
+      return { headingText: collapse(querySelf(c, HEADINGS).first().text()) || null, anchor: c.attr('id') ?? null, scope: c };
+    });
+  });
+}
+
+/**
+ * Flat markup: a heading (h2, else h3, else h4 — the first level with two or more) plus the sibling nodes that follow it
+ * up to the next heading of that level, all direct children of the same parent. Used when the page has no card-style
+ * containers, only a run of headings and paragraphs at the same level (only tried once cardSections found nothing).
+ */
+function headingRunSections($: CrawlPage['$'], contentRoot: ReturnType<CrawlPage['$']>): RawSection[] {
+  for (const tag of ['h2', 'h3', 'h4']) {
+    const headings = querySelf(contentRoot, tag).toArray().map((el: any) => $(el)).filter((h: any) => h.closest('nav,header,footer').length === 0);
+    if (headings.length < 2) continue;
+    const parents = new Set(headings.map((h: any) => h.parent()[0]));
+    if (parents.size !== 1) continue;
+    const parent = headings[0].parent();
+    const children: any[] = parent.children().toArray();
+    const headingEls = new Set(headings.map((h: any) => h[0]));
+    const indices = children.map((c, i) => (headingEls.has(c) ? i : -1)).filter(i => i >= 0);
+    return indices.map((start, k) => {
+      const end = k + 1 < indices.length ? indices[k + 1] : children.length;
+      const nodes = children.slice(start, end);
+      const headingEl = $(nodes[0]);
+      return { headingText: collapse(headingEl.text()) || null, anchor: (headingEl.attr('id') as string | undefined) ?? null, scope: $(nodes) };
+    });
+  }
+  return [];
+}
+
+/**
+ * One inline procurement, scoped strictly to its own section: nothing outside `section.scope` is read, so one item's
+ * reference/deadline/CPV/documents never leak into another. Qualifies only with its own heading AND its own reference
+ * number or deadline (the identity-bearing signals) — documents or CPV alone are not enough, and general-information
+ * wording in the heading disqualifies it. `authority` is looked up within the section only (no page-level structured
+ * data, which is not item-specific); `publisher` and `role` are the page's own (one page belongs to one site).
+ */
+function buildSectionAssessment(
+  $: CrawlPage['$'], section: RawSection, url: string, pagePublisher: string | null, pageRole: RoleAssessment,
+): TenderPageAssessment | null {
+  const { headingText, anchor, scope } = section;
+  if (!headingText || headingText.length < 4 || headingText.length > 200 || GENERAL_INFORMATION.test(headingText)) return null;
+  const text = textOf(scope);
+  const pairs = labelPairs($, scope);
+  const deadline = deadlineIn(text, pairs);
+  const reference = referenceIn(text, pairs);
+  if (!deadline && !reference) return null; // no signal of its own to identify or deduplicate it by
+  const cpvCodes = findCpv(text, pairs);
+  const documentCount = documentLinksOf(scope);
+  const procedureLabeled = valueOf(pairs, PROCEDURE_LABEL);
+  const procedure = procedureLabeled ?? PROCEDURE_TEXT.exec(text)?.[0] ?? null;
+  const publicationDate = publicationDateIn(text, pairs);
+  const authority = findAuthority($, pairs, text, []);
+  const sectionUrl = anchor ? `${url}#${anchor}` : url;
+  const sectionId = anchor ?? reference ?? slugify(headingText);
+  const strong = [deadline && 'deadline', reference && 'reference', cpvCodes.length > 0 && 'cpv', procedureLabeled && 'procedure', documentCount > 0 && 'documents'].filter((s): s is string => Boolean(s));
+  const supporting = [publicationDate && 'publication_date', authority && 'labeled_authority'].filter((s): s is string => Boolean(s));
+  const description = collapse(querySelf(scope, 'p').filter((_: number, el: any) => collapse($(el).text()).length >= 40).first().text()) || null;
+  return {
+    url: sectionUrl, kind: 'detail', rejection: null,
+    signals: [...strong, 'own_heading_section', ...supporting], tenderLinks: 0,
+    facts: {
+      title: headingText, contractingAuthority: authority?.name ?? null, referenceNumber: reference,
+      procedureType: procedure ? collapse(procedure).slice(0, 120) : null,
+      contractType: (() => { const raw = valueOf(pairs, CONTRACT_LABEL); return raw ? raw.slice(0, 60) : null; })(),
+      cpvCodes, location: valueOf(pairs, LOCATION_LABEL)?.slice(0, 120) ?? null, publicationDate, submissionDeadline: deadline,
+      estimatedValue: amount(valueOf(pairs, VALUE_LABEL)), description: description ? description.slice(0, 2000) : null, documentCount,
+    },
+    publisher: pagePublisher, authoritySource: authority?.source ?? null, role: pageRole,
+    sectionId, sectionAnchor: anchor, sectionHeading: headingText,
+  };
+}
+
+/**
+ * Splits one page into its several inline procurements, or returns [] when the page cannot be split with confidence.
+ * Requires at least two sections that each independently qualify (own heading, own reference or deadline); a heading
+ * with neither is simply left out, not turned into a record. Duplicate identities (two sections that resolve to the
+ * same heading slug) are disambiguated by position, never by inventing a new value for a field.
+ */
+function buildAndDedupe($: CrawlPage['$'], sections: RawSection[], url: string, pagePublisher: string | null, pageRole: RoleAssessment): TenderPageAssessment[] {
+  const built = sections.map(section => buildSectionAssessment($, section, url, pagePublisher, pageRole)).filter((item): item is TenderPageAssessment => item !== null);
+  if (built.length < 2) return [];
+  const seen = new Map<string, number>();
+  for (const item of built) {
+    const key = item.sectionId!;
+    const count = (seen.get(key) ?? 0) + 1;
+    seen.set(key, count);
+    if (count > 1) item.sectionId = `${key}-${count}`;
+  }
+  return built;
+}
+
+export function splitTenderPageSections($: CrawlPage['$'], url: string, pagePublisher: string | null, pageRole: RoleAssessment): TenderPageAssessment[] {
+  const contentRoot = pickContentRoot($);
+  // Several same-shaped sibling groups can exist on one real page (a cookie-consent widget can look like a card list
+  // too) — the largest is tried first, but any group that actually yields two or more real procurements will do.
+  for (const group of cardSections($, contentRoot)) {
+    const built = buildAndDedupe($, group, url, pagePublisher, pageRole);
+    if (built.length >= 2) return built;
+  }
+  return buildAndDedupe($, headingRunSections($, contentRoot), url, pagePublisher, pageRole);
+}
+
+/**
+ * The normal single-page assessment, unless the page is an inline overview of several procurements written out on the
+ * page itself (not one reached only through separate links — `tenderLinks < 2` — see splitTenderPageSections): then the
+ * confidently-split procurements, one TenderPageAssessment (kind 'detail') each. General-information pages, news items and
+ * link-based overviews are never affected: only a page that assessTenderPage already called 'overview' is tried.
+ */
+export function assessTenderPageMulti(page: Pick<CrawlPage, '$' | 'url'>): TenderPageAssessment | TenderPageAssessment[] {
+  const single = assessTenderPage(page);
+  if (single.kind !== 'overview' || single.tenderLinks >= 2) return single;
+  const items = splitTenderPageSections(page.$, page.url, single.publisher, single.role);
+  return items.length >= 2 ? items : single;
+}
+
 /** The stable identity of a page-based tender: host + path (+ id-like query parameters). Titles and dates never take part. */
 export function tenderPageIdentity(url: string): string {
   const parsed = new URL(url);
   const keep = [...parsed.searchParams.entries()].filter(([key]) => /^(?:id|nid|tenderid|tender|kenmerk|ref|reference|item|p|page_id|post)$/i.test(key)).sort(([a], [b]) => a.localeCompare(b));
   const path = parsed.pathname.replace(/\/+$/, '') || '/';
   return `${parsed.hostname.toLowerCase().replace(/^www\./, '')}${path}${keep.length ? `?${keep.map(([k, v]) => `${k}=${v}`).join('&')}` : ''}`;
+}
+
+/** The identity of one procurement split out of a page (see splitTenderPageSections): the page's identity plus its own section characteristic. */
+export function tenderPageItemIdentity(url: string, sectionId: string): string {
+  return `${tenderPageIdentity(url)}#${slugify(sectionId)}`;
 }
 
 export const WEBSITE_SOURCE_ID = 'website';
@@ -439,7 +696,7 @@ export interface TenderPageRaw {
 export function mapTenderPage(raw: TenderPageRaw): TenderFacts | null {
   const facts = raw.assessment.facts;
   if (!facts || raw.assessment.kind !== 'detail') return null;
-  const identity = tenderPageIdentity(raw.url);
+  const identity = raw.assessment.sectionId !== undefined ? tenderPageItemIdentity(raw.url, raw.assessment.sectionId) : tenderPageIdentity(raw.url);
   const publication = {
     publicationId: identity, noticeType: 'webpage', noticeTypeLabel: 'Webpagina', publicationDate: facts.publicationDate,
     submissionDeadline: facts.submissionDeadline, sourceUrl: raw.url,

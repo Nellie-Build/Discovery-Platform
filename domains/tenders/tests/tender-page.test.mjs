@@ -86,6 +86,37 @@ test('a reference must contain a digit: the word after "referentie" alone is not
   assert.equal(a.facts.referenceNumber, null);
 });
 
+test('a reference with spaces, dashes, dots and slashes between its segments is read whole, not truncated at the first separator', () => {
+  const ref = text => assess(page('Aanbesteding', `<h1>Aanbesteding technische bijstand</h1><p>Kenmerk: ${text}. Sluitingsdatum: 5 december 2026.</p>`)).facts.referenceNumber;
+  // The real-world FMO reference this fix regresses against: several segments joined by " - "/" – ", including one with an internal plain space.
+  assert.equal(ref('2025 - SA - Nasira+ OS - 005'), '2025 - SA - Nasira+ OS - 005');
+  assert.equal(ref('2025 – SA – Nasira+ OS – 005'), '2025 – SA – Nasira+ OS – 005', 'an en dash separator works the same as a hyphen');
+  assert.equal(ref('2026.04.041'), '2026.04.041', 'dot-separated segments stay whole');
+  assert.equal(ref('GV/2026/041'), 'GV/2026/041', 'slash-separated segments stay whole');
+  assert.equal(ref('GV_2026_041'), 'GV_2026_041', 'underscore-separated segments stay whole');
+  // The same reference read from a table/definition-list value (the labeled-pair path), not only from flowing text.
+  const fromPair = assess(page('Aanbesteding', '<dl><dt>Kenmerk</dt><dd>2025 - SA - Nasira+ OS - 005</dd><dt>Sluitingsdatum</dt><dd>5 december 2026</dd></dl>')).facts.referenceNumber;
+  assert.equal(fromPair, '2025 - SA - Nasira+ OS - 005');
+});
+
+test('a reference span never swallows the next field, a bare date, or an ordinary word that follows it without punctuation', () => {
+  // A second strong signal (a deadline, in its own sentence) is only there so the page counts as a tender at all;
+  // it plays no part in what is being tested here.
+  const factsOf = text => assess(page('Aanbesteding', `<h1>Aanbesteding technische bijstand</h1><p>Kenmerk: ${text}</p> <p>Sluitingsdatum: 5 december 2026.</p>`)).facts;
+  // Another field's own label, glued on with just a space (no period): stop before it, never absorb it.
+  assert.equal(factsOf('2026-041 Sluitingsdatum: 5 december 2026').referenceNumber, '2026-041');
+  assert.equal(factsOf('2026-041 Gepubliceerd op 1 oktober 2026').referenceNumber, '2026-041');
+  // A bare date with no label word in between is still not part of the reference.
+  assert.equal(factsOf('2026-041 12 november 2026').referenceNumber, '2026-041');
+  // An ordinary connecting word starting a new clause is not part of the reference either.
+  assert.equal(factsOf('2026-041 en de bijlagen zijn beschikbaar op aanvraag').referenceNumber, '2026-041');
+  assert.equal(factsOf('2026-041. Meer informatie volgt binnenkort.').referenceNumber, '2026-041', 'a sentence boundary (period) always stops it');
+  // A very long run of hyphenated words is capped, never grows into an unbounded match.
+  const long = Array.from({ length: 20 }, (_, i) => `deel${i}`).join('-');
+  const capped = factsOf(long).referenceNumber;
+  assert.ok(capped.length < long.length && capped.length <= 60, 'truncated well before the full 20-segment run');
+});
+
 test('the tender identity of a page is its host + path (no www, no trailing slash, no tracking or fragment); nothing else takes part', () => {
   const identity = tenderPageIdentity('https://www.gemeente-voorbeeld.example/aanbestedingen/x/?utm_source=a#top');
   assert.equal(identity, 'gemeente-voorbeeld.example/aanbestedingen/x');
