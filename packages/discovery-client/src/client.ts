@@ -3,7 +3,7 @@ import {
   type PublicUser, type Workspace, type WorkspaceMembership, type Project, type AdminProject,
   type DiscoveryRun, type DiscoveryRecord, type RecordWithDetails, type BranchSearchInput, type SourceRunInput,
   type DiscoveryModuleDefinition, type DiscoveryRunConfig, type VacancySearchFilters,
-  type WorkspaceModule, type WorkspaceModuleAccess, type AdminWorkspaceModules,
+  type WorkspaceModule, type WorkspaceModuleAccess, type AdminWorkspaceModules, type ModulePackage,
 } from './types.js';
 
 export interface ApiClientOptions {
@@ -87,12 +87,19 @@ export function createApiClient({ baseUrl }: ApiClientOptions) {
         list: () => req<DiscoveryModuleDefinition[]>('GET', '/admin/modules'),
         setEnabled: (id: string, enabled: boolean) => req<DiscoveryModuleDefinition>('PATCH', `/admin/modules/${id}`, { enabled }),
       },
+      /** The module packages (Vacancies, Tenders, Compleet, Maatwerk, ...) with the modules each includes. */
+      modulePackages: {
+        list: () => req<ModulePackage[]>('GET', '/admin/module-packages'),
+      },
       workspaceModules: {
-        /** Every workspace with, per module, the global switch, the workspace's own decision and the result. */
+        /** Every workspace with its package and, per module, the global switch, package, own choice and result. */
         list: () => req<AdminWorkspaceModules[]>('GET', '/admin/workspace-modules'),
-        /** `null` clears the workspace's decision: it follows the global switch again. */
+        /** `null` clears the workspace's own choice: it follows its package again. */
         set: (workspaceId: string, moduleId: string, enabled: boolean | null) =>
           req<WorkspaceModuleAccess>('PUT', `/admin/workspaces/${workspaceId}/modules/${moduleId}`, { enabled }),
+        /** A regular package starts clean (individual choices removed); Maatwerk keeps what the workspace has. */
+        setPackage: (workspaceId: string, packageId: string) =>
+          req<WorkspaceModuleAccess[]>('PUT', `/admin/workspaces/${workspaceId}/package`, { packageId }),
       },
       projects: {
         /** Every project across every workspace, active and soft-deleted alike. */

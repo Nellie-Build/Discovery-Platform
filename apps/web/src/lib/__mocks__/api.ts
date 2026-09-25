@@ -11,7 +11,8 @@ export const api = {
   records: { listByProject: vi.fn(), get: vi.fn() },
   admin: {
     modules: { list: vi.fn(), setEnabled: vi.fn() },
-    workspaceModules: { list: vi.fn(), set: vi.fn() },
+    modulePackages: { list: vi.fn() },
+    workspaceModules: { list: vi.fn(), set: vi.fn(), setPackage: vi.fn() },
     projects: { list: vi.fn(), restore: vi.fn() },
   },
 };

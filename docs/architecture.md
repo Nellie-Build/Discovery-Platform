@@ -190,19 +190,30 @@ None of this is a technical limitation of the core — `findDuplicateCandidates(
 domain supplied. The constraint is entirely on what signals and inferences a person-matching
 domain is *allowed* to define.
 
-## Module access: global and per workspace
+## Module access: global switch, packages and individual choices
 
-Two switches decide whether a module (a project `domain`) can be used, both checked server-side in
+Whether a module (a project `domain`) can be used in a workspace is checked server-side in
 `apps/api/src/module-registry.ts` when a project is created and when a run is started (never only by hiding
-a button): the **global** switch in the `modules` table (`PATCH /admin/modules/:id`), which stays the master
-switch, and the **workspace** decision in `workspace_modules` (`PUT /admin/workspaces/:workspaceId/modules/:moduleId`
-with `enabled: true | false | null`). A module is usable only when it is on globally and not switched off for that
-workspace (`module_disabled` / `module_not_enabled_for_workspace`, both 403). Only explicit decisions are stored:
-a workspace without one follows the global switch, so existing workspaces kept their access without a backfill, and
-`null` removes a decision. Switching a module off never touches existing projects, runs or records; they stay
-readable. Admins manage this on the Admin > Workspaces tab (`GET /admin/workspace-modules`); the new-project form
-reads `GET /workspaces/:id/modules` only so it does not offer a module the API would refuse. There are no plans,
-subscriptions or payments behind this yet.
+a button). Three things are stored apart, and one view combines them:
+
+- the **global** switch in `modules` (`PATCH /admin/modules/:id`). It always wins: a module that is off globally
+  is off in every workspace (`module_disabled`, 403);
+- the workspace's **package** in `workspaces.module_package_id` (`PUT /admin/workspaces/:workspaceId/package`).
+  Packages and their modules are rows in `module_packages` / `module_package_modules`: Vacancies, Tenders,
+  Compleet (both) and Maatwerk (includes nothing by itself). Adding a future module to a package is one row. A new
+  workspace gets Compleet;
+- **individual choices** in `workspace_modules` (`PUT /admin/workspaces/:workspaceId/modules/:moduleId` with
+  `enabled: true | false | null`, `null` = follow the package again).
+
+The `workspace_module_access` view is the one definition of access: on globally AND (the individual choice, or
+else whether the package includes the module); otherwise `module_not_enabled_for_workspace` (403). It also
+marks a choice that `deviates` from the package, which the Admin > Workspaces tab shows as "Adjusted". Picking a
+regular package starts clean from it (individual choices removed); picking Maatwerk keeps the current modules as
+individual choices. Migration 009 gave every existing workspace the package matching its choices, kept those
+choices, and aborts if any workspace's effective access would change. Changing access never touches existing
+projects, runs or records; they stay readable. The new-project form reads `GET /workspaces/:id/modules` only so
+it does not offer a module the API would refuse. Packages are a technical grouping only: no prices,
+subscriptions or billing.
 
 ## Deployment topology
 

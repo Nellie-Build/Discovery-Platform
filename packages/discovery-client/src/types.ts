@@ -25,23 +25,42 @@ export interface DiscoveryModuleDefinition {
   updated_at: string;
 }
 
-/** One module as seen from one workspace: usable only when on globally AND not switched off for the workspace. */
+/** One module as seen from one workspace: usable only when on globally AND available through the workspace's package or own choice. */
 export interface WorkspaceModule {
   module_id: string;
   module_name: string;
   enabled: boolean;
 }
 
-/** Admin view: the global switch, the workspace's own decision (null = none, follows the global switch) and the result. */
+/**
+ * Admin view: the global switch, whether the workspace's package includes the module, the workspace's own choice
+ * (null = none, follow the package), whether that choice deviates from the package, and the result.
+ */
 export interface WorkspaceModuleAccess extends WorkspaceModule {
   global_enabled: boolean;
+  package_included: boolean;
   workspace_enabled: boolean | null;
+  deviates: boolean;
 }
 
 export interface AdminWorkspaceModules {
   workspace_id: string;
   workspace_name: string;
+  package_id: string;
+  package_name: string;
+  /** True when an individual choice deviates from the package. */
+  customized: boolean;
   modules: WorkspaceModuleAccess[];
+}
+
+/** A named set of modules; `is_custom` (Maatwerk) includes none by itself: every module is chosen individually. */
+export interface ModulePackage {
+  id: string;
+  name: string;
+  description: string;
+  is_custom: boolean;
+  sort_order: number;
+  module_ids: string[];
 }
 
 export interface Workspace {
