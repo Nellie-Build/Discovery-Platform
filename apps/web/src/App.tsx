@@ -16,6 +16,7 @@ import { SettingsPage } from './pages/settings';
 import { AccountPage } from './pages/account';
 import { AdminModulesPage } from './pages/admin/modules';
 import { AdminProjectsPage } from './pages/admin/projects';
+import { AdminWorkspaceModulesPage } from './pages/admin/workspace-modules';
 import './domains'; // registers every domain renderer as a side effect — see domains/index.ts
 
 export function App() {
@@ -42,6 +43,7 @@ export function App() {
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/account" element={<AccountPage />} />
               <Route path="/admin/modules" element={<AdminRoute><AdminModulesPage /></AdminRoute>} />
+              <Route path="/admin/workspace-modules" element={<AdminRoute><AdminWorkspaceModulesPage /></AdminRoute>} />
               <Route path="/admin/projects" element={<AdminRoute><AdminProjectsPage /></AdminRoute>} />
             </Route>
           </Routes>

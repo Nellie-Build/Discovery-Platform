@@ -3,6 +3,7 @@ import {
   type PublicUser, type Workspace, type WorkspaceMembership, type Project, type AdminProject,
   type DiscoveryRun, type DiscoveryRecord, type RecordWithDetails, type BranchSearchInput, type SourceRunInput,
   type DiscoveryModuleDefinition, type DiscoveryRunConfig, type VacancySearchFilters,
+  type WorkspaceModule, type WorkspaceModuleAccess, type AdminWorkspaceModules,
 } from './types.js';
 
 export interface ApiClientOptions {
@@ -46,6 +47,8 @@ export function createApiClient({ baseUrl }: ApiClientOptions) {
       listMine: () => req<WorkspaceMembership[]>('GET', '/workspaces'),
       get: (id: string) => req<Workspace>('GET', `/workspaces/${id}`),
       create: (name: string) => req<Workspace>('POST', '/workspaces', { name }),
+      /** Which modules this workspace may use for new projects and runs (enforced by the API either way). */
+      modules: (id: string) => req<WorkspaceModule[]>('GET', `/workspaces/${id}/modules`),
     },
     projects: {
       listByWorkspace: (workspaceId: string) => req<Project[]>('GET', `/projects?workspaceId=${encodeURIComponent(workspaceId)}`),
@@ -83,6 +86,13 @@ export function createApiClient({ baseUrl }: ApiClientOptions) {
       modules: {
         list: () => req<DiscoveryModuleDefinition[]>('GET', '/admin/modules'),
         setEnabled: (id: string, enabled: boolean) => req<DiscoveryModuleDefinition>('PATCH', `/admin/modules/${id}`, { enabled }),
+      },
+      workspaceModules: {
+        /** Every workspace with, per module, the global switch, the workspace's own decision and the result. */
+        list: () => req<AdminWorkspaceModules[]>('GET', '/admin/workspace-modules'),
+        /** `null` clears the workspace's decision: it follows the global switch again. */
+        set: (workspaceId: string, moduleId: string, enabled: boolean | null) =>
+          req<WorkspaceModuleAccess>('PUT', `/admin/workspaces/${workspaceId}/modules/${moduleId}`, { enabled }),
       },
       projects: {
         /** Every project across every workspace, active and soft-deleted alike. */

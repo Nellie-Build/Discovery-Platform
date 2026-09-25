@@ -59,7 +59,7 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
     }
     const adapter = domainRegistry[project.domain];
     if (!adapter) throw badRequest('unknown_domain', `No domain adapter registered for "${project.domain}".`);
-    await assertModuleEnabled(pool, project.domain);
+    await assertModuleEnabled(pool, project.domain, project.workspace_id);
 
     const { runConfig: resolvedConfig, filters: resolvedFilters, ...criteria } = discoveryInput;
     const initialStats = { criteria: { ...criteria, runConfig: resolvedConfig, filters: resolvedFilters } };

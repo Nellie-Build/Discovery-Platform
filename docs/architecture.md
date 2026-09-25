@@ -190,6 +190,20 @@ None of this is a technical limitation of the core — `findDuplicateCandidates(
 domain supplied. The constraint is entirely on what signals and inferences a person-matching
 domain is *allowed* to define.
 
+## Module access: global and per workspace
+
+Two switches decide whether a module (a project `domain`) can be used, both checked server-side in
+`apps/api/src/module-registry.ts` when a project is created and when a run is started (never only by hiding
+a button): the **global** switch in the `modules` table (`PATCH /admin/modules/:id`), which stays the master
+switch, and the **workspace** decision in `workspace_modules` (`PUT /admin/workspaces/:workspaceId/modules/:moduleId`
+with `enabled: true | false | null`). A module is usable only when it is on globally and not switched off for that
+workspace (`module_disabled` / `module_not_enabled_for_workspace`, both 403). Only explicit decisions are stored:
+a workspace without one follows the global switch, so existing workspaces kept their access without a backfill, and
+`null` removes a decision. Switching a module off never touches existing projects, runs or records; they stay
+readable. Admins manage this on the Admin > Workspaces tab (`GET /admin/workspace-modules`); the new-project form
+reads `GET /workspaces/:id/modules` only so it does not offer a module the API would refuse. There are no plans,
+subscriptions or payments behind this yet.
+
 ## Deployment topology
 
 See `docs/deployment.md` for the full picture — in short, one Docker image (root `Dockerfile`)

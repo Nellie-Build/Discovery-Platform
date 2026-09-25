@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { ApiError } from '@discovery-platform/client';
 import { api } from '../lib/api';
@@ -26,6 +26,18 @@ function NewProjectDialog({ open, onClose, workspaceId, onCreated }: {
   const [domain, setDomain] = useState('vacancies');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Which modules this workspace may use: only so the form does not offer a choice the API will refuse. If it
+  // cannot be loaded the form keeps the plain list; the API decides either way.
+  const { data: workspaceModules } = useAsync(
+    () => Promise.resolve(api.workspaces.modules(workspaceId)).catch(() => null),
+    [workspaceId],
+  );
+  const notForWorkspace = (value: string) => Array.isArray(workspaceModules) && workspaceModules.some(m => m.module_id === value && !m.enabled);
+  const usable = DOMAIN_OPTIONS.filter(option => option.available && !notForWorkspace(option.value));
+  useEffect(() => {
+    if (usable.length > 0 && !usable.some(option => option.value === domain)) setDomain(usable[0].value);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceModules]);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -59,8 +71,8 @@ function NewProjectDialog({ open, onClose, workspaceId, onCreated }: {
             className="block w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm shadow-sm hover:border-slate-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-400 focus:ring-offset-1 transition-colors duration-200"
           >
             {DOMAIN_OPTIONS.map(option => (
-              <option key={option.value} value={option.value} disabled={!option.available}>
-                {option.label}{!option.available ? ' (coming soon)' : ''}
+              <option key={option.value} value={option.value} disabled={!option.available || notForWorkspace(option.value)}>
+                {option.label}{!option.available ? ' (coming soon)' : notForWorkspace(option.value) ? ' (not enabled for this workspace)' : ''}
               </option>
             ))}
           </select>

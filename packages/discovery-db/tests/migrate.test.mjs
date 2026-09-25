@@ -6,14 +6,14 @@ import { runMigrations } from '../dist/migrate.js';
 test('runMigrations applies every migration on a clean database and creates every table', async () => {
   const db = new PGlite();
   const { applied } = await runMigrations(db);
-  assert.deepEqual(applied, ['001_init', '002_auth', '003_projects_soft_delete', '004_admin_modules', '005_source_registry', '006_run_records', '007_tenders_module']);
+  assert.deepEqual(applied, ['001_init', '002_auth', '003_projects_soft_delete', '004_admin_modules', '005_source_registry', '006_run_records', '007_tenders_module', '008_workspace_modules']);
 
   const { rows } = await db.query(
     "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
   );
   assert.deepEqual(rows.map(r => r.table_name), [
     'discovery_records', 'discovery_run_records', 'discovery_runs', 'modules', 'projects', 'record_contacts', 'record_sources',
-    'schema_migrations', 'session', 'sources', 'users', 'workspace_members', 'workspaces',
+    'schema_migrations', 'session', 'sources', 'users', 'workspace_members', 'workspace_modules', 'workspaces',
   ]);
   await db.close();
 });

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { WorkspacesRepository, WorkspaceMembersRepository, withTransaction, type TransactionCapable } from '@discovery-platform/db';
+import { ModulesRepository, WorkspacesRepository, WorkspaceMembersRepository, withTransaction, type TransactionCapable } from '@discovery-platform/db';
 import { asyncHandler, badRequest, notFound, HttpError } from '../http-errors.js';
 import { assertWorkspaceAccess } from '../workspace-access.js';
 
@@ -7,6 +7,7 @@ export function createWorkspacesRouter(pool: TransactionCapable): Router {
   const router = Router();
   const workspaces = new WorkspacesRepository(pool);
   const members = new WorkspaceMembersRepository(pool);
+  const modules = new ModulesRepository(pool);
 
   // The Web App's normal signup flow creates a workspace automatically (see auth/routes.ts's
   // /auth/register) — this endpoint is for a logged-in user creating an *additional* workspace,
@@ -44,6 +45,15 @@ export function createWorkspacesRouter(pool: TransactionCapable): Router {
     const workspace = await workspaces.getWorkspaceById(req.params.id);
     if (!workspace) throw notFound('Workspace not found.');
     res.json(workspace);
+  }));
+
+  // Which modules this workspace may use for new projects and runs — for the Web App's forms only;
+  // the decision itself is enforced by module-registry.ts on every create/run request.
+  router.get('/workspaces/:id/modules', asyncHandler(async (req, res) => {
+    await assertWorkspaceAccess(pool, req, req.params.id);
+    const access = await modules.listWorkspaceAccess(req.params.id);
+    if (access.length === 0) throw notFound('Workspace not found.');
+    res.json(access.map(({ module_id, module_name, enabled }) => ({ module_id, module_name, enabled })));
   }));
 
   return router;

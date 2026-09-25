@@ -23,7 +23,7 @@ export function createProjectsRouter(pool: TransactionCapable, domainRegistry: D
     await assertWorkspaceAccess(pool, req, workspaceId);
     const workspace = await workspaces.getWorkspaceById(workspaceId);
     if (!workspace) throw notFound('Workspace not found.');
-    await assertModuleEnabled(pool, domain);
+    await assertModuleEnabled(pool, domain, workspaceId);
     const project = await projects.createProject({ workspaceId, name: name.trim(), domain, config });
     res.status(201).json(project);
   }));

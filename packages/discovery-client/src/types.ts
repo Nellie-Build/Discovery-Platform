@@ -25,6 +25,25 @@ export interface DiscoveryModuleDefinition {
   updated_at: string;
 }
 
+/** One module as seen from one workspace: usable only when on globally AND not switched off for the workspace. */
+export interface WorkspaceModule {
+  module_id: string;
+  module_name: string;
+  enabled: boolean;
+}
+
+/** Admin view: the global switch, the workspace's own decision (null = none, follows the global switch) and the result. */
+export interface WorkspaceModuleAccess extends WorkspaceModule {
+  global_enabled: boolean;
+  workspace_enabled: boolean | null;
+}
+
+export interface AdminWorkspaceModules {
+  workspace_id: string;
+  workspace_name: string;
+  modules: WorkspaceModuleAccess[];
+}
+
 export interface Workspace {
   id: string;
   name: string;

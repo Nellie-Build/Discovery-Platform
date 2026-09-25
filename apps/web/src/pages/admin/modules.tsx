@@ -9,6 +9,7 @@ import { LoadingState, ErrorState } from '../../components/ui/states';
 
 const ADMIN_TABS = [
   { to: '/admin/modules', label: 'Modules' },
+  { to: '/admin/workspace-modules', label: 'Workspaces' },
   { to: '/admin/projects', label: 'Projects' },
 ];
 

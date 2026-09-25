@@ -13,5 +13,5 @@ export {
 } from './repositories/records.js';
 export { UsersRepository, toPublicUser, type User, type PublicUser } from './repositories/users.js';
 export { WorkspaceMembersRepository, type WorkspaceMember } from './repositories/workspace-members.js';
-export { ModulesRepository, type DiscoveryModuleDefinition } from './repositories/modules.js';
+export { ModulesRepository, type DiscoveryModuleDefinition, type WorkspaceModuleAccess } from './repositories/modules.js';
 export { SourcesRepository, type SourceDefinition } from './repositories/sources.js';
