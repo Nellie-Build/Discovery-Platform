@@ -10,10 +10,13 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variantClasses: Record<ButtonVariant, string> = {
-  primary: 'bg-brand-600 text-white hover:bg-brand-700 shadow-md hover:shadow-lg focus-visible:ring-brand-400 disabled:bg-slate-300 transition-all duration-200',
-  secondary: 'bg-white text-slate-700 border border-slate-200 hover:border-slate-300 hover:bg-slate-50 hover:shadow-sm focus-visible:ring-slate-300 transition-all duration-200',
+  primary:
+    'bg-brand-600 text-white hover:bg-brand-700 shadow-sm focus-visible:ring-brand-400 disabled:bg-slate-300 transition-colors duration-150',
+  secondary:
+    'bg-white text-slate-700 border border-slate-200 hover:border-slate-300 hover:bg-slate-50 hover:shadow-sm focus-visible:ring-slate-300 transition-all duration-200',
   ghost: 'bg-transparent text-slate-600 hover:bg-slate-100 focus-visible:ring-slate-300 transition-colors duration-200',
-  danger: 'bg-red-500 text-white hover:bg-red-600 shadow-md hover:shadow-lg focus-visible:ring-red-300 disabled:bg-red-300 transition-all duration-200',
+  danger:
+    'bg-red-600 text-white hover:bg-red-700 shadow-sm focus-visible:ring-red-300 disabled:bg-red-300 transition-colors duration-150',
 };
 const sizeClasses: Record<ButtonSize, string> = {
   sm: 'px-3 py-1.5 text-xs font-medium',
@@ -27,12 +30,15 @@ export function buttonClasses(variant: ButtonVariant = 'primary', size: ButtonSi
     'inline-flex items-center justify-center gap-2 rounded-lg font-medium',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
     'disabled:cursor-not-allowed disabled:opacity-70',
-    variantClasses[variant], sizeClasses[size], className,
+    variantClasses[variant],
+    sizeClasses[size],
+    className,
   );
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { className, variant = 'primary', size = 'md', ...props }, ref,
+  { className, variant = 'primary', size = 'md', ...props },
+  ref,
 ) {
   return <button ref={ref} className={buttonClasses(variant, size, className)} {...props} />;
 });

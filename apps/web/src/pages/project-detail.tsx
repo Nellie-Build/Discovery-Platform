@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ApiError, type DiscoveryRun, type DiscoveryRunConfig, type VacancySearchFilters } from '@discovery-platform/client';
 import { api } from '../lib/api';
 import { useAsync } from '../hooks/use-async';
@@ -358,6 +358,8 @@ export function StartDiscoveryForm({ projectId, onStarted }: { projectId: string
 
 export function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const linkedRunId = searchParams.get('run');
   const [selectedRun, setSelectedRun] = useState<DiscoveryRun | null>(null);
   const [resultTab, setResultTab] = useState<'run' | 'all'>('run');
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -375,11 +377,13 @@ export function ProjectDetailPage() {
   const { data: runs, loading: runsLoading, refetch: refetchRuns } = useAsync(
     () => api.runs.listByProject(id!), [id],
   );
-  const selectedId = selectedRun && selectedRun.project_id === id ? selectedRun.id : runs?.find(run => run.project_id === id)?.id;
+  const linkedRun = runs?.find(run => run.id === linkedRunId && run.project_id === id);
+  const selectedId = selectedRun && selectedRun.project_id === id ? selectedRun.id : linkedRun?.id ?? runs?.find(run => run.project_id === id)?.id;
   const { data: runRecords, loading: runRecordsLoading, error: runRecordsError, refetch: refetchRunRecords } = useAsync(
     async () => ({ runId: selectedId, records: selectedId ? await api.records.listByProject(id!, { runId: selectedId }) : [] }), [id, selectedId],
   );
   useEffect(() => { setSelectedRun(null); setActiveRunId(null); latestKnownRunRef.current = null; setResultTab('run'); }, [id]);
+  useEffect(() => { setSelectedRun(null); setResultTab('run'); }, [linkedRunId]);
 
   // Polling is deliberately used here even though today's API completes a run synchronously
   // before responding (see docs/architecture.md) — this keeps the UI correct without changes
@@ -418,7 +422,7 @@ export function ProjectDetailPage() {
   if (!project) return null;
 
   const renderer = getDomainRenderer(project.domain);
-  const latestRun = selectedRun?.project_id === id ? selectedRun : runs?.find(run => run.project_id === id) ?? null;
+  const latestRun = selectedRun?.project_id === id ? selectedRun : linkedRun ?? runs?.find(run => run.project_id === id) ?? null;
 
   // Guards against a start-run response arriving out of order: if the user starts run A, then
   // (before A's own response comes back) starts run B, and B's response happens to resolve

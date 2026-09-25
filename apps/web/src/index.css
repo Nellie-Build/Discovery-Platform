@@ -3,9 +3,46 @@
 @tailwind utilities;
 
 html {
-  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-family:
+    'Inter',
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
 }
 
 body {
-  @apply bg-slate-50 text-slate-900;
+  @apply m-0 bg-slate-50 text-slate-900 antialiased;
+}
+
+@layer base {
+  :focus-visible {
+    @apply outline outline-2 outline-offset-2 outline-brand-500;
+  }
+  h1 {
+    @apply tracking-tight;
+  }
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+  input,
+  select,
+  textarea {
+    max-width: 100%;
+  }
+  td {
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

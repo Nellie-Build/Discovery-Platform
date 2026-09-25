@@ -26,6 +26,23 @@ function project(overrides: Partial<Project> = {}): Project {
   };
 }
 
+describe('dashboard run link', () => {
+  it('loads the linked older run and its results instead of the newest run', async () => {
+    vi.mocked(api.projects.get).mockResolvedValue(project());
+    vi.mocked(api.runs.listByProject).mockResolvedValue([run({ id: 'new' }), run({ id: 'linked' })]);
+    vi.mocked(api.records.listByProject).mockResolvedValue([]);
+    render(
+      <MemoryRouter initialEntries={['/projects/p1?run=linked']}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(api.records.listByProject).toHaveBeenCalledWith('p1', { runId: 'linked' }));
+    expect(api.records.listByProject).not.toHaveBeenCalledWith('p1', { runId: 'new' });
+  });
+});
+
 describe('StartDiscoveryForm', () => {
   beforeEach(() => {
     vi.mocked(api.runs.start).mockReset();
