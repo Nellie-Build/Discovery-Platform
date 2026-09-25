@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import type { DiscoveryRecord } from '@discovery-platform/client';
-import { getDomainRenderer } from '../domains/registry';
+import { getDomainRenderer, type DomainRenderer } from '../domains/registry';
 import { EmptyState } from './ui/states';
 
 /**
@@ -11,6 +11,11 @@ import { EmptyState } from './ui/states';
  * a workspace-wide list that one day mixes vacancies with companies/housing never renders one
  * misleading table with the wrong columns for half its rows.
  */
+/** One row per record, unless the domain shows some records together (see DomainRenderer.groupRecords). */
+function rowsOf(renderer: DomainRenderer, records: DiscoveryRecord[]): DiscoveryRecord[][] {
+  return renderer.groupRecords && renderer.renderGroupCell ? renderer.groupRecords(records) : records.map(record => [record]);
+}
+
 function OneDomainTable({ domain, records }: { domain: string; records: DiscoveryRecord[] }) {
   const renderer = getDomainRenderer(domain);
   return (
@@ -25,22 +30,26 @@ function OneDomainTable({ domain, records }: { domain: string; records: Discover
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
-          {records.map(record => (
-            <tr key={record.id} className="hover:bg-slate-50">
-              {renderer.columns.map((column, index) => (
-                <td key={column.key} className="px-4 py-3 text-slate-700">
-                  {index === 0 ? (
-                    <Link to={`/records/${record.id}`} className="font-medium text-brand-700 hover:underline">
-                      {renderer.renderCell(record, column.key)}
-                    </Link>
-                  ) : (
-                    renderer.renderCell(record, column.key)
-                  )}
-                </td>
-              ))}
-              <td className="px-4 py-3 whitespace-nowrap text-slate-400">{new Date(record.created_at).toLocaleDateString()}</td>
-            </tr>
-          ))}
+          {rowsOf(renderer, records).map(group => {
+            const [record] = group;
+            const cell = (key: string) => (group.length > 1 && renderer.renderGroupCell ? renderer.renderGroupCell(group, key) : renderer.renderCell(record, key));
+            return (
+              <tr key={group.map(member => member.id).join('+')} className="hover:bg-slate-50">
+                {renderer.columns.map((column, index) => (
+                  <td key={column.key} className="px-4 py-3 text-slate-700">
+                    {index === 0 ? (
+                      <Link to={`/records/${record.id}`} className="font-medium text-brand-700 hover:underline">
+                        {cell(column.key)}
+                      </Link>
+                    ) : (
+                      cell(column.key)
+                    )}
+                  </td>
+                ))}
+                <td className="px-4 py-3 whitespace-nowrap text-slate-400">{new Date(record.created_at).toLocaleDateString()}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

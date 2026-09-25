@@ -64,16 +64,20 @@ The official TED Search API v3 (`POST https://api.ted.europa.eu/v3/notices/searc
 * Mapping: title from `title-proc` (Dutch, else English, else the first language; then `title-lot`, then `notice-title`), buyers (all named), procedure/notice/contract labels (Dutch, unknown codes kept), CPV codes (merged over lots, first is main), NUTS codes from `place-of-performance` (three-letter entries are countries and dropped; no place names, so `location` stays null), earliest lot deadline converted to Dutch local time, estimated value = procedure value, else the sum of the lots when every lot states one in one currency, else null. TED has no buyer reference number.
 * TED notices of one procedure merge into one record, exactly like TenderNed publications of one kenmerk (see "Updating stored tenders").
 
-## Cross-source matching (research, not implemented)
+## Cross-source matching
 
 TenderNed and TED records are **never merged by identity**: each source has its own identity space (`sourceSystem` is part of the key), and a test asserts that equal-looking identifiers do not collide. Measured on live data (TED: 470 Dutch-buyer tenders published 15–21 September; TenderNed: 1083 tenders published 8–21 September, 919 flagged European), on tenders present in both:
 
-* TenderNed's public JSON carries **no TED reference** (no publication number or notice identifier), and TED carries no `kenmerk`, so there is no exact key.
+* TenderNed's detail document states the TED publication number of a publication (`pbNummerTed`, e.g. `643394-2026`); the list entry does not, and TED carries no `kenmerk`. (The measurements below predate this finding.)
 * Normalised title + contracting authority matched 433 pairs one-to-one; the title alone 447 (11 ambiguous keys, 19 with a different authority string because TED lists every buyer of a joint procurement, TenderNed the lead buyer). Adding the deadline: 238 pairs, 1 ambiguous key.
 * Of the 236 pairs where both sources state a deadline, 235 agree to the minute once TED times are converted to Dutch local time; the one difference is a deadline that TenderNed's correction moved and TED had not published yet.
 * Contract type agreed in 419 of 433, procedure in 370 (TED has no label for some procedure types).
 
 Proposal: keep two records and store a **link**, not a merge. A link needs, at once: equal normalised title, the TenderNed authority among the TED buyers, a unique match in both directions, and (when both have one) the same deadline; that is `same_tender` with high confidence. A title + authority match without a comparable deadline is `possible_same_tender` (shown, never automatic). Title alone or authority + deadline alone are never links. If TenderNed's credentialed XML API turns out to include the TED notice number, that becomes an exact key and replaces the heuristic.
+
+**Implemented: explicit links only** (`tender-links.ts`, 2026-09-25). The TenderNed mapping keeps `pbNummerTed` as the publication's `tedPublicationNumber` (only when stated and well-formed). `linkTenders` links a TenderNed and a TED record only when that number is one of the TED record's own publication numbers; titles, authorities and deadlines never link. It is a view: both records, their identities and publication histories stay stored separately and unchanged. `combineLinkedTenders` gives one tender with, per field, the first source that states it (TenderNed, then TED) and that source's name, so a deadline that only TenderNed publishes is shown as TenderNed's and never written into the TED record; an award on either source makes it expired. The web list (`DomainRenderer.groupRecords`) shows a linked pair as one row with both source links and each source's own notice and deadline; the detail page still shows one stored record.
+
+Records stored before this field existed get it the next time a run sees that TenderNed publication again (the record is then marked updated once). Until then they are shown unlinked.
 
 ## Websites and web search (`sourceId: "website"`, `"search"`, `"auto"`)
 

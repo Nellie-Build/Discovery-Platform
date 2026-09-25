@@ -31,3 +31,4 @@ export {
 export { classifySourceRole, hostRole, namesMatch, hostMatchesPublisher, type RoleInput, type RoleAssessment } from './source-role.js';
 export { planTenderSearch } from './search-plan.js';
 export { suggestCpv, tenderOpportunityStatus } from './presentation.js';
+export { linkTenders, combineLinkedTenders, tedPublicationNumbers, TED_PUBLICATION_NUMBER, type LinkableTender, type CombinedTender, type SourcedValue } from './tender-links.js';

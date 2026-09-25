@@ -29,6 +29,13 @@ export interface DomainRenderer {
   RunSummary?: ComponentType<{ run: DiscoveryRun }>;
   /** Optional: extra sections on the record detail page (history, update notice, ...), right below "Found information". */
   renderDetailSections?(record: RecordWithDetails): ReactNode;
+  /**
+   * Optional: records the domain shows as ONE row (e.g. the same tender published on two sources). A view only: every
+   * record stays its own stored record. Groups keep list order; a record in no group is shown on its own.
+   */
+  groupRecords?(records: DiscoveryRecord[]): DiscoveryRecord[][];
+  /** Required with `groupRecords`: a cell of a row that stands for a group of two or more records. */
+  renderGroupCell?(records: DiscoveryRecord[], columnKey: string): ReactNode;
 }
 
 const missing = <span className="text-slate-400">—</span>;

@@ -1,6 +1,7 @@
 import type { SourceItem } from '@discovery-platform/core';
 import type { CpvCode, NutsCode, TenderFacts, TenderPublication } from './tender-facts.js';
 import { TENDERNED_SOURCE_ID, type TenderNedRaw } from './tenderned-source.js';
+import { TED_PUBLICATION_NUMBER } from './tender-links.js';
 
 /**
  * TenderNed JSON (list entry + optional detail) -> TenderFacts. Every field is optional in the source, so
@@ -69,8 +70,11 @@ export function mapTenderNedPublication(item: SourceItem<TenderNedRaw>): TenderF
   const nuts = readNuts(detail?.nutsCodes);
   const publicationDate = day(list.publicatieDatum) ?? day(detail?.publicatieDatum);
   const submissionDeadline = text(list.sluitingsDatum, 40) ?? text(detail?.sluitingsDatum, 40);
+  const tedNumber = text(detail?.pbNummerTed, 20);
   const publication: TenderPublication = {
     publicationId, noticeType: notice.code, noticeTypeLabel: notice.label, publicationDate, submissionDeadline, sourceUrl: item.sourceUrl,
+    // Set only when stated, so publications stored before this field existed do not all look changed.
+    ...(tedNumber && TED_PUBLICATION_NUMBER.test(tedNumber) ? { tedPublicationNumber: tedNumber } : {}),
   };
   return {
     sourceSystem: TENDERNED_SOURCE_ID,

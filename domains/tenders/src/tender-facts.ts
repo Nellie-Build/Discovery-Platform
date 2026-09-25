@@ -29,6 +29,11 @@ export interface TenderPublication {
   publicationDate: string | null;
   submissionDeadline: string | null;
   sourceUrl: string;
+  /**
+   * The TED publication number ("643394-2026") that the publisher itself states for this publication (TenderNed:
+   * `pbNummerTed`). Only present when stated: the explicit key that links a TenderNed tender to its TED record.
+   */
+  tedPublicationNumber?: string;
 }
 
 /**

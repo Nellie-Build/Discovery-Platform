@@ -1,4 +1,5 @@
 import { tenderOpportunityStatus } from '@discovery-platform/domain-tenders/presentation';
+import { combineLinkedTenders, linkTenders } from '@discovery-platform/domain-tenders/links';
 import type { ReactNode } from 'react';
 import type { DiscoveryRecord, RecordWithDetails } from '@discovery-platform/client';
 import { registerDomainRenderer, EmptyValue, type DomainRenderer } from '../registry';
@@ -18,6 +19,8 @@ export interface TenderPublication {
   publicationDate?: string | null;
   submissionDeadline?: string | null;
   sourceUrl?: string | null;
+  /** The TED publication number TenderNed states for this publication: the key that links the two records. */
+  tedPublicationNumber?: string | null;
 }
 export interface TenderDiscovery {
   via?: 'website_crawl' | 'web_search';
@@ -105,6 +108,10 @@ const locationSummary = (facts: TenderFacts): ReactNode => {
 const noticeLabel = (facts: TenderFacts | TenderPublication): string | null =>
   facts.noticeTypeLabel ?? facts.noticeType ?? null;
 
+const OPPORTUNITY_LABELS = { open: 'Open', expired: 'Verlopen / gegund', unknown: 'Onbekend' } as const;
+const SOURCE_NAMES: Record<string, string> = { tenderned: 'TenderNed', ted: 'TED' };
+const sourceName = (sourceSystem: string | null | undefined): string => SOURCE_NAMES[sourceSystem ?? ''] ?? sourceSystem ?? 'onbekend';
+
 function SourceLink({ url }: { url?: string | null }) {
   if (!url) return EmptyValue;
   return <a href={url} target="_blank" rel="noreferrer" className="break-all text-brand-700 hover:underline">{url}</a>;
@@ -184,7 +191,7 @@ const tendersRenderer: DomainRenderer = {
       case 'authority': return facts.contractingAuthority ?? EmptyValue;
       case 'opportunity': {
         const state = tenderOpportunityStatus(facts);
-        return <Badge tone={state === 'open' ? 'success' : 'neutral'}>{{ open: 'Open', expired: 'Verlopen / gegund', unknown: 'Onbekend' }[state]}</Badge>;
+        return <Badge tone={state === 'open' ? 'success' : 'neutral'}>{OPPORTUNITY_LABELS[state]}</Badge>;
       }
       case 'deadline': return formatTenderDate(facts.submissionDeadline) ?? EmptyValue;
       case 'procedure': return facts.procedureType ?? EmptyValue;
@@ -232,6 +239,41 @@ const tendersRenderer: DomainRenderer = {
   renderDetailSections: record => <PublicationHistory record={record} />,
   RunPanel: TenderRunPanel,
   RunSummary: TenderRunSummary,
+  groupRecords: records => linkTenders(records.map(record => ({ ...tenderData(record), record }))).map(group => group.map(member => member.record)),
+  renderGroupCell(records, columnKey) {
+    const combined = combineLinkedTenders(records.map(record => ({ ...tenderData(record), record })));
+    const { members } = combined;
+    const sourced = (value: { value: string; sourceSystem: string } | null, format: (v: string) => ReactNode = v => v): ReactNode =>
+      value ? <span>{format(value.value)}<span className="block text-xs text-slate-500">volgens {sourceName(value.sourceSystem)}</span></span> : EmptyValue;
+    switch (columnKey) {
+      case 'title': return (
+        <span>
+          {combined.title?.value ?? members[0].record.display_name ?? EmptyValue}
+          <Badge tone="neutral" className="ml-2 align-middle">{members.map(m => sourceName(m.sourceSystem)).join(' + ')}</Badge>
+          {members.some(m => isUpdatedRecord(m.record)) && <Badge tone="warning" className="ml-2 align-middle">Bijgewerkt</Badge>}
+        </span>
+      );
+      case 'authority': return sourced(combined.contractingAuthority);
+      case 'deadline': return sourced(combined.submissionDeadline, v => formatTenderDate(v) ?? v);
+      case 'opportunity': return <Badge tone={combined.status === 'open' ? 'success' : 'neutral'}>{OPPORTUNITY_LABELS[combined.status]}</Badge>;
+      case 'procedure': return sourced(combined.procedureType);
+      case 'cpv': return cpvSummary(members.find(m => (m.cpvCodes ?? []).length > 0) ?? members[0]);
+      case 'location': return locationSummary(members.find(m => m.location || (m.nutsCodes ?? []).length > 0) ?? members[0]);
+      // Per source: its own latest publication, its own deadline (or that it states none) and its own link.
+      case 'notice': return (
+        <ul>{members.map(m => <li key={m.record.id}>{sourceName(m.sourceSystem)}: {noticeLabel(m) ?? '—'}</li>)}</ul>
+      );
+      case 'origin': return (
+        <ul>{members.map(m => (
+          <li key={m.record.id}>
+            {m.sourceUrl ? <a href={m.sourceUrl} target="_blank" rel="noreferrer" className="text-brand-700 hover:underline">{sourceName(m.sourceSystem)} ↗</a> : sourceName(m.sourceSystem)}
+            <span className="block text-xs text-slate-500">{m.submissionDeadline ? `sluit ${formatTenderDate(m.submissionDeadline) ?? m.submissionDeadline}` : 'geen sluitingsdatum gepubliceerd'}</span>
+          </li>
+        ))}</ul>
+      );
+      default: return EmptyValue;
+    }
+  },
 };
 
 registerDomainRenderer('tenders', tendersRenderer);
