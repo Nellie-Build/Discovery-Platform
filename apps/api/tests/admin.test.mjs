@@ -41,7 +41,7 @@ test('an admin sees the seeded Module Registry: vacancies active/enabled, the ot
     const res = await client.request('GET', '/admin/modules');
     assert.equal(res.status, 200);
     const vacancies = res.body.find(m => m.id === 'vacancies');
-    const companies = res.body.find(m => m.id === 'companies');
+    const companies = res.body.find(m => m.id === 'housing');
     assert.equal(vacancies.enabled, true);
     assert.equal(vacancies.status, 'active');
     assert.equal(companies.enabled, false);

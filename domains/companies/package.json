@@ -1,0 +1,27 @@
+{
+  "name": "@discovery-platform/domain-companies",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Companies discovery domain: branch-, product- and service-oriented B2B company discovery with evidence per criterion, NL geography and domain-based identity. Consumes @discovery-platform/core only; never any application database, React or Firebase. See docs/companies-domain.md.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./criteria": "./dist/criteria.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test --test-concurrency=1 tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@discovery-platform/core": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.4",
+    "typescript": "^7.0.2"
+  }
+}

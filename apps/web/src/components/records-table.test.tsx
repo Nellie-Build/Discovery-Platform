@@ -38,14 +38,14 @@ describe('RecordsTable', () => {
   });
 
   it('falls back to the generic renderer for an unregistered domain, never crashing on domain_data it does not understand', () => {
-    const unknownDomainRecord = vacancyRecord({ domain: 'companies', display_name: 'Acme Corp', domain_data: { some_future_field: 'x' } });
+    const unknownDomainRecord = vacancyRecord({ domain: 'housing', display_name: 'Acme Corp', domain_data: { some_future_field: 'x' } });
     render(<MemoryRouter><RecordsTable records={[unknownDomainRecord]} emptyTitle="unused" /></MemoryRouter>);
     expect(screen.getByText('Acme Corp')).toBeInTheDocument();
   });
 
   it('groups mixed-domain records into separate tables, each with its own correct columns', () => {
     const vacancy = vacancyRecord();
-    const other = vacancyRecord({ id: 'r2', domain: 'companies', display_name: 'Other Co' });
+    const other = vacancyRecord({ id: 'r2', domain: 'housing', display_name: 'Other Co' });
     render(<MemoryRouter><RecordsTable records={[vacancy, other]} emptyTitle="unused" /></MemoryRouter>);
     expect(screen.getByText('Vacancy leads')).toBeInTheDocument();
     expect(screen.getByText('Records')).toBeInTheDocument(); // generic renderer's plural label

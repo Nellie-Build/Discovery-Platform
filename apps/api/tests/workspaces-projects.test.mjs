@@ -63,7 +63,7 @@ test('POST /projects rejects an unknown domain, an unknown workspace, and a miss
   try {
     const workspace = (await request('POST', '/workspaces', { body: { name: 'W' } })).body;
 
-    const badDomain = await request('POST', '/projects', { body: { workspaceId: workspace.id, name: 'X', domain: 'companies' } });
+    const badDomain = await request('POST', '/projects', { body: { workspaceId: workspace.id, name: 'X', domain: 'housing' } });
     assert.equal(badDomain.status, 400);
     assert.equal(badDomain.body.error, 'unknown_domain');
 

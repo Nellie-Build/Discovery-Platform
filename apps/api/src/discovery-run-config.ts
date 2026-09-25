@@ -59,7 +59,8 @@ export function resolveDiscoveryRunConfig(input: Partial<DiscoveryRunConfig> | n
   const targetRecords = clampNumber(raw.targetRecords, DEFAULT_RUN_CONFIG.targetRecords, 1, ABSOLUTE_MAX_TARGET_RECORDS);
   const searchBreadth = typeof raw.searchBreadth === 'string' && raw.searchBreadth.trim() ? raw.searchBreadth.trim() : DEFAULT_RUN_CONFIG.searchBreadth;
   const breadth = searchBreadth === 'focused' ? 0.75 : searchBreadth === 'broad' ? 1.5 : 1;
-  const effort = targetRecords * breadth * (module === 'vacancies' ? 2.5 : 2);
+  // Companies: every result means reading a company's own site (several pages), so more time per wanted record.
+  const effort = targetRecords * breadth * (module === 'vacancies' ? 2.5 : module === 'companies' ? 6 : 2);
   const advanced = [raw.maxPages, raw.maxCandidates, raw.maxDurationMs, raw.maxEnrichments]
     .some(value => typeof value === 'number' && Number.isFinite(value));
   return {

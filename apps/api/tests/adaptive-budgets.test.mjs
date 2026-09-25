@@ -25,3 +25,10 @@ test('partial Advanced override preserves adaptive defaults; invalid values cann
   assert.equal(resolveDiscoveryRunConfig({ maxPages: NaN, maxDurationMs: Infinity }).budgetSource, 'adaptive');
   assert.equal(resolveDiscoveryRunConfig({ searchBreadth: 'advanced' }).budgetSource, 'adaptive');
 });
+
+test('companies get more time per wanted record (every result is a site to read), within the absolute maximum', () => {
+  const companies = resolveDiscoveryRunConfig({ targetRecords: 5 }, 'companies');
+  const tenders = resolveDiscoveryRunConfig({ targetRecords: 5 }, 'tenders');
+  assert.ok(companies.maxDurationMs > tenders.maxDurationMs);
+  assert.ok(resolveDiscoveryRunConfig({ targetRecords: 100 }, 'companies').maxDurationMs <= ABSOLUTE_MAX_DURATION_MS);
+});

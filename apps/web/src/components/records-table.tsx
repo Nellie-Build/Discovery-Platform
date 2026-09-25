@@ -18,6 +18,15 @@ function rowsOf(renderer: DomainRenderer, records: DiscoveryRecord[]): Discovery
 
 function OneDomainTable({ domain, records }: { domain: string; records: DiscoveryRecord[] }) {
   const renderer = getDomainRenderer(domain);
+  // A domain with its own filters renders them and hands back the records that pass (see DomainRenderer.RecordsView).
+  if (renderer.RecordsView) {
+    const View = renderer.RecordsView;
+    return <View records={records}>{visible => <Table renderer={renderer} records={visible} />}</View>;
+  }
+  return <Table renderer={renderer} records={records} />;
+}
+
+function Table({ renderer, records }: { renderer: DomainRenderer; records: DiscoveryRecord[] }) {
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
       <table className="w-full min-w-[640px] divide-y divide-slate-200 text-sm">

@@ -6,7 +6,7 @@ import { runMigrations } from '../dist/migrate.js';
 test('runMigrations applies every migration on a clean database and creates every table', async () => {
   const db = new PGlite();
   const { applied } = await runMigrations(db);
-  assert.deepEqual(applied, ['001_init', '002_auth', '003_projects_soft_delete', '004_admin_modules', '005_source_registry', '006_run_records', '007_tenders_module', '008_workspace_modules', '009_module_packages']);
+  assert.deepEqual(applied, ['001_init', '002_auth', '003_projects_soft_delete', '004_admin_modules', '005_source_registry', '006_run_records', '007_tenders_module', '008_workspace_modules', '009_module_packages', '010_companies_module']);
 
   const { rows } = await db.query(
     "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
@@ -29,7 +29,8 @@ test('the Module Registry is seeded with vacancies active/enabled and every othe
   for (const row of rows) {
     if (row.id === 'vacancies') continue;
     assert.equal(row.enabled, false, `${row.id} must not be enabled yet`);
-    assert.equal(row.status, 'coming_soon');
+    // Companies is built (010) but off until an admin enables it: 'disabled', not 'coming_soon'.
+    assert.equal(row.status, row.id === 'companies' ? 'disabled' : 'coming_soon', row.id);
   }
   await db.close();
 });

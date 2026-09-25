@@ -14,14 +14,15 @@
     "examples/*"
   ],
   "scripts": {
-    "build": "npm run build -w packages/discovery-core && npm run build -w packages/discovery-db && npm run build -w packages/discovery-client && npm run build -w domains/vacancies && npm run build -w domains/tenders && npm run build -w apps/api && npm run build -w apps/web",
-    "typecheck": "npm run build -w packages/discovery-core && npm run build -w packages/discovery-db && npm run build -w packages/discovery-client && npm run build -w domains/vacancies && npm run build -w domains/tenders && npm run build -w apps/api && tsc --noEmit -p packages/discovery-core/tsconfig.json && tsc --noEmit -p packages/discovery-db/tsconfig.json && tsc --noEmit -p packages/discovery-client/tsconfig.json && tsc --noEmit -p domains/vacancies/tsconfig.json && tsc --noEmit -p domains/tenders/tsconfig.json && tsc --noEmit -p apps/api/tsconfig.json && npm run typecheck -w apps/web",
-    "test": "npm run test -w packages/discovery-core && npm run test -w packages/discovery-db && npm run test -w packages/discovery-client && npm run test -w domains/vacancies && npm run test -w domains/tenders && npm run test -w apps/api && npm run test -w examples/basic-discovery && npm run test -w examples/vacancy-discovery && npm run test -w apps/web",
+    "build": "npm run build -w packages/discovery-core && npm run build -w packages/discovery-db && npm run build -w packages/discovery-client && npm run build -w domains/vacancies && npm run build -w domains/tenders && npm run build -w domains/companies && npm run build -w apps/api && npm run build -w apps/web",
+    "typecheck": "npm run build -w packages/discovery-core && npm run build -w packages/discovery-db && npm run build -w packages/discovery-client && npm run build -w domains/vacancies && npm run build -w domains/tenders && npm run build -w domains/companies && npm run build -w apps/api && tsc --noEmit -p packages/discovery-core/tsconfig.json && tsc --noEmit -p packages/discovery-db/tsconfig.json && tsc --noEmit -p packages/discovery-client/tsconfig.json && tsc --noEmit -p domains/vacancies/tsconfig.json && tsc --noEmit -p domains/tenders/tsconfig.json && tsc --noEmit -p domains/companies/tsconfig.json && tsc --noEmit -p apps/api/tsconfig.json && npm run typecheck -w apps/web",
+    "test": "npm run test -w packages/discovery-core && npm run test -w packages/discovery-db && npm run test -w packages/discovery-client && npm run test -w domains/vacancies && npm run test -w domains/tenders && npm run test -w domains/companies && npm run test -w apps/api && npm run test -w examples/basic-discovery && npm run test -w examples/vacancy-discovery && npm run test -w apps/web",
     "test:core": "npm run test -w packages/discovery-core",
     "test:db": "npm run test -w packages/discovery-db",
     "test:client": "npm run test -w packages/discovery-client",
     "test:vacancies": "npm run test -w domains/vacancies",
     "test:tenders": "npm run test -w domains/tenders",
+    "test:companies": "npm run test -w domains/companies",
     "test:api": "npm run test -w apps/api",
     "test:web": "npm run test -w apps/web",
     "test:examples": "npm run test -w examples/basic-discovery && npm run test -w examples/vacancy-discovery",

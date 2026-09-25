@@ -153,7 +153,7 @@ test('the same architecture, without any database change, could support a differ
     const workspace = (await request('POST', '/workspaces', { body: { name: 'W' } })).body;
     // A project cannot even be created for an unregistered domain today (validated at creation)
     // — proving the registry, not a hardcoded route, is what decides which domains exist.
-    const res = await request('POST', '/projects', { body: { workspaceId: workspace.id, name: 'Companies scan', domain: 'companies' } });
+    const res = await request('POST', '/projects', { body: { workspaceId: workspace.id, name: 'Housing scan', domain: 'housing' } });
     assert.equal(res.status, 400);
     assert.equal(res.body.error, 'unknown_domain');
   } finally { await close(); }

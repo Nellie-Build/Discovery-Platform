@@ -16,6 +16,7 @@
   "dependencies": {
     "@discovery-platform/core": "^0.1.0",
     "@discovery-platform/db": "^0.1.0",
+    "@discovery-platform/domain-companies": "^0.1.0",
     "@discovery-platform/domain-tenders": "^0.1.0",
     "@discovery-platform/domain-vacancies": "^0.1.0",
     "bcryptjs": "^2.4.3",

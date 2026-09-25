@@ -6,6 +6,7 @@
  */
 import { vacanciesAdapter } from './domains/vacancies-adapter.js';
 import { tendersAdapter } from './domains/tenders-adapter.js';
+import { companiesAdapter } from './domains/companies-adapter.js';
 import type { DiscoveryRunConfig } from './discovery-run-config.js';
 
 export type { DiscoveryRunConfig } from './discovery-run-config.js';
@@ -93,4 +94,5 @@ export interface DomainAdapter {
 export const defaultDomainRegistry: DomainRegistry = {
   vacancies: vacanciesAdapter,
   tenders: tendersAdapter,
+  companies: companiesAdapter,
 };

@@ -36,6 +36,11 @@ export interface DomainRenderer {
   groupRecords?(records: DiscoveryRecord[]): DiscoveryRecord[][];
   /** Required with `groupRecords`: a cell of a row that stands for a group of two or more records. */
   renderGroupCell?(records: DiscoveryRecord[], columnKey: string): ReactNode;
+  /**
+   * Optional: the domain's own filters above its record list. Renders the filter controls and calls `children` with the
+   * records that pass them; the generic table renders those. A view only: nothing is filtered on the server.
+   */
+  RecordsView?: ComponentType<{ records: DiscoveryRecord[]; children: (visible: DiscoveryRecord[]) => ReactNode }>;
 }
 
 const missing = <span className="text-slate-400">—</span>;

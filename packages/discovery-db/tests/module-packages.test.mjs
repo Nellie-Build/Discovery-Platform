@@ -112,3 +112,17 @@ test('packages: definitions, a new workspace gets Compleet, the global switch wi
   assert.deepEqual(await access(), { tenders: false, vacancies: false });
   await db.close();
 });
+
+test('010: companies is described and built, stays off globally, and is in no package', async () => {
+  const db = new PGlite();
+  await runMigrations(db);
+  const { rows: [companies] } = await db.query("SELECT enabled, status, capabilities, description FROM modules WHERE id = 'companies'");
+  assert.deepEqual([companies.enabled, companies.status, companies.capabilities], [false, 'disabled', ['web_search', 'website']]);
+  assert.match(companies.description, /afnemerssector/);
+  assert.deepEqual((await db.query("SELECT package_id FROM module_package_modules WHERE module_id = 'companies'")).rows, []);
+  const ws = (await db.query("INSERT INTO workspaces (name) VALUES ('nieuw') RETURNING id")).rows[0];
+  await db.query("UPDATE modules SET enabled = true WHERE id = 'companies'");
+  const access = (await db.query("SELECT enabled FROM workspace_module_access WHERE workspace_id = $1 AND module_id = 'companies'", [ws.id])).rows[0];
+  assert.equal(access.enabled, false, 'globally on is not enough: a Compleet workspace does not get companies');
+  await db.close();
+});
