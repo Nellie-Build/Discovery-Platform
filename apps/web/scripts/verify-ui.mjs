@@ -9,9 +9,9 @@ const { chromium } = await import(
     ? pathToFileURL(resolve(process.env.UI_TEST_TOOLS, 'node_modules/playwright/index.mjs')).href
     : 'playwright'
 );
-const out = resolve('apps/web/review');
+const out = resolve(process.env.UI_REVIEW_OUTPUT ?? 'apps/web/review');
 await mkdir(out, { recursive: true });
-const browser = await chromium.launch({ channel: 'chrome', headless: true });
+const browser = await chromium.launch({ channel: process.env.UI_BROWSER_CHANNEL ?? 'chrome', headless: true });
 const context = await browser.newContext({ viewport: { width: 1440, height: 1100 }, locale: 'nl-NL' });
 const page = await context.newPage();
 const errors = [];
@@ -150,6 +150,20 @@ try {
   assert.equal(await page.getByText('TenderNed + TED', { exact: true }).count(), 3);
   await noOverflow();
   await page.screenshot({ path: `${out}/tender-results-desktop.png`, fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await noOverflow();
+  const tableRegion = page.getByRole('region', { name: 'Tenders: resultatentabel' });
+  assert.ok(await tableRegion.evaluate(el => el.scrollWidth > el.clientWidth), 'Narrow tender tables scroll instead of squeezing columns');
+  assert.ok(await tableRegion.locator('tbody td').first().evaluate(el => el.getBoundingClientRect().width >= 230));
+  await tableRegion.focus();
+  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => document.querySelector('[aria-label="Tenders: resultatentabel"]').scrollLeft > 0);
+  await tableRegion.evaluate(el => { el.scrollLeft = 0; });
+  await tableRegion.screenshot({ path: out + '/tender-table-mobile.png' });
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await noOverflow();
+  await tableRegion.screenshot({ path: out + '/tender-table-tablet.png' });
+  await page.setViewportSize({ width: 1440, height: 1100 });
   await page.getByRole('link', { name: 'Dashboard', exact: true }).click();
   await page.getByRole('heading', { name: 'Welkom bij Discovery Platform' }).waitFor();
   await page.setViewportSize({ width: 768, height: 1024 });
@@ -158,6 +172,11 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await noOverflow();
   await page.screenshot({ path: `${out}/dashboard-mobile.png`, fullPage: true });
+  const stats = await page.getByRole('region', { name: 'Workspace statistieken' }).evaluate(el => [...el.children].map(card => ({ x: card.getBoundingClientRect().x, y: card.getBoundingClientRect().y, height: card.getBoundingClientRect().height })));
+  assert.equal(stats[0].y, stats[1].y, 'Two compact statistic cards per row');
+  assert.ok(stats[0].x < stats[1].x);
+  assert.ok(stats.every(card => card.height < 180), 'Mobile statistic cards stay compact');
+  assert.equal(await page.getByText('Gedeeltelijk geslaagd', { exact: true }).evaluate(el => getComputedStyle(el).whiteSpace), 'nowrap');
   await page.getByRole('button', { name: 'Navigatie openen' }).click();
   const drawer = page.getByRole('dialog', { name: 'Navigatie', exact: true });
   await drawer.waitFor();
@@ -175,6 +194,12 @@ try {
   assert.equal(await page.getByRole('link', { name: 'Open Companies', exact: true }).count(), 0);
   assert.equal(await page.getByRole('link', { name: 'Open Vacancies', exact: true }).count(), 0);
   await page.getByRole('link', { name: 'Open Tenders', exact: true }).waitFor();
+  await noOverflow();
+  await page.screenshot({ path: out + '/dashboard-single-module-mobile.png', fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await noOverflow();
+  await page.screenshot({ path: out + '/dashboard-single-module-desktop.png', fullPage: true });
+  assert.equal(await page.getByRole('navigation').getByRole('link', { name: 'Companies', exact: true }).count(), 0);
   await page.getByRole('link', { name: 'Nieuw project', exact: true }).click();
   const projectDialog = page.getByRole('dialog', { name: 'New project' });
   await projectDialog.waitFor();

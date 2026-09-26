@@ -86,7 +86,7 @@ export function DashboardPage() {
           </button>
         </div>
       )}
-      <section aria-label="Workspace statistieken" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section aria-label="Workspace statistieken" className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <StatCard
           label="Actieve modules"
           value={data.modules.length}

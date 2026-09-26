@@ -46,3 +46,14 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Preserve the approved desktop table; give narrow screens readable, scrollable columns. */
+@media (max-width: 1279px) {
+  .tender-results-table { min-width: 1480px; }
+  .tender-results-table th, .tender-results-table td { min-width: 8rem; vertical-align: top; overflow-wrap: normal; word-break: normal; line-height: 1.5; }
+  .tender-results-table th:first-child, .tender-results-table td:first-child { min-width: 15rem; width: 15rem; }
+  .tender-results-table th:nth-child(2), .tender-results-table td:nth-child(2),
+  .tender-results-table th:nth-child(6), .tender-results-table td:nth-child(6),
+  .tender-results-table th:nth-child(9), .tender-results-table td:nth-child(9) { min-width: 12rem; }
+  .tender-results-table td:nth-child(3), .tender-results-table td:nth-child(4) { white-space: nowrap; }
+}

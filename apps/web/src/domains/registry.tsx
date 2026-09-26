@@ -20,6 +20,8 @@ export interface DomainRenderer {
   /** Shown above the record list — e.g. "Vacancy leads". */
   recordLabelPlural: string;
   columns: DomainColumn[];
+  /** Optional domain-specific table presentation; does not change record data. */
+  tableClassName?: string;
   renderCell(record: DiscoveryRecord, columnKey: string): ReactNode;
   /** The "Found information" section on the record detail page. */
   renderDetailFields(record: RecordWithDetails): DomainDetailField[];
