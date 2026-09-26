@@ -5,7 +5,7 @@ import {
 import { CriteriaError, hasSubject, interpretDescription, parseCriteria, type CompanySearchCriteria } from './criteria.js';
 import { COMPANY_LINK_TIER, CONTACT_NORMALIZERS, analyzeCompanyPage, isNonInformativePage, rankCompanyCandidate, termSpecs, type PageAnalysis, type TermSpec } from './page-analysis.js';
 import { companyIdentity, registrableDomain } from './identity.js';
-import { buildCompanySearchQueries, excludedHostKind } from './search-plan.js';
+import { DEFAULT_SEARCH_QUERIES, MAX_SEARCH_QUERIES, buildCompanySearchQueries, excludedHostKind } from './search-plan.js';
 import { expandValue } from './vocabulary.js';
 import { normalizeText, termPattern } from './text.js';
 
@@ -40,7 +40,10 @@ export interface CompanyRaw {
 }
 
 export interface CompanySourceStats {
-  queries: Array<{ query: string; angle: string; results: number; error?: string }>;
+  /** Per executed query: results, new candidate companies, results on a domain already found, results on excluded hosts. */
+  queries: Array<{ query: string; angle: string; results: number; newCandidates?: number; duplicates?: number; excluded?: number; error?: string }>;
+  /** Planned queries that were not executed, and why (time limit, no new candidates, search provider unavailable). */
+  queriesNotExecuted?: Array<{ query: string; angle: string; reason: string }>;
   searchResults: number;
   excludedResults: Record<string, number>;
   companyCandidates: number;
@@ -211,42 +214,58 @@ export function createCompanySearchSource(deps: CompanyWebDeps): CompanySource {
         stats.continued = true;
         stats.companyCandidates = candidates.length;
       } else {
-      // 1. Search.
-      const planned = buildCompanySearchQueries(criteria, clampInt(filters.maxQueries, 4, 1, 8));
-      const found: Array<{ url: string; title: string | null; snippet: string | null; source: string; query: string }> = [];
-      let lastError: unknown = null;
-      for (const { query, angle } of planned) {
-        if (timeLeft() <= 0) { stats.timeLimitReached = true; break; }
-        try {
-          const results = await deps.searchProvider!.search({ query, country: criteria.country, language: 'nl', count: 10 });
-          stats.queries.push({ query, angle, results: results.length });
-          for (const result of results) found.push({ ...result, query });
-        } catch (error) {
-          lastError = error;
-          stats.queries.push({ query, angle, results: 0, error: error instanceof Error ? error.message.slice(0, 200) : 'zoekopdracht mislukt' });
-        }
-      }
-      stats.searchResults = found.length;
-      if (found.length === 0 && lastError) throw new SourceError(`De zoekprovider gaf geen resultaten: ${lastError instanceof Error ? lastError.message.slice(0, 200) : 'onbekende fout'}`, 'http');
-
-      // 2. Candidate companies: one per domain, never a directory/social/news/... host.
+      // 1. Search, and 2. candidate companies as the results come in: one per official domain (deduplicated early),
+      // never a directory/social/news/... host. A provider failure never loses what earlier queries found.
+      const planned = buildCompanySearchQueries(criteria, clampInt(filters.maxQueries, DEFAULT_SEARCH_QUERIES, 1, MAX_SEARCH_QUERIES));
       const terms = [criteria.query, ...criteria.industries, ...criteria.products, ...criteria.services, ...criteria.specialisations, ...criteria.customerSectors]
         .filter((value): value is string => Boolean(value)).flatMap(value => [...expandValue('product', value), ...expandValue('service', value), ...expandValue('industry', value), ...expandValue('specialisation', value), ...expandValue('customer_sector', value)]);
       const patterns = [...new Set(terms.map(term => normalizeText(term)))].map(term => termPattern(term));
       const byDomain = new Map<string, Candidate>();
-      for (const result of found) {
-        const [clean] = normalizeCandidateUrls([result], { maxCandidates: 1 });
-        if (!clean) continue;
-        const host = new URL(clean.url).hostname;
-        const excluded = excludedHostKind(host);
-        if (excluded) { stats.excludedResults[excluded] = (stats.excludedResults[excluded] ?? 0) + 1; continue; }
-        const domain = registrableDomain(host);
-        const text = normalizeText(`${result.title ?? ''} ${result.snippet ?? ''}`);
-        const hits = patterns.filter(pattern => { pattern.lastIndex = 0; return pattern.test(text); }).length;
-        const existing = byDomain.get(domain);
-        if (existing) { existing.results++; existing.termHits = Math.max(existing.termHits, hits); continue; }
-        byDomain.set(domain, { domain, url: clean.url, title: result.title, snippet: result.snippet, query: result.query, provider: result.source, results: 1, termHits: hits });
+      const notExecuted: NonNullable<CompanySourceStats['queriesNotExecuted']> = [];
+      let lastError: unknown = null;
+      let failuresInRow = 0;
+      let emptyInRow = 0;
+      for (const [index, { query, angle }] of planned.entries()) {
+        const skip = timeLeft() <= 0 ? 'tijdslimiet bereikt'
+          : failuresInRow >= 2 ? 'zoekprovider niet beschikbaar'
+          // Enough candidates for this batch and the last three queries found nothing new: more queries only cost credits.
+          : emptyInRow >= 3 && byDomain.size >= maxCompanies ? 'geen nieuwe kandidaten meer' : null;
+        if (skip) {
+          if (skip === 'tijdslimiet bereikt') stats.timeLimitReached = true;
+          for (const rest of planned.slice(index)) notExecuted.push({ ...rest, reason: skip });
+          break;
+        }
+        let results;
+        try {
+          results = await deps.searchProvider!.search({ query, country: criteria.country, language: 'nl', count: 10 });
+          failuresInRow = 0;
+        } catch (error) {
+          lastError = error;
+          failuresInRow++;
+          stats.queries.push({ query, angle, results: 0, error: error instanceof Error ? error.message.slice(0, 200) : 'zoekopdracht mislukt' });
+          continue;
+        }
+        const entry = { query, angle, results: results.length, newCandidates: 0, duplicates: 0, excluded: 0 };
+        stats.searchResults += results.length;
+        for (const result of results) {
+          const [clean] = normalizeCandidateUrls([result], { maxCandidates: 1 });
+          if (!clean) continue;
+          const host = new URL(clean.url).hostname;
+          const excluded = excludedHostKind(host);
+          if (excluded) { entry.excluded++; stats.excludedResults[excluded] = (stats.excludedResults[excluded] ?? 0) + 1; continue; }
+          const domain = registrableDomain(host);
+          const text = normalizeText(`${result.title ?? ''} ${result.snippet ?? ''}`);
+          const hits = patterns.filter(pattern => { pattern.lastIndex = 0; return pattern.test(text); }).length;
+          const existing = byDomain.get(domain);
+          if (existing) { entry.duplicates++; existing.results++; existing.termHits = Math.max(existing.termHits, hits); continue; }
+          entry.newCandidates++;
+          byDomain.set(domain, { domain, url: clean.url, title: result.title, snippet: result.snippet, query, provider: result.source, results: 1, termHits: hits });
+        }
+        emptyInRow = entry.newCandidates ? 0 : emptyInRow + 1;
+        stats.queries.push(entry);
       }
+      if (notExecuted.length) stats.queriesNotExecuted = notExecuted;
+      if (byDomain.size === 0 && stats.searchResults === 0 && lastError) throw new SourceError(`De zoekprovider gaf geen resultaten: ${lastError instanceof Error ? lastError.message.slice(0, 200) : 'onbekende fout'}`, 'http');
       candidates = [...byDomain.values()].sort((a, b) => b.termHits - a.termHits || b.results - a.results);
       stats.companyCandidates = candidates.length;
       }

@@ -11,6 +11,11 @@ import { normalizeText, termPattern, uniqueStrings } from './text.js';
 export { CONCEPTS, COMPANY_ROLES, ROLE_LABELS, KIND_LABELS, CONCEPT_KINDS, BUSINESS_TYPES, BUSINESS_TYPE_LABELS, conceptsOf, expandValue, findConcept, NETHERLANDS, provinceLabel, findProvince, findPlace };
 export type { BusinessType, CompanyRole, Concept, ConceptKind };
 
+/** Lists whose values can be combined as alternatives (`any`, the default) or all be required (`all`). */
+export type LogicList = 'industries' | 'products' | 'services' | 'specialisations' | 'customerSectors' | 'roles' | 'businessTypes';
+export const LOGIC_LISTS: readonly LogicList[] = ['industries', 'products', 'services', 'specialisations', 'customerSectors', 'roles', 'businessTypes'];
+export type Logic = 'any' | 'all';
+
 export interface CompanySearchCriteria {
   /** A company name or general search term. */
   query: string | null;
@@ -20,8 +25,15 @@ export interface CompanySearchCriteria {
   specialisations: string[];
   customerSectors: string[];
   roles: CompanyRole[];
-  /** How the company does business (business supplier, consumer web shop, ...): alternatives; empty = any, web shops included. */
+  /** How the company does business (business supplier, consumer web shop, ...); empty = any, web shops included. */
   businessTypes: BusinessType[];
+  /** Business types a company must NOT have (e.g. "uitsluitend zakelijk": no consumer web shops). */
+  excludedBusinessTypes: BusinessType[];
+  /**
+   * Per list: are its values alternatives (`any`: at least one, the default and what searches saved before this field
+   * existed mean) or all required (`all`)? Different lists are always all required.
+   */
+  logic: Partial<Record<LogicList, Logic>>;
   /** ISO country code; the first version supports NL. */
   country: string;
   /** Province ids (NL-ZH). */
@@ -37,13 +49,17 @@ export interface CompanySearchCriteria {
 }
 
 export const EMPTY_CRITERIA: CompanySearchCriteria = {
-  query: null, industries: [], products: [], services: [], specialisations: [], customerSectors: [], roles: [], businessTypes: [],
-  country: 'NL', provinces: [], places: [], extra: null, exclusions: [], description: null,
+  query: null, industries: [], products: [], services: [], specialisations: [], customerSectors: [], roles: [], businessTypes: [], excludedBusinessTypes: [],
+  logic: {}, country: 'NL', provinces: [], places: [], extra: null, exclusions: [], description: null,
 };
 
 /** The criteria list for each vocabulary kind (roles are ids, the rest are free values). */
 export const LIST_OF: Record<Exclude<ConceptKind, 'role'>, 'industries' | 'products' | 'services' | 'specialisations' | 'customerSectors'> = {
   industry: 'industries', product: 'products', service: 'services', specialisation: 'specialisations', customer_sector: 'customerSectors',
+};
+/** The list a match kind belongs to (for the and/or logic). */
+export const LIST_OF_KIND: Record<string, LogicList | undefined> = {
+  industry: 'industries', product: 'products', service: 'services', specialisation: 'specialisations', customer_sector: 'customerSectors', role: 'roles', business_type: 'businessTypes',
 };
 
 export const MATCH_STATUS_LABELS = { confirmed: 'Bevestigde match', possible: 'Mogelijke match', insufficient: 'Onvoldoende bewijs' } as const;
@@ -64,6 +80,11 @@ const list = (value: unknown, name: string): string[] => {
   if (clean.length > MAX_VALUES) throw new CriteriaError(`${name}: hoogstens ${MAX_VALUES} waarden.`);
   return uniqueStrings(clean, MAX_VALUES);
 };
+const businessTypeList = (value: unknown, name: string): BusinessType[] => [...new Set(list(value, name).map(item => {
+  const known = BUSINESS_TYPES.find(id => id === item) ?? (Object.entries(BUSINESS_TYPE_LABELS).find(([, label]) => normalizeText(label) === normalizeText(item))?.[0] as BusinessType | undefined);
+  if (!known) throw new CriteriaError(`Onbekend type bedrijf "${item.slice(0, 40)}".`);
+  return known;
+}))];
 
 /** Validates criteria from a request; throws CriteriaError with a message a user can act on. */
 export function parseCriteria(input: Record<string, unknown>): CompanySearchCriteria {
@@ -75,16 +96,19 @@ export function parseCriteria(input: Record<string, unknown>): CompanySearchCrit
     if (!known) throw new CriteriaError(`Onbekende bedrijfsrol "${role.slice(0, 40)}".`);
     return known;
   });
-  const businessTypes = list(input.businessTypes, 'Type bedrijf').map(value => {
-    const known = BUSINESS_TYPES.find(id => id === value) ?? (Object.entries(BUSINESS_TYPE_LABELS).find(([, label]) => normalizeText(label) === normalizeText(value))?.[0] as BusinessType | undefined);
-    if (!known) throw new CriteriaError(`Onbekend type bedrijf "${value.slice(0, 40)}".`);
-    return known;
-  });
   const provinces = list(input.provinces, 'Provincie').map(value => {
     const province = findProvince(value) ?? findProvince(`provincie ${value}`);
     if (!province) throw new CriteriaError(`Onbekende provincie "${value.slice(0, 40)}".`);
     return province.id;
   });
+  const logic: Partial<Record<LogicList, Logic>> = {};
+  if (input.logic !== undefined && input.logic !== null) {
+    if (typeof input.logic !== 'object' || Array.isArray(input.logic)) throw new CriteriaError('De zoeklogica is ongeldig.');
+    for (const [key, value] of Object.entries(input.logic as Record<string, unknown>)) {
+      if (!LOGIC_LISTS.includes(key as LogicList) || (value !== 'any' && value !== 'all')) throw new CriteriaError(`Ongeldige zoeklogica voor "${key.slice(0, 30)}": kies "any" (één van) of "all" (alle).`);
+      if (value === 'all') logic[key as LogicList] = 'all';
+    }
+  }
   return {
     query: text(input.query, 120, 'Zoekterm'),
     industries: list(input.industries, 'Branche'),
@@ -93,7 +117,9 @@ export function parseCriteria(input: Record<string, unknown>): CompanySearchCrit
     specialisations: list(input.specialisations, 'Specialisaties'),
     customerSectors: list(input.customerSectors, 'Afnemerssector'),
     roles: [...new Set(roles)],
-    businessTypes: [...new Set(businessTypes)],
+    businessTypes: businessTypeList(input.businessTypes, 'Type bedrijf'),
+    excludedBusinessTypes: businessTypeList(input.excludedBusinessTypes, 'Uitgesloten type bedrijf'),
+    logic,
     country: countryCode,
     provinces: [...new Set(provinces)],
     places: list(input.places, 'Plaats').map(place => findPlace(place)?.name ?? place),
@@ -107,57 +133,150 @@ export function parseCriteria(input: Record<string, unknown>): CompanySearchCrit
 export const hasSubject = (c: CompanySearchCriteria) =>
   Boolean(c.query) || [c.industries, c.products, c.services, c.specialisations, c.customerSectors, c.roles].some(values => values.length > 0);
 
-/** A one-line Dutch summary, e.g. "Product: camerasystemen · Dienst: installatie · Afnemer: ziekenhuizen · Zuid-Holland". */
+/** `any` unless the list says `all` (older criteria have no logic at all: alternatives, as before). */
+export const logicOf = (c: Pick<CompanySearchCriteria, 'logic'>, listName: LogicList): Logic => c.logic?.[listName] ?? 'any';
+
+/**
+ * Criteria that contradict each other or cannot be met as written, as messages a user can act on. Nothing is changed
+ * silently: the search runs with the criteria as given, and these are shown next to the interpretation.
+ */
+export function criteriaWarnings(c: CompanySearchCriteria): string[] {
+  const warnings: string[] = [];
+  const included = [...c.industries, ...c.products, ...c.services, ...c.specialisations, ...c.customerSectors];
+  for (const exclusion of c.exclusions) {
+    const key = normalizeText(exclusion);
+    const clash = included.find(value => normalizeText(value) === key
+      || CONCEPT_KINDS.some(kind => { const a = findConcept(kind, value); const b = findConcept(kind, exclusion); return Boolean(a && b && a.id === b.id); }));
+    if (clash) warnings.push(`"${exclusion}" wordt zowel gezocht als uitgesloten; dan blijft er geen bedrijf over dat eraan voldoet.`);
+  }
+  for (const type of c.businessTypes ?? []) {
+    if ((c.excludedBusinessTypes ?? []).includes(type)) warnings.push(`"${BUSINESS_TYPE_LABELS[type]}" is zowel gevraagd als uitgesloten.`);
+  }
+  if (c.places.length && c.provinces.length) {
+    for (const placeName of c.places) {
+      const place = findPlace(placeName);
+      if (place && !c.provinces.includes(place.province)) warnings.push(`${place.name} ligt niet in ${c.provinces.map(id => provinceLabel(id) ?? id).join(' of ')}; een bedrijf moet dan aan beide plaatsen voldoen.`);
+    }
+  }
+  if (logicOf(c, 'businessTypes') === 'all' && (c.businessTypes ?? []).includes('consumer_webshop') && (c.businessTypes ?? []).includes('b2b_supplier')) {
+    warnings.push('Zowel "consumentenwebwinkel" als "zakelijke leverancier" verplicht: alleen bedrijven die beide zijn komen in aanmerking.');
+  }
+  return warnings;
+}
+
+/** A one-line Dutch summary, e.g. "Product: camerasystemen of toegangscontrole · Dienst: installatie · Zuid-Holland". */
 export function summarizeCriteria(c: CompanySearchCriteria): string {
   const parts: string[] = [];
   if (c.query) parts.push(`Zoekterm: ${c.query}`);
-  const add = (label: string, values: string[]) => { if (values.length) parts.push(`${label}: ${values.join(', ')}`); };
-  add('Branche', c.industries); add('Product', c.products); add('Dienst', c.services); add('Specialisatie', c.specialisations);
-  add('Afnemer', c.customerSectors); add('Rol', c.roles.map(role => ROLE_LABELS[role])); add('Type', (c.businessTypes ?? []).map(type => BUSINESS_TYPE_LABELS[type]));
+  const add = (label: string, values: string[], listName: LogicList) => {
+    if (values.length) parts.push(`${label}: ${values.join(logicOf(c, listName) === 'all' ? ' én ' : ' of ')}`);
+  };
+  add('Branche', c.industries, 'industries'); add('Product', c.products, 'products'); add('Dienst', c.services, 'services');
+  add('Specialisatie', c.specialisations, 'specialisations'); add('Afnemer', c.customerSectors, 'customerSectors');
+  add('Rol', c.roles.map(role => ROLE_LABELS[role]), 'roles'); add('Type', (c.businessTypes ?? []).map(type => BUSINESS_TYPE_LABELS[type]), 'businessTypes');
+  if ((c.excludedBusinessTypes ?? []).length) parts.push(`Geen: ${c.excludedBusinessTypes.map(type => BUSINESS_TYPE_LABELS[type]).join(', ')}`);
   const where = [...c.places, ...c.provinces.map(id => provinceLabel(id) ?? id)];
   parts.push(where.length ? where.join(', ') : 'Nederland');
   if (c.exclusions.length) parts.push(`Niet: ${c.exclusions.join(', ')}`);
   return parts.join(' · ');
 }
 
+// ─── Explanation of a result ────────────────────────────────────────────────────────────────────────────────────────
+
+/** The per-criterion outcome as stored with a company (see company-facts.ts CriterionMatch); only what the explanation needs. */
+export interface ExplainableMatch { kind: string; criterion: string; status: 'confirmed' | 'possible' | 'insufficient'; found: string | null; basis?: 'offering' | 'reference' | 'mention' }
+const STATUS_WORD = { confirmed: 'Bevestigd', possible: 'Mogelijk', insufficient: 'Onbekend' } as const;
+const KIND_PHRASE: Record<string, (criterion: string) => string> = {
+  industry: c => `actief in ${c}`, product: c => `levert ${c}`, service: c => `voert ${c} uit`, specialisation: c => `gespecialiseerd in ${c}`,
+  customer_sector: c => `levert aan ${c}`, role: c => `is ${c.toLowerCase()}`, business_type: c => `is ${c.toLowerCase()}`, query: c => `zoekterm ${c}`,
+  country: c => `gevestigd of actief in ${c}`, province: c => `werkgebied ${c}`, place: c => `werkgebied ${c}`,
+};
+
+/**
+ * A plain explanation of why a company does or does not fit, criterion by criterion ("Bevestigd: levert camerasystemen.
+ * Mogelijk: levert aan zorginstellingen. Onbekend: werkgebied Zuid-Holland."). No scores, no percentages.
+ */
+export function explainMatches(matches: ExplainableMatch[]): string {
+  return matches.map(match => {
+    // An excluded kind of company that may apply is a warning, not a fit.
+    if (match.kind === 'excluded_business_type') return `Let op: mogelijk ${match.criterion.replace(/^geen /, '')}.`;
+    if (match.kind === 'customer_sector' && match.status !== 'insufficient' && match.basis === 'reference') return `${STATUS_WORD[match.status]}: referentieproject bij ${match.criterion}.`;
+    return `${STATUS_WORD[match.status]}: ${(KIND_PHRASE[match.kind] ?? (c => c))(match.criterion)}.`;
+  }).join(' ');
+}
+
 // ─── Interpretation of a plain-language description ─────────────────────────────────────────────────────────────────
 
 export interface RecognizedPhrase {
   phrase: string;
-  kind: ConceptKind | 'business_type' | 'country' | 'province' | 'place' | 'exclusion';
+  kind: ConceptKind | 'business_type' | 'excluded_business_type' | 'country' | 'province' | 'place' | 'exclusion' | 'logic';
   value: string;
   /** Not named by the user but derived (the usual branch of a named product/service). */
   inferred?: boolean;
 }
-export interface Interpretation { criteria: CompanySearchCriteria; recognized: RecognizedPhrase[]; unrecognized: string[] }
+export interface Interpretation {
+  criteria: CompanySearchCriteria;
+  recognized: RecognizedPhrase[];
+  unrecognized: string[];
+  /** Contradictions and choices the user should check (e.g. how "en" was read). */
+  warnings: string[];
+}
 
-/** Words before a sector that make it a customer sector ("levert AAN ziekenhuizen", "ervaring MET scholen", "VOOR hotels"). */
-const SUPPLY_CUE = /(?:^|\s)(?:aan|voor|bij|met|ervaring met|klanten|klanten in|klanten uit|opdrachtgevers|leveren aan|levert aan|werken voor|werkt voor|gericht op|to|for|serving)\s+(?:de\s+|het\s+|onder andere\s+|o\.a\.\s+|the\s+)?(?:[\p{L}'-]+\s+){0,2}$/u;
+/** Words before a sector that make it a customer sector ("levert AAN ziekenhuizen", "ervaring MET scholen", "VOOR hotels", "VIA distributeurs"). */
+const SUPPLY_CUE = /(?:^|\s)(?:aan|voor|bij|met|via|ervaring met|klanten|klanten in|klanten uit|opdrachtgevers|leveren aan|levert aan|werken voor|werkt voor|gericht op|to|for|through|serving)\s+(?:de\s+|het\s+|onder andere\s+|o\.a\.\s+|the\s+|andere\s+)?(?:[\p{L}'-]+\s+){0,2}$/u;
 const EXCLUSION = /(?:^|[\s,;])(?:geen|niet|zonder|behalve|uitgezonderd|exclusief|excluding|except|no)\s+([^,.;]+?)(?=$|[,.;]|\s(?:en|maar|die|met|in)\s)/gu;
+const WEBSHOP = /\b(?:consumentenwebwinkels?|webwinkels?|webshops?|online (?:winkels?|shops?)|consumenten|particulieren)\b/u;
 const BUSINESS_TYPE_PHRASES: Array<[RegExp, BusinessType]> = [
   [/\b(?:zakelijke (?:leveranciers?|markt|klanten|afnemers)|b2b(?:-leveranciers?)?|voor bedrijven|business-to-business)\b/gu, 'b2b_supplier'],
   [/\b(?:consumentenwebwinkels?|webwinkels?|webshops?|online (?:winkels?|shops?))\b/gu, 'consumer_webshop'],
 ];
+/** "uitsluitend/alleen zakelijk(e afnemers)", "alleen aan bedrijven": business suppliers, and no consumer web shops. */
+const ONLY_BUSINESS = /\b(?:uitsluitend|alleen|enkel|exclusief)\s+(?:aan\s+)?(?:zakelijke?(?:\s+(?:afnemers|klanten|markt|leveranciers?))?|bedrijven|b2b)\b/gu;
 const PLACE_CUE = /(?:^|\s)(?:in|uit|rond|rondom|regio|omgeving|nabij|bij|around|near)\s+(?:de\s+|het\s+)?(?:regio\s+|omgeving\s+|gemeente\s+|stad\s+)?$/u;
 const STOPWORDS = new Set(('ik we wij zoek zoeken zoekt gezocht welke wat wie bedrijven bedrijf ondernemingen onderneming organisaties organisatie firma firmas partijen partij die dat deze de het een en of in met voor aan van op te zijn is hebben heeft ervaring '
   + 'gespecialiseerd specialiseren gespecialiseerde actief actieve leveren levert leverancier maken maakt inclusief ook alle graag vind vinden '
   + 'binnen onder andere zoals etc liefst bij uit rond regio omgeving zowel als plus hun hen wel veel vooral sector sectoren branche nederland nederlandse '
+  + 'aantoonbare aantoonbaar uitvoeren voeren uitsluitend alleen enkel verkopen verkoopt beide allebei tevens '
   + 'find companies company that the and with for which who are provide providing looking some any also').split(' '));
+
+/** Accented emphasis ("én", "óf") would be lost by normalisation, so it is spelled out first. */
+const emphasise = (value: string) => value.normalize('NFC')
+  .replace(/(^|[^\p{L}])én(?=[^\p{L}]|$)/giu, '$1en ook')
+  .replace(/(^|[^\p{L}])óf(?=[^\p{L}]|$)/giu, '$1of wel');
 
 /**
  * Turns "Ik zoek bedrijven in Nederland die camerasystemen installeren en ervaring hebben met ziekenhuizen" into
  * product: camerasystemen, service: installatie, customer sector: ziekenhuizen, country: NL, and (inferred) industry:
- * beveiliging, with every recognized phrase listed so the user sees and can edit what was understood.
+ * beveiliging, with every recognized phrase listed so the user sees and can edit what was understood. Two values of one
+ * kind joined by "én", "zowel ... als" or "and" are all required; by "of"/"óf" alternatives; a plain "en" is read as
+ * alternatives (the default) and reported, so the user can make it "all".
  */
 export function interpretDescription(description: string): Interpretation {
   const original = description.slice(0, 600);
-  let norm = normalizeText(original);
+  let norm = normalizeText(emphasise(original));
   const recognized: RecognizedPhrase[] = [];
-  const criteria: CompanySearchCriteria = { ...EMPTY_CRITERIA, industries: [], products: [], services: [], specialisations: [], customerSectors: [], roles: [], businessTypes: [], provinces: [], places: [], exclusions: [], description: original.trim() || null };
+  const warnings: string[] = [];
+  const criteria: CompanySearchCriteria = {
+    ...EMPTY_CRITERIA, industries: [], products: [], services: [], specialisations: [], customerSectors: [], roles: [], businessTypes: [], excludedBusinessTypes: [],
+    logic: {}, provinces: [], places: [], exclusions: [], description: original.trim() || null,
+  };
+  const exclude = (type: BusinessType, phrase: string) => {
+    if (!criteria.excludedBusinessTypes.includes(type)) criteria.excludedBusinessTypes.push(type);
+    recognized.push({ phrase, kind: 'excluded_business_type', value: BUSINESS_TYPE_LABELS[type] });
+  };
 
-  // 1. Exclusions first, so "geen alarmsystemen" never becomes a product to look for.
+  // 0. "uitsluitend zakelijk": business suppliers only, no consumer web shops.
+  for (const match of norm.matchAll(ONLY_BUSINESS)) {
+    if (!criteria.businessTypes.includes('b2b_supplier')) criteria.businessTypes.push('b2b_supplier');
+    recognized.push({ phrase: match[0], kind: 'business_type', value: BUSINESS_TYPE_LABELS.b2b_supplier });
+    exclude('consumer_webshop', match[0]);
+  }
+  norm = norm.replace(ONLY_BUSINESS, match => ' '.repeat(match.length));
+
+  // 1. Exclusions first, so "geen alarmsystemen" never becomes a product to look for; "geen webwinkels" excludes a business type.
   for (const match of norm.matchAll(EXCLUSION)) {
     const chunk = match[1].trim();
+    if (WEBSHOP.test(chunk)) { exclude('consumer_webshop', match[0].trim()); continue; }
     const concepts = scanConcepts(chunk).map(hit => hit.concepts[0].label);
     for (const value of concepts.length ? concepts : [chunk.slice(0, 60)]) {
       criteria.exclusions.push(value);
@@ -201,6 +320,7 @@ export function interpretDescription(description: string): Interpretation {
   }
 
   // 3. Vocabulary: longest terms first; one span can mean several concepts, the context decides which.
+  const placed: Array<{ index: number; end: number; list: LogicList; label: string }> = [];
   for (const hit of scanConcepts(norm, consumed)) {
     const before = norm.slice(Math.max(0, hit.index - 40), hit.index);
     const customer = hit.concepts.find(concept => concept.kind === 'customer_sector');
@@ -211,9 +331,29 @@ export function interpretDescription(description: string): Interpretation {
     else chosen = others.slice(0, 1);
     consume(hit.index, hit.length);
     for (const concept of chosen) {
+      const listName: LogicList = concept.kind === 'role' ? 'roles' : LIST_OF[concept.kind];
       if (concept.kind === 'role') { if (!criteria.roles.includes(concept.id as CompanyRole)) criteria.roles.push(concept.id as CompanyRole); }
       else { const values = criteria[LIST_OF[concept.kind]]; if (!values.includes(concept.label)) values.push(concept.label); }
-      recognized.push({ phrase: norm.slice(hit.index, hit.index + hit.length), kind: concept.kind, value: concept.kind === 'role' ? ROLE_LABELS[concept.id as CompanyRole] : concept.label });
+      const label = concept.kind === 'role' ? ROLE_LABELS[concept.id as CompanyRole] : concept.label;
+      recognized.push({ phrase: norm.slice(hit.index, hit.index + hit.length), kind: concept.kind, value: label });
+      placed.push({ index: hit.index, end: hit.index + hit.length, list: listName, label });
+    }
+  }
+
+  // 3b. How two values of one kind are joined: "én"/"zowel ... als"/"and" = all, "of" = alternatives, plain "en" = reported.
+  placed.sort((a, b) => a.index - b.index);
+  for (let i = 1; i < placed.length; i++) {
+    const [a, b] = [placed[i - 1], placed[i]];
+    if (a.list !== b.list || a.label === b.label) continue;
+    const between = norm.slice(a.end, b.index).trim();
+    const lead = norm.slice(Math.max(0, a.index - 12), a.index);
+    if (/^(?:en ook|als ook|alsook|and|en tevens)$/.test(between) || (/zowel\s*$/.test(lead) && /^als$/.test(between)) || /^en\s+(?:beide|allebei)?$/.test(between) && /\b(?:beide|allebei)\b/.test(norm.slice(b.end, b.end + 20))) {
+      criteria.logic[a.list] = 'all';
+      recognized.push({ phrase: `${a.label} ${between} ${b.label}`, kind: 'logic', value: `${a.label} én ${b.label} (beide vereist)` });
+    } else if (/^(?:of|of wel|en\/of|or)$/.test(between)) {
+      recognized.push({ phrase: `${a.label} ${between} ${b.label}`, kind: 'logic', value: `${a.label} of ${b.label} (één van beide)` });
+    } else if (/^en$/.test(between) && criteria.logic[a.list] !== 'all') {
+      warnings.push(`"${a.label} en ${b.label}" is gelezen als: één van beide volstaat. Moeten ze allebei aangeboden worden, kies dan "alle".`);
     }
   }
 
@@ -229,10 +369,12 @@ export function interpretDescription(description: string): Interpretation {
     }
   }
 
-  // 5. What was not understood is listed, never silently turned into a criterion.
+  // 5. What was not understood is listed, never silently turned into a criterion; contradictions are reported.
   const leftover = norm.split('').map((ch, i) => (consumed[i] ? ' ' : ch)).join('');
   const unrecognized = uniqueStrings(leftover.split(/[^\p{L}\p{N}'-]+/u).filter(word => word.length >= 4 && !STOPWORDS.has(word) && !/^\d+$/.test(word)), 8);
-  return { criteria, recognized, unrecognized };
+  if (unrecognized.length) warnings.push(`Niet herkend en niet gebruikt: ${unrecognized.join(', ')}. Voeg ze zo nodig zelf toe als product, dienst of zoekterm.`);
+  warnings.push(...criteriaWarnings(criteria));
+  return { criteria, recognized, unrecognized, warnings };
 }
 
 interface ConceptHit { index: number; length: number; concepts: Concept[] }

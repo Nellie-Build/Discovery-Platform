@@ -23,6 +23,13 @@ export interface TermHit {
   sentences: number;
   /** Customer sectors: named in a sentence that says the company supplies/serves it, or in a heading of a sector/project page. */
   supplyContext: boolean;
+  /**
+   * Customer sectors: the strongest basis on this page. `offering`: the company offers products/services for the sector
+   * (a sentence saying so, or its sector page); `reference`: a project or case in the sector; `mention`: only named.
+   */
+  basis?: SectorBasis;
+  /** What the company does with it according to the sentences that name it (supplies, installs, maintains, ...). */
+  actions: Array<{ action: ActivityAction; quote: string }>;
   /** Found only through a broader, related term of the concept (see Concept.related). */
   related: boolean;
   /** The term as found. */
@@ -30,6 +37,22 @@ export interface TermHit {
   count: number;
   quote: string;
 }
+
+export type SectorBasis = 'offering' | 'reference' | 'mention';
+export type ActivityAction = 'supplies' | 'produces' | 'installs' | 'maintains' | 'advises' | 'develops';
+/** Verbs that say what a company does with a product or specialisation, in the same sentence. */
+const ACTIONS: Array<[ActivityAction, RegExp]> = [
+  ['installs', /\b(?:installeren|installeert|installeer|installatie|installaties|monteren|monteert|montage|aanleggen|aanleg|plaatsen|plaatsing|install|installs|installation)\b/],
+  ['maintains', /\b(?:onderhoud|onderhouden|onderhoudt|servicecontract|onderhoudscontract|storingsdienst|beheer|maintenance|maintain)\b/],
+  ['produces', /\b(?:produceren|produceert|productie|fabriceren|fabriceert|fabricage|eigen fabriek|manufacture|manufactures|manufacturing)\b/],
+  ['develops', /\b(?:ontwikkelen|ontwikkelt|ontwikkeld|ontwerpen en bouwen|develop|develops)\b/],
+  ['advises', /\b(?:advies|adviseren|adviseert|advisering|consultancy|advice)\b/],
+  ['supplies', /\b(?:leveren|levert|levering|leverancier|verkopen|verkoopt|verkoop|assortiment|aanbod|supply|supplies|sell|sells)\b/],
+];
+/** Words that make a sentence about a project or case (a reference), not an offering. */
+const PROJECT_CUE = /\b(?:project|projecten|referentie|referenties|case|cases|klantcase|opgeleverd|gerealiseerd|realiseerden|uitgevoerd voor|in opdracht van|voor onze klant|completed for)\b/;
+const DIY = /\b(?:zelf|eenvoudig|gemakkelijk|makkelijk|plug (?:and|&) play|doe[- ]het[- ]zelf|diy|yourself|easy to install)\b/i;
+const BASIS_RANK: Record<SectorBasis, number> = { mention: 0, reference: 1, offering: 2 };
 
 /** How the page sells: web-shop signals (cart, prices, consumer wording, product data) versus business wording. */
 export interface CommerceSignals { cart: boolean; prices: number; productSchema: boolean; consumerCues: string[]; businessCues: string[]; quote: string | null }
@@ -122,7 +145,7 @@ export function rankCompanyCandidate(evidence: CandidateEvidence): CandidateRank
 
 // ─── Page analysis ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-const SUPPLY_CUE = /(?:\baan|\bvoor|\bbij|\bklanten|\bopdrachtgevers|\bsectoren|\bmarkten|\bbranches|\bdoelgroepen|werken voor|werkt voor|leveren aan|levert aan|o\.a\.|onder andere|zoals|waaronder|\bto|\bfor|\bclients|\bcustomers|\bserving)\s+(?:de\s+|het\s+|diverse\s+|verschillende\s+|onder meer\s+|the\s+)?(?:[\p{L}'-]+[,\s]+){0,4}$/u;
+const SUPPLY_CUE = /(?:\baan|\bvoor|\bbij|\bklanten|\bopdrachtgevers|\bsectoren|\bmarkten|\bbranches|\bdoelgroepen|werken voor|werkt voor|leveren aan|levert aan|o\.a\.|onder andere|zoals|waaronder|\bvia|\bthrough|\bto|\bfor|\bclients|\bcustomers|\bserving)\s+(?:de\s+|het\s+|diverse\s+|verschillende\s+|onder meer\s+|the\s+)?(?:[\p{L}'-]+[,\s]+){0,4}$/u;
 /** A role word after these is somebody else's role ("voor installateurs", "partner van fabrikanten"), not the company's. */
 const OTHER_PARTY = /(?:\bvoor|\baan|\bvan|\bdoor|\bmet|\bnaar|\bandere|\bonze|\bdiverse|\bfor|\bto|\bfrom|\bwith|\bbij)\s+(?:de\s+|het\s+|alle\s+|onze\s+|diverse\s+|the\s+)?(?:[\p{L}'-]+\s+){0,1}$/u;
 const GENERAL_MAILBOX = /^(?:info|contact|sales|verkoop|service|support|office|kantoor|hallo|hello|hi|algemeen|receptie|administratie|offerte|offertes|orders?|order|bestellingen|klantenservice|customerservice|mail|post|secretariaat|planning|inkoop|welkom|team|vragen|servicedesk|helpdesk)(?:[.-]\w+)?$/;
@@ -135,7 +158,7 @@ const NOT_A_PLACE = /^(?:telefoon|tel|telephone|phone|openingstijden|email|e-mai
 const CART = /(?:in (?:de |het |mijn )?winkel(?:wagen|mand)|winkelwagen|winkelmand|winkelwagentje|add to cart|shopping cart|afrekenen|(?:^|\/)(?:cart|checkout|winkelwagen|afrekenen)(?:\/|$))/i;
 const PRICE = /€\s?\d{1,5}(?:[.,]\d{2}|,-)?/g;
 const CONSUMER_CUE = /\b(?:voor thuis|voor particulieren|particulieren|consumenten|thuisgebruik|gratis verzending|gratis bezorging|vandaag besteld|morgen (?:in huis|geleverd|bezorgd)|op voorraad|incl(?:\.|usief) btw|gratis retour|retourneren)\b/g;
-const BUSINESS_CUE = /\b(?:zakelijke klanten|zakelijke markt|zakelijke gebruikers|voor bedrijven|voor ondernemers|b2b|business-to-business|excl(?:\.|usief) btw|offerte aanvragen|vraag (?:een |vrijblijvend (?:een )?)?offerte|dealers?|dealernetwerk|vakhandel|voor installateurs|zakelijk account|groothandel|projectmatig|bedrijfsleven|opdrachtgevers|business customers)\b/g;
+const BUSINESS_CUE = /\b(?:zakelijke klanten|zakelijke markt|zakelijke gebruikers|voor bedrijven|voor ondernemers|b2b|business-to-business|excl(?:\.|usief) btw|offerte aanvragen|vraag (?:een |vrijblijvend (?:een )?)?offerte|dealers?|dealernetwerk|dealer worden|word dealer|dealerinformatie|verkooppunten|vakhandel|voor installateurs|zakelijk account|groothandel|projectmatig|bedrijfsleven|opdrachtgevers|zakelijke (?:leverings|verkoop)?voorwaarden|servicecontracten?|onderhoudscontracten?|raamovereenkomsten?|business customers)\b/g;
 const ORG_TYPE = /Organization|Organisation|Business|Corporation|Company|Store|Contractor|Service|Electrician|Plumber|HVAC|Locksmith|MedicalOrganization|GeneralContractor/;
 
 /** Entities some sites leave in structured data or meta tags ("Goetheer &amp; Huissoon"). */
@@ -177,7 +200,8 @@ function organizationOf(nodes: Array<Record<string, unknown>>, url: string): { o
     const postcode = text(a.postalCode, 12);
     const country = text(typeof a.addressCountry === 'object' ? (a.addressCountry as any)?.name ?? (a.addressCountry as any)?.['@id'] : a.addressCountry, 40);
     addresses.push({
-      address: text(a.streetAddress, 120), postcode, city: place?.name ?? city,
+      address: text(a.streetAddress, 120), postcode, city: city ?? place?.name ?? null, municipality: place?.name ?? null,
+      addressType: /^postbus/i.test(text(a.streetAddress, 120) ?? '') ? 'postal' : a.streetAddress ? 'visiting' : 'unknown',
       province: place?.province ?? (region ? findProvince(region)?.id ?? null : null),
       country: country ? (/^(nl|nld|nederland|netherlands|the netherlands)$/i.test(country) ? 'NL' : country.slice(0, 40)) : (postcode && NL_POSTCODE.test(postcode) ? 'NL' : null),
       sourceUrl: url,
@@ -200,24 +224,33 @@ function textAddresses(body: string, url: string): CompanyLocation[] {
     if (out.length >= 8) break;
     const words = match[3].trim().split(/\s+/);
     let place = null;
-    for (let n = Math.min(4, words.length); n >= 1 && !place; n--) place = findPlace(words.slice(0, n).join(' '));
+    let written: string | null = null;
+    for (let n = Math.min(4, words.length); n >= 1 && !place; n--) { place = findPlace(words.slice(0, n).join(' ')); if (place) written = words.slice(0, n).join(' '); }
     const raw = words[0].replace(/[.,:]+$/, '');
     const before = body.slice(Math.max(0, (match.index ?? 0) - 70), match.index ?? 0);
     // A known place right before the postcode ("Achterdijk 46 Vierpolders 3237LA") wins over a word after it.
     // Separators between address parts ("Achterdijk 46 | Vierpolders | 3237LA") are not part of a place name.
     const preceding = before.split(/[\s|,·•;/]+/).filter(Boolean).slice(-3);
-    if (!place) for (let n = Math.min(3, preceding.length); n >= 1 && !place; n--) place = findPlace(preceding.slice(-n).join(' ').replace(/[.,:]+$/, ''));
-    // An unknown place is kept as written, unless it is a page word that happened to follow the postcode.
-    const city = place?.name ?? (/^[A-Z][\p{L}'-]{2,30}$/u.test(raw) && !NOT_A_PLACE.test(raw) ? raw : null);
-    const street = /([A-Z][\p{L}.' -]{2,50}\s\d{1,5}\s?[a-zA-Z]?(?:[-/]\d{1,4})?|Postbus\s\d{1,6})\s*[,|]?\s*$/u.exec(before)?.[1] ?? null;
+    let streetText = before;
+    if (!place) for (let n = Math.min(3, preceding.length); n >= 1 && !place; n--) {
+      const candidate = preceding.slice(-n).join(' ').replace(/[.,:]+$/, '');
+      place = findPlace(candidate);
+      // The place came before the postcode: the street ends before the place.
+      if (place) { written = candidate; streetText = before.slice(0, before.lastIndexOf(preceding[preceding.length - n])); }
+    }
+    // An unknown place is kept as written, unless it is a page word that happened to follow the postcode. A known place is
+    // kept as written too ("Vierpolders"), with its municipality ("Voorne aan Zee") and province.
+    const city = place ? (written ?? place.name) : (/^[A-Z][\p{L}'-]{2,30}$/u.test(raw) && !NOT_A_PLACE.test(raw) ? raw : null);
+    const street = /([A-Z][\p{L}.' -]{2,50}\s\d{1,5}\s?[a-zA-Z]?(?:[-/]\d{1,4})?|Postbus\s\d{1,6})\s*[,|]?\s*$/u.exec(streetText)?.[1] ?? null;
     const postcode = `${match[1]} ${match[2]}`;
     if (out.some(existing => existing.postcode === postcode)) continue;
-    out.push({ address: street, postcode, city, province: place?.province ?? null, country: 'NL', sourceUrl: url });
+    const addressType = street && /^Postbus/i.test(street) ? 'postal' : street ? 'visiting' : 'unknown';
+    out.push({ address: street, postcode, city, municipality: place?.name ?? null, province: place?.province ?? null, country: 'NL', addressType, sourceUrl: url });
   }
   return out;
 }
 
-function serviceAreasOf(body: string, areaServed: string[], url: string): ServiceArea[] {
+function serviceAreasOf(body: string, areaServed: string[], url: string, pageType: PageType): ServiceArea[] {
   const out: ServiceArea[] = [];
   const add = (area: ServiceArea) => { if (!out.some(existing => existing.scope === area.scope && existing.value === area.value)) out.push(area); };
   const names = geographyNames();
@@ -229,8 +262,10 @@ function serviceAreasOf(body: string, areaServed: string[], url: string): Servic
       add(kind === 'province' ? { scope: 'province', value: id, quote, sourceUrl: url } : { scope: 'place', value: id, quote, sourceUrl: url });
     }
   };
-  for (const sentence of sentences(body)) {
+  // A project or reference is a place the company worked once, and an address is where it is: neither is a service area.
+  if (pageType !== 'projects') for (const sentence of sentences(body)) {
     if (out.length >= 12) break;
+    if (NL_POSTCODE.test(sentence) || /\bpostbus\b/i.test(sentence)) continue;
     if (SERVICE_AREA_CUE.test(normalizeText(sentence))) scan(sentence, sentence.slice(0, 240));
   }
   for (const area of areaServed) scan(`werkgebied ${area}`, `areaServed: ${area}`);
@@ -279,7 +314,10 @@ export function analyzeCompanyPage(page: Pick<CrawlPage, '$' | 'url' | 'isHomepa
   const hits: TermHit[] = [];
   for (const spec of specs) {
     let count = 0; let quote = ''; let supply = false; let structural = false; let inNav = false; let found = '';
+    let basis: SectorBasis | undefined;
+    const actions = new Map<ActivityAction, string>();
     const counted = new Set<number>();
+    const raise = (next: SectorBasis) => { if (!basis || BASIS_RANK[next] > BASIS_RANK[basis]) basis = next; };
     for (const term of spec.terms) {
       const role = spec.kind === 'role';
       if (!structural && termPattern(term).test(headings) && (!role || notOtherParty(headings, term))) { structural = true; found ||= term; }
@@ -295,14 +333,23 @@ export function analyzeCompanyPage(page: Pick<CrawlPage, '$' | 'url' | 'isHomepa
           const cue = SUPPLY_CUE.test(before);
           if (!quote || (spec.kind === 'customer_sector' && cue && !supply)) quote = sentence.slice(0, 280);
           if (cue) supply = true;
+          if (spec.kind === 'customer_sector') raise(pageType === 'projects' || PROJECT_CUE.test(sentence) ? (cue || pageType === 'projects' ? 'reference' : 'mention') : cue ? 'offering' : 'mention');
+          if (spec.kind === 'product' || spec.kind === 'specialisation' || spec.kind === 'service') {
+            // "Eenvoudig zelf te installeren" is what a shop tells its customers, not what the company does.
+            const diy = DIY.test(sentence);
+            for (const [action, pattern] of ACTIONS) if (!actions.has(action) && !(diy && action !== 'supplies') && pattern.test(sentence)) actions.set(action, sentence.slice(0, 240));
+          }
         }
       });
     }
     if (count === 0 && !structural && !inNav) continue;
+    if (spec.kind === 'customer_sector' && structural) raise(pageType === 'projects' ? 'reference' : pageType === 'sectors' ? 'offering' : 'mention');
     hits.push({
       key: spec.key, kind: spec.kind, conceptId: spec.conceptId, label: spec.label, structural, inNav, sentences: counted.size, count,
       supplyContext: spec.kind === 'customer_sector' && (supply || ((pageType === 'sectors' || pageType === 'projects') && structural)),
       related: spec.related === true, term: found,
+      ...(spec.kind === 'customer_sector' ? { basis: basis ?? 'mention' } : {}),
+      actions: [...actions].map(([action, sentence]) => ({ action, quote: sentence })),
       quote: quote || (title ?? '').slice(0, 200),
     });
   }
@@ -329,7 +376,7 @@ export function analyzeCompanyPage(page: Pick<CrawlPage, '$' | 'url' | 'isHomepa
     legalNameInFooter: LEGAL_FORM.exec(footer || body.slice(-3000))?.[1]?.trim() ?? null,
     addresses,
     statedKvk: KVK.exec(body)?.[1] ?? null,
-    serviceAreas: serviceAreasOf(body, organization?.areaServed ?? [], url),
+    serviceAreas: serviceAreasOf(body, organization?.areaServed ?? [], url, pageType),
     hits,
     commerce,
     email: generalEmail(organization?.email) ?? generalEmail(page.contacts?.email),

@@ -1,6 +1,8 @@
-import { BUSINESS_TYPE_LABELS, MATCH_STATUS_LABELS, KIND_LABELS, provinceLabel, type BusinessType } from '@discovery-platform/domain-companies/criteria';
+import { BUSINESS_TYPE_LABELS, MATCH_STATUS_LABELS, KIND_LABELS, explainMatches, provinceLabel, type BusinessType } from '@discovery-platform/domain-companies/criteria';
 import { useMemo, useState, type ReactNode } from 'react';
-import type { DiscoveryRecord, RecordWithDetails } from '@discovery-platform/client';
+import { ApiError, type DiscoveryRecord, type RecordWithDetails } from '@discovery-platform/client';
+import { api } from '../../lib/api';
+import { Button } from '../../components/ui/button';
 import { registerDomainRenderer, EmptyValue, type DomainRenderer } from '../registry';
 import { Badge, type BadgeTone } from '../../components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
@@ -12,11 +14,15 @@ import { CompanyRunPanel, CompanyRunSummary } from './run-panel';
  */
 type MatchStatus = 'confirmed' | 'possible' | 'insufficient';
 interface Quote { url: string; pageType?: string; quote: string }
-interface Activity { kind: string; conceptId: string | null; label: string; strength: 'strong' | 'weak'; evidence: Quote[]; role?: string; related?: boolean; matchedTerms?: string[] }
+type Action = 'supplies' | 'produces' | 'installs' | 'maintains' | 'advises' | 'develops';
+interface Activity {
+  kind: string; conceptId: string | null; label: string; strength: 'strong' | 'weak'; evidence: Quote[]; role?: string; related?: boolean; matchedTerms?: string[];
+  basis?: 'offering' | 'reference' | 'mention'; actions?: Array<{ action: Action; url: string; quote: string }>;
+}
 interface BusinessTypeEvidence { type: BusinessType; strength: 'strong' | 'weak'; signals: string[]; sourceUrl: string | null; quote: string | null }
-interface Location { address: string | null; postcode: string | null; city: string | null; province: string | null; country: string | null; sourceUrl: string }
+interface Location { address: string | null; postcode: string | null; city: string | null; municipality?: string | null; province: string | null; country: string | null; addressType?: 'visiting' | 'postal' | 'unknown'; sourceUrl: string }
 interface ServiceArea { scope: 'national' | 'province' | 'place'; value: string; quote: string; sourceUrl: string }
-interface Match { kind: string; criterion: string; status: MatchStatus; found: string | null; sourceUrl: string | null; sourceType: string | null; quote: string | null; note: string | null; checkedAt: string }
+interface Match { kind: string; criterion: string; status: MatchStatus; found: string | null; sourceUrl: string | null; sourceType: string | null; quote: string | null; note: string | null; checkedAt: string; basis?: 'offering' | 'reference' | 'mention' }
 export interface CompanyFacts {
   identity?: string; name?: string | null; tradeNames?: string[]; website?: string; domain?: string; description?: string | null;
   businessTypes?: BusinessTypeEvidence[];
@@ -33,7 +39,9 @@ export const companyData = (record: DiscoveryRecord): CompanyFacts => record.dom
 const STATUS_TONE: Record<MatchStatus, BadgeTone> = { confirmed: 'success', possible: 'warning', insufficient: 'neutral' };
 const SOURCE_TYPE_LABELS: Record<string, string> = { official_website: 'Eigen website', directory: 'Bedrijvengids', search_result: 'Zoekresultaat' };
 const PAGE_TYPE_LABELS: Record<string, string> = { home: 'Homepage', about: 'Over ons', products: 'Producten', services: 'Diensten', sectors: 'Sectoren', projects: 'Projecten/referenties', contact: 'Contact', locations: 'Vestigingen', other: 'Overig' };
-const MATCH_KIND_LABELS: Record<string, string> = { ...KIND_LABELS, business_type: 'Type bedrijf', query: 'Zoekterm', country: 'Land', province: 'Provincie', place: 'Plaats' };
+const MATCH_KIND_LABELS: Record<string, string> = { ...KIND_LABELS, business_type: 'Type bedrijf', excluded_business_type: 'Uitgesloten type', query: 'Zoekterm', country: 'Land', province: 'Provincie', place: 'Plaats' };
+const ACTION_LABELS: Record<Action, string> = { supplies: 'levert', produces: 'produceert', installs: 'installeert', maintains: 'onderhoudt', advises: 'adviseert', develops: 'ontwikkelt' };
+const BASIS_LABELS = { offering: 'Aanbod voor deze sector', reference: 'Referentieproject', mention: 'Alleen genoemd' } as const;
 
 export function formatDate(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -43,7 +51,11 @@ export function formatDate(value: string | null | undefined): string | null {
 const labels = (items: Activity[] | undefined, onlyStrong = false) => [...new Set((items ?? []).filter(a => !a.related && (!onlyStrong || a.strength === 'strong')).map(a => a.label))];
 const typeLabels = (f: CompanyFacts) => (f.businessTypes ?? []).map(entry => BUSINESS_TYPE_LABELS[entry.type]);
 const short = (values: string[], max = 3) => (values.length === 0 ? null : `${values.slice(0, max).join(', ')}${values.length > max ? ` (+${values.length - max})` : ''}`);
-export const locationText = (l: Location) => [l.address, [l.postcode, l.city].filter(Boolean).join(' ')].filter(Boolean).join(', ') || null;
+export const locationText = (l: Location) => {
+  const text = [l.address, [l.postcode, l.city].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  const notes = [l.municipality && l.municipality !== l.city ? `gemeente ${l.municipality}` : null, l.addressType === 'postal' ? 'postadres, geen vestiging' : null].filter(Boolean);
+  return text ? `${text}${notes.length ? ` (${notes.join('; ')})` : ''}` : null;
+};
 function areaText(area: ServiceArea): string {
   if (area.scope === 'national') return 'Heel Nederland';
   if (area.scope === 'province') return provinceLabel(area.value) ?? area.value;
@@ -60,12 +72,13 @@ export function MatchBadge({ status }: { status: MatchStatus | undefined }) {
 
 // ─── Filters ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-interface Filters { industry: string; product: string; service: string; role: string; customer: string; region: string; status: string; type: string }
-const NO_FILTERS: Filters = { industry: '', product: '', service: '', role: '', customer: '', region: '', status: '', type: '' };
-const regionsOf = (f: CompanyFacts) => [
-  ...(f.locations ?? []).flatMap(l => [l.city, l.province ? provinceLabel(l.province) : null]),
-  ...(f.serviceAreas ?? []).map(areaText),
-].filter((value): value is string => Boolean(value));
+interface Filters { industry: string; product: string; service: string; role: string; customer: string; location: string; area: string; status: string; type: string }
+const NO_FILTERS: Filters = { industry: '', product: '', service: '', role: '', customer: '', location: '', area: '', status: '', type: '' };
+/** Where a company is established (never a postal address alone): place, municipality and province. */
+const locationsOf = (f: CompanyFacts) => (f.locations ?? []).filter(l => l.addressType !== 'postal')
+  .flatMap(l => [l.city, l.municipality, l.province ? provinceLabel(l.province) : null]).filter((value): value is string => Boolean(value));
+/** Where a company says it works: its service area, which is a different thing from where it is established. */
+const areasOf = (f: CompanyFacts) => (f.serviceAreas ?? []).map(areaText);
 
 export function filterCompanies(records: DiscoveryRecord[], filters: Filters): DiscoveryRecord[] {
   return records.filter(record => {
@@ -73,7 +86,7 @@ export function filterCompanies(records: DiscoveryRecord[], filters: Filters): D
     const has = (items: Activity[] | undefined, value: string, onlyStrong = false) => !value || labels(items, onlyStrong).includes(value);
     return has(f.industries, filters.industry) && has([...(f.products ?? []), ...(f.specialisations ?? [])], filters.product) && has(f.services, filters.service)
       && has(f.roles, filters.role) && has(f.customerSectors, filters.customer, true)
-      && (!filters.region || regionsOf(f).includes(filters.region)) && (!filters.status || f.search?.status === filters.status)
+      && (!filters.location || locationsOf(f).includes(filters.location)) && (!filters.area || areasOf(f).includes(filters.area)) && (!filters.status || f.search?.status === filters.status)
       && (!filters.type || (f.businessTypes ?? []).some(entry => entry.type === filters.type));
   });
 }
@@ -84,7 +97,7 @@ function CompanyFilters({ records, children }: { records: DiscoveryRecord[]; chi
     const collect = (pick: (f: CompanyFacts) => string[]) => [...new Set(records.flatMap(r => pick(companyData(r))))].sort((a, b) => a.localeCompare(b, 'nl'));
     return {
       industry: collect(f => labels(f.industries)), product: collect(f => labels([...(f.products ?? []), ...(f.specialisations ?? [])])), service: collect(f => labels(f.services)),
-      role: collect(f => labels(f.roles)), customer: collect(f => labels(f.customerSectors, true)), region: collect(regionsOf),
+      role: collect(f => labels(f.roles)), customer: collect(f => labels(f.customerSectors, true)), location: collect(locationsOf), area: collect(areasOf),
     };
   }, [records]);
   const visible = filterCompanies(records, filters);
@@ -108,10 +121,40 @@ function CompanyFilters({ records, children }: { records: DiscoveryRecord[]; chi
         {select('service', 'Dienst', options.service)}
         {select('role', 'Bedrijfsrol', options.role)}
         {select('customer', 'Levert aan', options.customer)}
-        {select('region', 'Regio', options.region)}
+        {select('location', 'Vestiging', options.location)}
+        {select('area', 'Werkgebied', options.area)}
         <span className="pb-2 text-xs text-slate-500">{visible.length} van {records.length} bedrijven</span>
       </div>
+      <ExportButtons projectId={records[0]?.project_id ?? null} visible={visible} total={records.length} filtered={visible.length !== records.length} />
       {children(visible)}
+    </div>
+  );
+}
+
+/** CSV export of this project's companies: the filtered view or all of them, the user's explicit choice. */
+function ExportButtons({ projectId, visible, total, filtered }: { projectId: string | null; visible: DiscoveryRecord[]; total: number; filtered: boolean }) {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (!projectId || total === 0) return null;
+  async function exportCsv(recordIds?: string[]) {
+    setBusy(true); setError(null);
+    try {
+      const { blob, filename } = await api.records.exportCsv(projectId!, recordIds);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url; link.download = filename ?? 'bedrijven.csv';
+      document.body.appendChild(link); link.click(); link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Exporteren is mislukt.');
+    } finally { setBusy(false); }
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2" aria-label="Exporteren" role="group">
+      {filtered && <Button type="button" variant="secondary" disabled={busy || visible.length === 0} onClick={() => exportCsv(visible.map(record => record.id))}>Exporteer gefilterde bedrijven ({visible.length})</Button>}
+      <Button type="button" variant="secondary" disabled={busy} onClick={() => exportCsv()}>Exporteer alle bedrijven ({total})</Button>
+      <span className="text-xs text-slate-500">CSV zonder persoonsgegevens (geen e-mailadressen of telefoonnummers).</span>
+      {error && <span role="alert" className="text-xs text-red-700">{error}</span>}
     </div>
   );
 }
@@ -129,6 +172,7 @@ function MatchesSection({ facts }: { facts: CompanyFacts }) {
           <MatchBadge status={search.status} />
         </div>
         <p className="text-sm text-slate-500">Zoekopdracht: {search.criteria} · gecontroleerd {formatDate(search.checkedAt)}</p>
+        <p aria-label="Uitleg" className="text-sm text-slate-700">{explainMatches(search.matches)}</p>
       </CardHeader>
       <CardContent>
         <div className="overflow-x-auto">
@@ -169,7 +213,13 @@ function ActivitiesSection({ facts }: { facts: CompanyFacts }) {
               {items!.map(activity => (
                 <li key={`${activity.kind}:${activity.label}`}>
                   <span className="font-medium">{activity.label}</span>{' '}
-                  <Badge tone={activity.related ? 'warning' : activity.strength === 'strong' ? 'success' : 'neutral'}>{activity.related ? `Alleen verwant begrip: ${(activity.matchedTerms ?? []).join(', ')}` : activity.strength === 'strong' ? 'Specifiek onderbouwd' : 'Terloops genoemd'}</Badge>
+                  <Badge tone={activity.related ? 'warning' : activity.strength === 'strong' ? 'success' : 'neutral'}>{activity.related ? `Alleen verwant begrip: ${(activity.matchedTerms ?? []).join(', ')}` : activity.strength === 'strong' ? 'Bevestigd' : 'Mogelijk (terloops genoemd)'}</Badge>
+                  {activity.basis && <>{' '}<Badge tone={activity.basis === 'mention' ? 'neutral' : 'info'}>{BASIS_LABELS[activity.basis]}</Badge></>}
+                  {(activity.actions ?? []).length > 0 && (
+                    <span className="mt-0.5 block text-xs text-slate-600">
+                      {activity.actions!.map((action, index) => <span key={action.action}>{index > 0 ? ', ' : ''}<SourceLink url={action.url}>{ACTION_LABELS[action.action]}</SourceLink></span>)}
+                    </span>
+                  )}
                   {activity.evidence.slice(0, 2).map(quote => (
                     <span key={quote.url} className="mt-0.5 block text-xs text-slate-500">
                       <q>{quote.quote}</q> — <SourceLink url={quote.url}>{PAGE_TYPE_LABELS[quote.pageType ?? ''] ?? 'pagina'}</SourceLink>
@@ -244,7 +294,7 @@ const companiesRenderer: DomainRenderer = {
       }
       case 'activities': return short([...labels(f.products), ...labels(f.specialisations), ...labels(f.services)], 4) ?? EmptyValue;
       case 'website': return f.domain ?? EmptyValue;
-      case 'match': return <MatchBadge status={f.search?.status} />;
+      case 'match': return <span title={f.search ? explainMatches(f.search.matches) : undefined}><MatchBadge status={f.search?.status} /></span>;
       case 'checked': return formatDate(f.lastCheckedAt) ?? EmptyValue;
       default: return EmptyValue;
     }

@@ -19,7 +19,7 @@ test('business types: a consumer web shop, a business supplier/distributor and a
   assert.deepEqual(types(await profileOf('https://camerashop.example/')), { consumer_webshop: 'strong' });
   const shop = (await profileOf('https://camerashop.example/')).businessTypes[0];
   assert.ok(shop.signals.includes('winkelwagen') && shop.signals.some(s => /prijzen/.test(s)));
-  assert.deepEqual(types(await profileOf('https://secu-groothandel.example/')), { b2b_supplier: 'strong', distributor: 'strong' });
+  assert.deepEqual(types(await profileOf('https://secu-groothandel.example/')), { b2b_supplier: 'strong', wholesaler: 'strong' });
   assert.equal(types(await profileOf('https://www.veilig-zuid.example/')).service_provider, 'strong');
 });
 
@@ -62,7 +62,7 @@ test('stricter evidence: a menu item alone is weak; a sector only named, never s
 
 test('an address with the place before the postcode, and a page word after it, is read correctly', async () => {
   const bouw = await profileOf('https://www.onderwijsbouw.example/');
-  assert.deepEqual(bouw.locations.map(l => [l.city, l.province, l.postcode]), [['Voorne aan Zee', 'NL-ZH', '3237 LA']], 'Vierpolders is in the municipality of Voorne aan Zee (Zuid-Holland)');
+  assert.deepEqual(bouw.locations.map(l => [l.city, l.municipality, l.province, l.postcode, l.addressType]), [['Vierpolders', 'Voorne aan Zee', 'NL-ZH', '3237 LA', 'visiting']], 'Vierpolders, as written, is in the municipality of Voorne aan Zee (Zuid-Holland)');
   assert.equal(bouw.name, 'Bouwgroep Maas B.V.');
 });
 

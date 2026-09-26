@@ -140,6 +140,37 @@ export interface SourceRunInput {
   runConfig?: DiscoveryRunConfig;
 }
 
+/** The user's hard limits of extended processing (a background job); the API clamps them to its ceilings. */
+export interface DiscoveryJobLimits {
+  maxCandidates: number;
+  batchSize: number;
+  pagesPerCompany: number;
+  maxSearchQueries: number;
+  /** Set by the API: batches started in total, failed ones included. */
+  maxBatches?: number;
+}
+
+/** Extended processing: one search run in the background as a series of batches (see apps/api/src/jobs/job-runner.ts). */
+export interface DiscoveryJob {
+  id: string;
+  projectId: string;
+  status: 'queued' | 'running' | 'paused' | 'stopping' | 'stopped' | 'completed' | 'failed';
+  message: string | null;
+  limits: Required<DiscoveryJobLimits>;
+  usage: {
+    batches: number; batchesFailed: number; candidatesResearched: number; searchQueries: number; pagesVisited: number;
+    recordsCreated: number; recordsUpdated: number; candidatesRemaining: number | null;
+  };
+  progress: { candidatesResearched: number; maxCandidates: number; candidatesRemaining: number | null };
+  batches: Array<{
+    runId: string; status: DiscoveryRun['status']; batch: number; error: string | null; companiesResearched: number;
+    recordsCreated: number; recordsUpdated: number; searchQueries: number; createdAt: string; completedAt: string | null;
+  }>;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+}
+
 export interface DiscoveryRun {
   id: string;
   project_id: string;

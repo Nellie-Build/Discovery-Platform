@@ -66,6 +66,25 @@ export const GROOTHANDEL = {
     <p>Vraag een offerte aan of word dealer.</p>`, { footer: 'Secu Groothandel B.V., Industrieweg 3, 5611 AB Eindhoven' }).replace('<a href="/nieuws">Nieuws</a>', '<a href="/branddetectie">Branddetectie</a>') },
 };
 
+/** A camera manufacturer in Ede (Gelderland) that sells through dealers throughout the Netherlands; installs nothing itself. */
+export const FABRIKANT = {
+  '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nAllow: /' },
+  '/': { body: html('CamFab | Fabrikant van camerasystemen', `<h1>Fabrikant van camerasystemen</h1>
+    <p>CamFab produceert camerasystemen in onze eigen fabriek in Ede.</p>
+    <p>Wij verkopen uitsluitend via ons dealernetwerk van installateurs. Word dealer en ontvang zakelijke leveringsvoorwaarden.</p>
+    <p>Wij leveren in heel Nederland.</p>`, { site: 'CamFab', footer: 'CamFab B.V., Frankeneng 20, 6716 AA Ede' }) },
+  '/contact': { body: html('Contact | CamFab', '<h1>Contact</h1><p>Frankeneng 20, 6716 AA Ede</p><p>info@camfab.example</p>') },
+};
+
+/** A care-security installer with only a postal address in Den Haag; care appears as a reference project, not as an offering. */
+export const ZORG_POSTBUS = {
+  '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nAllow: /' },
+  '/': { body: html('Haagse Beveiliging | Camerabewaking', `<h1>Camerabewaking en toegangscontrole</h1>
+    <p>Wij installeren camerabewaking en toegangscontrole en verzorgen het onderhoud van camerasystemen.</p>`, { site: 'Haagse Beveiliging', footer: 'Haagse Beveiliging B.V. · Postbus 1234, 2501 CA Den Haag' }) },
+  '/projecten': { body: html('Projecten | Haagse Beveiliging', '<h1>Projecten</h1><p>Voor zorginstellingen realiseerden wij camerabewaking in een verpleeghuis, opgeleverd in 2025.</p>') },
+  '/contact': { body: html('Contact | Haagse Beveiliging', '<h1>Contact</h1><p>Postbus 1234, 2501 CA Den Haag</p>') },
+};
+
 export const DOWN = { '/robots.txt': { status: 500, body: 'down' }, '/': { status: 500, body: 'down' } };
 
 export const SITES = {
@@ -76,6 +95,8 @@ export const SITES = {
   'kapot.example': DOWN,
   'www.onderwijsbouw.example': ONDERWIJSBOUW,
   'secu-groothandel.example': GROOTHANDEL,
+  'www.camfab.example': FABRIKANT,
+  'www.haagse-beveiliging.example': ZORG_POSTBUS,
 };
 
 /** A transport over `{ host: { path: { body, status?, contentType? } } }`; records every request. */

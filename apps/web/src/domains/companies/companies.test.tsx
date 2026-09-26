@@ -58,7 +58,7 @@ describe('company run form', () => {
     expect(screen.getByLabelText('Provincie')).toHaveValue('Zuid-Holland');
     // The user edits the interpretation before searching.
     await userEvent.clear(screen.getByLabelText('Branche'));
-    await userEvent.click(screen.getByLabelText('Installateur'));
+    await userEvent.click(within(screen.getByRole('group', { name: 'Bedrijfsrol' })).getByLabelText('Installateur'));
     await userEvent.click(screen.getByRole('button', { name: 'Zoek bedrijven' }));
     expect(api.runs.startSourceRun).toHaveBeenCalledWith('p1', {
       sourceId: 'search',
@@ -107,9 +107,9 @@ describe('company records', () => {
     await userEvent.selectOptions(screen.getByLabelText('Levert aan'), 'zorginstellingen');
     expect(screen.getByText('1 van 2 bedrijven')).toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText('Levert aan'), '');
-    await userEvent.selectOptions(screen.getByLabelText('Regio'), 'Utrecht');
+    await userEvent.selectOptions(screen.getByLabelText('Vestiging'), 'Utrecht');
     expect(screen.queryByRole('row', { name: /Veilig Zuid/ })).not.toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByLabelText('Regio'), '');
+    await userEvent.selectOptions(screen.getByLabelText('Vestiging'), '');
     await userEvent.selectOptions(screen.getByLabelText('Verificatiestatus'), 'confirmed');
     await waitFor(() => expect(screen.queryByRole('row', { name: /Camerashop/ })).not.toBeInTheDocument());
   });
@@ -124,7 +124,7 @@ describe('company records', () => {
     const evidence = within(screen.getByLabelText('Bewijs per criterium'));
     expect(evidence.getByText('Vestiging in Rotterdam')).toBeInTheDocument();
     expect(evidence.getAllByRole('link', { name: 'Eigen website' })[0]).toHaveAttribute('href', 'https://www.veilig-zuid.example/sectoren');
-    expect(within(screen.getByLabelText('Gevonden activiteiten')).getAllByText('Specifiek onderbouwd').length).toBeGreaterThan(0);
+    expect(within(screen.getByLabelText('Gevonden activiteiten')).getAllByText('Bevestigd').length).toBeGreaterThan(0);
     expect(within(screen.getByLabelText('Bronnen')).getByText(/Een zoekresultaat alleen geldt niet als bewijs/)).toBeInTheDocument();
   });
 });
