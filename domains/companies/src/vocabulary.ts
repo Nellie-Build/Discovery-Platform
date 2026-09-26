@@ -53,7 +53,7 @@ export const CONCEPTS: readonly Concept[] = [
   c('industry', 'automation', 'automatisering', ['automatiseringsbedrijf', 'automatiseringsbedrijven', 'automation']),
 
   // ── Products ───────────────────────────────────────────────────────────────────────────────────────────────────────
-  c('product', 'cctv', 'camerasystemen', ['camerasysteem', 'camerabewaking', 'camerabeveiliging', 'camerabeveiligingssystemen', 'beveiligingscamera', "beveiligingscamera's", 'bewakingscamera', "bewakingscamera's", 'videobewaking', 'videobewakingssystemen', 'videosurveillance', 'cctv', "ip-camera's", 'ip-camera', 'security cameras', 'security camera', 'video surveillance'], 'security'),
+  c('product', 'cctv', 'camerasystemen', ['camerasysteem', 'camerabewaking', 'camerabeveiliging', 'camerabeveiligingssystemen', 'beveiligingscamera', "beveiligingscamera's", 'bewakingscamera', "bewakingscamera's", 'videobewaking', 'videobewakingssystemen', 'videosurveillance', 'cctv', "ip-camera's", 'ip-camera', 'surveillancecamera', "surveillancecamera's", 'camera-installatie', 'camera installaties', 'security cameras', 'security camera', 'video surveillance', 'cctv systems'], 'security', ['beveiligingsoplossingen', 'beveiligingssystemen', 'security solutions', 'security systems']),
   c('product', 'access_control', 'toegangscontrolesystemen', ['toegangscontrole', 'toegangscontrolesysteem', 'toegangsbeheer', 'toegangssystemen', 'access control', 'access control systems', 'elektronische toegangscontrole'], 'security', ['kaartlezers', 'elektronische sloten']),
   c('product', 'alarm', 'alarmsystemen', ['alarmsysteem', 'inbraakalarm', 'inbraakbeveiliging', 'inbraakdetectie', 'alarminstallatie', 'alarminstallaties', 'intrusion detection', 'burglar alarm'], 'security'),
   c('product', 'security_products', 'beveiligingsproducten', ['beveiligingsartikelen', 'beveiligingsmaterialen', 'security products', 'security equipment'], 'security'),
@@ -103,6 +103,9 @@ export const CONCEPTS: readonly Concept[] = [
   c('customer_sector', 'housing_associations', 'woningcorporaties', ['woningcorporatie', 'housing associations']),
   c('customer_sector', 'offices', 'kantoren', ['kantoorgebouwen', 'offices']),
   c('customer_sector', 'hospitality', 'horeca', ['restaurants']),
+  c('customer_sector', 'distributors', 'distributeurs', ['distributeur', 'dealers', 'dealernetwerk', 'resellers', 'groothandels', 'wederverkopers', 'distributors']),
+  c('customer_sector', 'construction_companies', 'bouwbedrijven', ['aannemers', 'bouwsector', 'bouwbranche', 'construction companies'], undefined, ['bouw']),
+  c('customer_sector', 'logistics_sector', 'logistieke sector', ['logistieke bedrijven', 'transportbedrijven', 'logistiek', 'logistics companies', 'logistics sector']),
 
   // ── Roles: what a company does in the chain ────────────────────────────────────────────────────────────────────────
   c('role', 'manufacturer', 'fabrikant', ['fabrikanten', 'producent', 'producenten', 'eigen productie', 'wij produceren', 'ontwikkelen en produceren', 'manufacturer', 'manufacturers']),
@@ -120,10 +123,11 @@ export const CONCEPTS: readonly Concept[] = [
  * making, distributing, or providing services. A company can be several. A web shop is a type like any other: it is
  * shown and filterable, never excluded by default.
  */
-export type BusinessType = 'b2b_supplier' | 'consumer_webshop' | 'manufacturer' | 'distributor' | 'service_provider';
-export const BUSINESS_TYPES: readonly BusinessType[] = ['b2b_supplier', 'consumer_webshop', 'manufacturer', 'distributor', 'service_provider'];
+export type BusinessType = 'b2b_supplier' | 'consumer_webshop' | 'manufacturer' | 'distributor' | 'wholesaler' | 'installer' | 'service_provider' | 'consultancy';
+export const BUSINESS_TYPES: readonly BusinessType[] = ['b2b_supplier', 'consumer_webshop', 'manufacturer', 'distributor', 'wholesaler', 'installer', 'service_provider', 'consultancy'];
 export const BUSINESS_TYPE_LABELS: Record<BusinessType, string> = {
-  b2b_supplier: 'Zakelijke leverancier', consumer_webshop: 'Consumentenwebwinkel', manufacturer: 'Fabrikant', distributor: 'Distributeur / groothandel', service_provider: 'Dienstverlener',
+  b2b_supplier: 'Zakelijke leverancier', consumer_webshop: 'Consumentenwebwinkel', manufacturer: 'Fabrikant', distributor: 'Distributeur', wholesaler: 'Groothandel',
+  installer: 'Installateur', service_provider: 'Dienstverlener', consultancy: 'Adviesbureau',
 };
 
 export const ROLE_LABELS: Record<CompanyRole, string> = {

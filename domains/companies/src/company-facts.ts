@@ -31,6 +31,10 @@ export interface Activity {
   related?: boolean;
   /** The terms as they appear on the site. */
   matchedTerms?: string[];
+  /** Customer sectors: offering (products/services for the sector), reference (a project/case in it) or mention (only named). */
+  basis?: 'offering' | 'reference' | 'mention';
+  /** What the company does with it, each with the sentence that says so (supplies, installs, maintains, produces, ...). */
+  actions?: Array<{ action: 'supplies' | 'produces' | 'installs' | 'maintains' | 'advises' | 'develops'; url: string; quote: string }>;
 }
 
 /** One way the company does business, with the signals that show it (see profile.ts's businessTypesOf). */
@@ -42,9 +46,14 @@ export type PageType = 'home' | 'about' | 'products' | 'services' | 'sectors' | 
 export interface CompanyLocation {
   address: string | null;
   postcode: string | null;
+  /** The place as the company writes it ("Vierpolders"). */
   city: string | null;
+  /** The municipality of a known place ("Voorne aan Zee"), else null. */
+  municipality?: string | null;
   /** Province id (e.g. NL-ZH) when the city is a known place, else null. */
   province: string | null;
+  /** A visiting address (street and number), a postal address (Postbus) or not known. */
+  addressType?: 'visiting' | 'postal' | 'unknown';
   country: string | null;
   sourceUrl: string;
 }
@@ -62,7 +71,7 @@ export interface CompanySource { url: string; type: SourceType; pageType: PageTy
 
 /** One search criterion and how this company met it. */
 export interface CriterionMatch {
-  kind: ConceptKind | 'business_type' | 'query' | 'country' | 'province' | 'place';
+  kind: ConceptKind | 'business_type' | 'excluded_business_type' | 'query' | 'country' | 'province' | 'place';
   criterion: string;
   status: MatchStatus;
   /** What was found for it (the product, service, sector, location...), or null. */
@@ -73,6 +82,8 @@ export interface CriterionMatch {
   /** A short Dutch explanation, e.g. "vestiging in Rotterdam; geen werkgebied Zuid-Holland gevonden". */
   note: string | null;
   checkedAt: string;
+  /** Customer sectors: what the evidence is (an offering for the sector, a reference project in it, or only a mention). */
+  basis?: 'offering' | 'reference' | 'mention';
 }
 
 export interface CompanySearchResult {

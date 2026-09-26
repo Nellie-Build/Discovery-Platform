@@ -1,7 +1,7 @@
 import type {
   Activity, BusinessTypeEvidence, CompanyFacts, CompanyLocation, CompanySource, CriterionMatch, EvidenceQuote, MatchStatus, ServiceArea, SourceType,
 } from './company-facts.js';
-import { LIST_OF, summarizeCriteria, type CompanySearchCriteria } from './criteria.js';
+import { LIST_OF, LIST_OF_KIND, logicOf, summarizeCriteria, type CompanySearchCriteria } from './criteria.js';
 import { findPlace, provinceLabel } from './geography.js';
 import type { PageAnalysis, TermHit } from './page-analysis.js';
 import { companyIdentity } from './identity.js';
@@ -50,9 +50,12 @@ function strengthOf(hits: TermHit[], kind: ConceptKind): Activity['strength'] {
 }
 
 const ROLE_TYPES: Partial<Record<CompanyRole, BusinessType>> = {
-  manufacturer: 'manufacturer', wholesaler: 'distributor', distributor: 'distributor',
-  service_provider: 'service_provider', installer: 'service_provider', contractor: 'service_provider', consultancy: 'service_provider',
+  manufacturer: 'manufacturer', wholesaler: 'wholesaler', distributor: 'distributor', installer: 'installer',
+  service_provider: 'service_provider', contractor: 'service_provider', consultancy: 'consultancy',
 };
+const ACTION_WORDS: Record<string, string> = { supplies: 'levert', produces: 'produceert', installs: 'installeert', maintains: 'onderhoudt', advises: 'adviseert', develops: 'ontwikkelt' };
+const actionText = (activity: Activity) => (activity.actions?.length ? ` (${activity.actions.map(a => ACTION_WORDS[a.action]).join(', ')})` : '');
+const SECTOR_BASIS_RANK = { mention: 0, reference: 1, offering: 2 } as const;
 
 /**
  * How the company does business, from its own pages. A consumer web shop shows a shopping cart with prices or product
@@ -60,7 +63,7 @@ const ROLE_TYPES: Partial<Record<CompanyRole, BusinessType>> = {
  * aanvragen, excl. btw, dealers, ...). Manufacturer, distributor and service provider follow from the roles and services
  * found. A company can be several at once (a web shop that also serves businesses).
  */
-export function businessTypesOf(pages: PageAnalysis[], lists: Pick<CompanyFacts, 'services' | 'roles'>): BusinessTypeEvidence[] {
+export function businessTypesOf(pages: PageAnalysis[], lists: Pick<CompanyFacts, 'services' | 'roles'> & Partial<Pick<CompanyFacts, 'products' | 'specialisations'>>): BusinessTypeEvidence[] {
   const out = new Map<BusinessType, BusinessTypeEvidence>();
   const add = (evidence: BusinessTypeEvidence) => {
     const existing = out.get(evidence.type);
@@ -87,6 +90,18 @@ export function businessTypesOf(pages: PageAnalysis[], lists: Pick<CompanyFacts,
     const type = ROLE_TYPES[role.role];
     if (type) add({ type, strength: role.strength, signals: [role.label], sourceUrl: role.evidence[0]?.url ?? null, quote: role.evidence[0]?.quote ?? null });
   }
+  // An installer installs: the installation service, strongest when the site says it installs a product it offers.
+  // A manufacturer or a web shop is not an installer because it sells what installers install.
+  const installation = lists.services.find(activity => activity.conceptId === 'installation' && !activity.related);
+  const installsProduct = [...(lists.products ?? []), ...(lists.specialisations ?? [])].find(activity => !activity.related && activity.actions?.some(a => a.action === 'installs'));
+  if (installation?.strength === 'strong' || installsProduct) {
+    const source = installsProduct?.actions?.find(a => a.action === 'installs');
+    add({
+      type: 'installer', strength: installation?.strength === 'strong' || installsProduct?.strength === 'strong' ? 'strong' : 'weak',
+      signals: [installation ? installation.label : null, installsProduct ? `installeert ${installsProduct.label}` : null].filter((s): s is string => Boolean(s)),
+      sourceUrl: source?.url ?? installation?.evidence[0]?.url ?? null, quote: source?.quote ?? installation?.evidence[0]?.quote ?? null,
+    });
+  }
   const service = lists.services.find(activity => activity.strength === 'strong' && !activity.related);
   if (service) add({ type: 'service_provider', strength: 'strong', signals: [service.label], sourceUrl: service.evidence[0]?.url ?? null, quote: service.evidence[0]?.quote ?? null });
   return BUSINESS_TYPES.map(type => out.get(type)).filter((value): value is BusinessTypeEvidence => Boolean(value));
@@ -110,9 +125,14 @@ export function buildCompanyProfile(pages: PageAnalysis[], context: ProfileConte
     const ordered = [...entries].sort((a, b) => Number(b.hit.supplyContext) - Number(a.hit.supplyContext) || Number(b.hit.structural) - Number(a.hit.structural) || b.hit.count - a.hit.count);
     const evidence: EvidenceQuote[] = ordered.slice(0, 3).map(({ hit: h, page }) => ({ url: page.url, pageType: page.pageType, quote: h.quote.slice(0, 280) }));
     const terms = uniqueStrings(entries.map(e => e.hit.term).filter(Boolean), 5);
+    // Customer sectors: the strongest basis on any page. Products/services: what the company does with it, per action once.
+    const basis = entries.map(e => e.hit.basis).filter((b): b is NonNullable<typeof b> => Boolean(b)).sort((a, b) => SECTOR_BASIS_RANK[b] - SECTOR_BASIS_RANK[a])[0];
+    const actions: NonNullable<Activity['actions']> = [];
+    for (const { hit: h, page } of entries) for (const a of h.actions ?? []) if (!actions.some(x => x.action === a.action)) actions.push({ action: a.action, url: page.url, quote: a.quote });
     const activity: Activity = {
       kind: hit.kind, conceptId: hit.conceptId, label: hit.label, strength: strengthOf(entries.map(e => e.hit), hit.kind), evidence,
       ...(hit.related ? { related: true } : {}), ...(terms.length ? { matchedTerms: terms } : {}),
+      ...(basis ? { basis } : {}), ...(actions.length ? { actions } : {}),
     };
     if (hit.kind === 'role') {
       const role = COMPANY_ROLES.find(id => id === hit.conceptId);
@@ -190,9 +210,12 @@ function activityMatch(facts: CompanyFacts, kind: ConceptKind, value: string, ch
   if (found) {
     const evidence = found.evidence[0];
     const strong = found.strength === 'strong';
+    const sectorNote = found.basis === 'offering' ? 'Biedt volgens de eigen website producten of diensten aan voor deze sector.'
+      : found.basis === 'reference' ? 'Referentieproject of klantcase in deze sector op de eigen website.'
+      : 'Genoemd op de eigen website, maar niet als sector waaraan het bedrijf levert.';
     return {
-      ...base, status: strong ? 'confirmed' : 'possible', found: found.label, sourceUrl: evidence?.url ?? null, sourceType: 'official_website', quote: evidence?.quote ?? null,
-      note: strong ? null : kind === 'customer_sector' ? 'Genoemd op de eigen website, maar niet als sector waaraan het bedrijf levert.' : 'Slechts terloops genoemd op de eigen website.',
+      ...base, ...(kind === 'customer_sector' && found.basis ? { basis: found.basis } : {}), status: strong ? 'confirmed' : 'possible', found: `${found.label}${actionText(found)}`, sourceUrl: evidence?.url ?? null, sourceType: 'official_website', quote: evidence?.quote ?? null,
+      note: kind === 'customer_sector' ? sectorNote : strong ? null : 'Slechts terloops genoemd op de eigen website.',
     };
   }
   const terms = expandValue(kind, value);
@@ -205,7 +228,9 @@ function activityMatch(facts: CompanyFacts, kind: ConceptKind, value: string, ch
 function provinceMatch(facts: CompanyFacts, province: string, checkedAt: string): CriterionMatch {
   const label = provinceLabel(province) ?? province;
   const base = { kind: 'province' as const, criterion: label, checkedAt };
-  const located = facts.locations.find(location => location.province === province);
+  const located = facts.locations.find(location => location.province === province && location.addressType !== 'postal')
+    ?? facts.locations.find(location => location.province === province);
+  if (located?.addressType === 'postal') return { ...base, status: 'possible', found: `Postadres in ${located.city ?? label}`, sourceUrl: located.sourceUrl, sourceType: 'official_website', quote: [located.address, located.postcode, located.city].filter(Boolean).join(', '), note: 'Alleen een postadres (postbus); geen bezoekadres of werkgebied in deze provincie gevonden.' };
   if (located) return { ...base, status: 'confirmed', found: `Vestiging in ${located.city ?? label}`, sourceUrl: located.sourceUrl, sourceType: 'official_website', quote: [located.address, located.postcode, located.city].filter(Boolean).join(', '), note: null };
   const served = facts.serviceAreas.find(area => (area.scope === 'province' && area.value === province) || (area.scope === 'place' && findPlace(area.value)?.province === province));
   if (served) return { ...base, status: 'confirmed', found: `Werkgebied: ${served.scope === 'province' ? label : served.value}`, sourceUrl: served.sourceUrl, sourceType: 'official_website', quote: served.quote, note: 'Werkgebied volgens de eigen website; geen vestiging in deze provincie bekend.' };
@@ -219,7 +244,7 @@ function placeMatch(facts: CompanyFacts, placeName: string, checkedAt: string): 
   const place = findPlace(placeName);
   const key = normalizeText(place?.name ?? placeName);
   const base = { kind: 'place' as const, criterion: place?.name ?? placeName, checkedAt };
-  const located = facts.locations.find(location => location.city && normalizeText(location.city) === key);
+  const located = facts.locations.find(location => [location.city, location.municipality, location.city ? findPlace(location.city)?.name : null].some(name => name && normalizeText(name) === key));
   if (located) return { ...base, status: 'confirmed', found: `Vestiging in ${located.city}`, sourceUrl: located.sourceUrl, sourceType: 'official_website', quote: [located.address, located.postcode, located.city].filter(Boolean).join(', '), note: null };
   const served = facts.serviceAreas.find(area => area.scope === 'place' && normalizeText(area.value) === key);
   if (served) return { ...base, status: 'confirmed', found: `Werkgebied: ${served.value}`, sourceUrl: served.sourceUrl, sourceType: 'official_website', quote: served.quote, note: 'Werkgebied volgens de eigen website; geen vestiging in deze plaats bekend.' };
@@ -264,29 +289,42 @@ export function evaluateCompany(facts: CompanyFacts, criteria: CompanySearchCrit
   for (const role of criteria.roles) matches.push(activityMatch(facts, 'role', role, checkedAt, snippet));
   for (const type of criteria.businessTypes ?? []) {
     const evidence = (facts.businessTypes ?? []).find(entry => entry.type === type);
+    if (!evidence && type === 'installer') {
+      // Older profiles have no installer type; their roles may still show it.
+      const role = facts.roles.find(r => r.role === 'installer');
+      if (role) { matches.push({ kind: 'business_type', criterion: BUSINESS_TYPE_LABELS[type], status: role.strength === 'strong' ? 'confirmed' : 'possible', found: role.label, sourceUrl: role.evidence[0]?.url ?? null, sourceType: 'official_website', quote: role.evidence[0]?.quote ?? null, note: null, checkedAt }); continue; }
+    }
     matches.push(evidence
       ? { kind: 'business_type', criterion: BUSINESS_TYPE_LABELS[type], status: evidence.strength === 'strong' ? 'confirmed' : 'possible', found: evidence.signals.join(', '), sourceUrl: evidence.sourceUrl, sourceType: 'official_website', quote: evidence.quote, note: evidence.strength === 'strong' ? null : 'Enkele aanwijzing op de eigen website.', checkedAt }
       : { kind: 'business_type', criterion: BUSINESS_TYPE_LABELS[type], status: 'insufficient', found: null, sourceUrl: null, sourceType: null, quote: null, note: 'Geen aanwijzingen gevonden op de onderzochte pagina’s.', checkedAt });
   }
   const subject = matches.length;
+  // A business type the user excluded: shown clearly, and a company that clearly is one is excluded.
+  for (const type of criteria.excludedBusinessTypes ?? []) {
+    const evidence = (facts.businessTypes ?? []).find(entry => entry.type === type);
+    if (evidence?.strength === 'weak') matches.push({ kind: 'excluded_business_type', criterion: `geen ${BUSINESS_TYPE_LABELS[type].toLowerCase()}`, status: 'possible', found: evidence.signals.join(', '), sourceUrl: evidence.sourceUrl, sourceType: 'official_website', quote: evidence.quote, note: `Enkele aanwijzing dat dit een ${BUSINESS_TYPE_LABELS[type].toLowerCase()} is.`, checkedAt });
+  }
   if (criteria.places.length === 0 && criteria.provinces.length === 0) matches.push(countryMatch(facts, criteria.country, checkedAt));
   for (const province of criteria.provinces) matches.push(provinceMatch(facts, province, checkedAt));
   for (const place of criteria.places) matches.push(placeMatch(facts, place, checkedAt));
 
-  let excludedBy: string | null = null;
-  for (const exclusion of criteria.exclusions) {
+  let excludedBy: string | null = (criteria.excludedBusinessTypes ?? []).map(type => (facts.businessTypes ?? []).find(entry => entry.type === type && entry.strength === 'strong'))
+    .filter(Boolean).map(entry => BUSINESS_TYPE_LABELS[entry!.type])[0] ?? null;
+  for (const exclusion of excludedBy ? [] : criteria.exclusions) {
     const concept = (['product', 'service', 'specialisation', 'industry', 'customer_sector', 'role'] as ConceptKind[]).map(kind => findConcept(kind, exclusion)).find(Boolean);
     const all = [...facts.industries, ...facts.products, ...facts.services, ...facts.specialisations, ...facts.customerSectors, ...facts.roles];
     const hit = all.find(activity => activity.strength === 'strong' && !activity.related && (concept ? activity.conceptId === concept.id : normalizeText(activity.label) === normalizeText(exclusion)));
     if (hit) { excludedBy = exclusion; break; }
   }
 
-  // The best status per kind: values of one kind are alternatives.
+  // Per kind: values are alternatives (the best counts) unless the criteria require all of them (the weakest counts).
   const best = (list: CriterionMatch[]) => {
     const byKind = new Map<string, MatchStatus>();
     for (const match of list) {
       const current = byKind.get(match.kind);
-      if (!current || statusRank[match.status] > statusRank[current]) byKind.set(match.kind, match.status);
+      const listName = LIST_OF_KIND[match.kind];
+      const all = listName ? logicOf(criteria, listName) === 'all' : false;
+      if (!current || (all ? statusRank[match.status] < statusRank[current] : statusRank[match.status] > statusRank[current])) byKind.set(match.kind, match.status);
     }
     return [...byKind.values()];
   };

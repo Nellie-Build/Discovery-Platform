@@ -48,6 +48,7 @@ function canonical(value: unknown): string {
   return JSON.stringify(value, (_key, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))) : v));
 }
 
+const BASIS_RANK = { mention: 0, reference: 1, offering: 2 } as const;
 function mergeActivities<T extends Activity>(stored: T[], incoming: T[]): T[] {
   const out = stored.map(activity => ({ ...activity, evidence: [...activity.evidence] }));
   for (const activity of incoming) {
@@ -59,6 +60,14 @@ function mergeActivities<T extends Activity>(stored: T[], incoming: T[]): T[] {
     // judgement rested on (re-assessed under the current rules); evidence on pages not read again is never discounted.
     const reassessed = existing.evidence.every(stored => activity.evidence.some(quote => quote.url === stored.url));
     if (activity.strength === 'strong' || reassessed) existing.strength = activity.strength;
+    // The sector basis follows the same rule: a stronger basis always counts, a weaker one only on the same pages.
+    if (activity.basis && (reassessed || !existing.basis || BASIS_RANK[activity.basis] > BASIS_RANK[existing.basis])) existing.basis = activity.basis;
+    // What the company does with it: a union per action (installs, maintains, ...), the first source kept.
+    if (activity.actions?.length) {
+      const actions = [...(existing.actions ?? [])];
+      for (const action of activity.actions) if (!actions.some(a => a.action === action.action)) actions.push(action);
+      existing.actions = actions;
+    }
     for (const quote of activity.evidence) if (!existing.evidence.some(e => e.url === quote.url) && existing.evidence.length < 5) existing.evidence.push(quote);
   }
   return out;
@@ -96,7 +105,7 @@ export function updateStoredCompany(stored: CompanyFacts, incoming: CompanyFacts
   // otherwise addresses are only added.
   const sameAddress = (a: CompanyFacts['locations'][number], b: CompanyFacts['locations'][number]) => (a.postcode ?? a.city) === (b.postcode ?? b.city);
   facts.locations = [
-    ...stored.locations.map(s => incoming.locations.find(l => sameAddress(l, s) && l.province && !s.province) ?? s),
+    ...stored.locations.map(s => incoming.locations.find(l => sameAddress(l, s) && ((l.province && !s.province) || (l.municipality && !s.municipality) || (l.addressType && !s.addressType))) ?? s),
     ...incoming.locations.filter(l => !stored.locations.some(s => sameAddress(s, l))),
   ].slice(0, 15);
   facts.serviceAreas = [...stored.serviceAreas, ...incoming.serviceAreas.filter(a => !stored.serviceAreas.some(s => s.scope === a.scope && s.value === a.value))].slice(0, 20);

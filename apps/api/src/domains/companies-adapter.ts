@@ -156,6 +156,8 @@ export function createCompaniesAdapter(options: CompaniesAdapterOptions = {}): D
         ...(sourceStats.candidatesNotResearched ? [`${sourceStats.candidatesNotResearched} kandidaat-bedrijven wachten op een vervolgbatch`] : []),
         ...(sourceStats.timeLimitReached ? ['tijdslimiet bereikt'] : []),
         ...(queryErrors ? [`${queryErrors} zoekopdracht(en) mislukt`] : []),
+        // Not executed because no new candidates came in is by design (it saves credits), not a gap.
+        ...(sourceStats.queriesNotExecuted?.some(q => q.reason !== 'geen nieuwe kandidaten meer') ? [`${sourceStats.queriesNotExecuted.filter(q => q.reason !== 'geen nieuwe kandidaten meer').length} geplande zoekopdracht(en) niet uitgevoerd`] : []),
       ];
       return {
         records,
