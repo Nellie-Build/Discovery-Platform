@@ -19,6 +19,12 @@ export interface Concept {
   label: string;
   /** Every term that means this concept, Dutch and English; the label is always one of them. */
   terms: string[];
+  /**
+   * Broader or neighbouring terms: a page that only uses these may be relevant, but it does not prove the concept
+   * ("onderwijshuisvesting" is not proof of school renovation). They never give more than a possible match and are
+   * never used to expand a search.
+   */
+  related?: string[];
   /** Products, services and specialisations: the industry they usually belong to (used to suggest a branch). */
   industry?: string;
 }
@@ -26,8 +32,8 @@ export interface Concept {
 export type CompanyRole = 'manufacturer' | 'wholesaler' | 'distributor' | 'supplier' | 'installer' | 'contractor' | 'service_provider' | 'consultancy';
 export const COMPANY_ROLES: readonly CompanyRole[] = ['manufacturer', 'wholesaler', 'distributor', 'supplier', 'installer', 'contractor', 'service_provider', 'consultancy'];
 
-const c = (kind: ConceptKind, id: string, label: string, terms: string[], industry?: string): Concept =>
-  ({ id, kind, label, terms: [label, ...terms], ...(industry ? { industry } : {}) });
+const c = (kind: ConceptKind, id: string, label: string, terms: string[], industry?: string, related?: string[]): Concept =>
+  ({ id, kind, label, terms: [label, ...terms], ...(industry ? { industry } : {}), ...(related?.length ? { related } : {}) });
 
 export const CONCEPTS: readonly Concept[] = [
   // ── Industries: what a company is ──────────────────────────────────────────────────────────────────────────────────
@@ -48,14 +54,14 @@ export const CONCEPTS: readonly Concept[] = [
 
   // ── Products ───────────────────────────────────────────────────────────────────────────────────────────────────────
   c('product', 'cctv', 'camerasystemen', ['camerasysteem', 'camerabewaking', 'camerabeveiliging', 'camerabeveiligingssystemen', 'beveiligingscamera', "beveiligingscamera's", 'bewakingscamera', "bewakingscamera's", 'videobewaking', 'videobewakingssystemen', 'videosurveillance', 'cctv', "ip-camera's", 'ip-camera', 'security cameras', 'security camera', 'video surveillance'], 'security'),
-  c('product', 'access_control', 'toegangscontrolesystemen', ['toegangscontrole', 'toegangscontrolesysteem', 'toegangsbeheer', 'toegangssystemen', 'access control', 'access control systems', 'kaartlezers', 'elektronische sloten', 'elektronische toegangscontrole'], 'security'),
+  c('product', 'access_control', 'toegangscontrolesystemen', ['toegangscontrole', 'toegangscontrolesysteem', 'toegangsbeheer', 'toegangssystemen', 'access control', 'access control systems', 'elektronische toegangscontrole'], 'security', ['kaartlezers', 'elektronische sloten']),
   c('product', 'alarm', 'alarmsystemen', ['alarmsysteem', 'inbraakalarm', 'inbraakbeveiliging', 'inbraakdetectie', 'alarminstallatie', 'alarminstallaties', 'intrusion detection', 'burglar alarm'], 'security'),
   c('product', 'security_products', 'beveiligingsproducten', ['beveiligingsartikelen', 'beveiligingsmaterialen', 'security products', 'security equipment'], 'security'),
-  c('product', 'medical_equipment', 'medische apparatuur', ['medische hulpmiddelen', 'medische instrumenten', 'medische producten', 'medische systemen', 'medical devices', 'medical equipment', 'medische technologie'], 'medical_technology'),
+  c('product', 'medical_equipment', 'medische apparatuur', ['medische hulpmiddelen', 'medische instrumenten', 'medische systemen', 'medical devices', 'medical equipment'], 'medical_technology', ['medische technologie', 'medische producten']),
   c('product', 'insulation', 'isolatiematerialen', ['isolatiemateriaal', 'isolatieproducten', 'insulation', 'insulation materials']),
   c('product', 'solar', 'zonnepanelen', ['zonnepaneel', 'pv-panelen', 'pv-installaties', 'pv-installatie', 'zonnestroomsystemen', 'zonne-energie', 'solar panels', 'solar pv', 'photovoltaic'], 'energy'),
   c('product', 'heat_pumps', 'warmtepompen', ['warmtepomp', 'heat pumps', 'heat pump'], 'energy'),
-  c('product', 'business_software', 'bedrijfssoftware', ['software', 'softwareoplossingen', 'softwarepakket', 'saas', 'erp', 'business software'], 'ict'),
+  c('product', 'business_software', 'bedrijfssoftware', ['softwareoplossingen', 'softwarepakket', 'business software'], 'ict', ['software', 'saas', 'erp']),
   c('product', 'planning_software', 'planningssoftware', ['roostersoftware', 'roosterplanning', 'personeelsplanning', 'planningssysteem', 'roosterprogramma', 'scheduling software', 'workforce management'], 'ict'),
   c('product', 'robots', 'robots', ['robot', 'cobots', 'cobot', 'robotarmen', 'industriele robots'], 'automation'),
   c('product', 'control_systems', 'besturingssystemen', ['plc', 'plc-besturing', 'scada', 'besturingstechniek', 'control systems'], 'automation'),
@@ -76,8 +82,8 @@ export const CONCEPTS: readonly Concept[] = [
 
   // ── Specialisations ────────────────────────────────────────────────────────────────────────────────────────────────
   c('specialisation', 'fire_detection', 'branddetectie', ['brandmeldinstallatie', 'brandmeldinstallaties', 'brandmeldsystemen', 'brandbeveiliging', 'bmi', 'fire detection', 'fire alarm systems'], 'security'),
-  c('specialisation', 'utility_construction', 'utiliteitsbouw', ['utiliteitsprojecten', 'utiliteit', 'bedrijfsgebouwen', 'non-residential construction', 'commercial construction'], 'construction'),
-  c('specialisation', 'school_renovation', 'schoolrenovatie', ['renovatie van scholen', 'renovatie van schoolgebouwen', 'schoolgebouwen renoveren', 'scholenbouw', 'onderwijshuisvesting', 'schoolgebouwen', 'school renovation'], 'construction'),
+  c('specialisation', 'utility_construction', 'utiliteitsbouw', ['utiliteitsprojecten', 'non-residential construction', 'commercial construction'], 'construction', ['utiliteit', 'bedrijfsgebouwen']),
+  c('specialisation', 'school_renovation', 'schoolrenovatie', ['renovatie van scholen', 'renovatie van schoolgebouwen', 'renovatie van een school', 'schoolgebouwen renoveren', 'school renovation'], 'construction', ['scholenbouw', 'onderwijshuisvesting', 'schoolgebouwen', 'onderwijsgebouwen']),
   c('specialisation', 'robotisation', 'robotisering', ['robotautomatisering', 'robotica', 'robotics', 'robotintegratie'], 'automation'),
   c('specialisation', 'industrial_automation', 'industriele automatisering', ['procesautomatisering', 'machineautomatisering', 'industrial automation', 'process automation'], 'automation'),
   c('specialisation', 'refrigeration', 'koeltechniek', ['koelinstallaties', 'koelsystemen', 'koel- en vriestechniek', 'refrigeration']),
@@ -85,11 +91,11 @@ export const CONCEPTS: readonly Concept[] = [
 
   // ── Customer sectors: who a company supplies ───────────────────────────────────────────────────────────────────────
   c('customer_sector', 'hospitals', 'ziekenhuizen', ['ziekenhuis', 'umc', "umc's", 'medische centra', 'medisch centrum', 'hospitals', 'hospital']),
-  c('customer_sector', 'care_institutions', 'zorginstellingen', ['zorginstelling', 'zorgorganisaties', 'zorgorganisatie', 'zorgsector', 'verpleeghuizen', 'verpleeghuis', 'gezondheidszorg', 'zorg en welzijn', 'healthcare', 'care homes']),
-  c('customer_sector', 'schools', 'scholen', ['school', 'onderwijsinstellingen', 'onderwijsinstelling', 'onderwijs', 'basisscholen', 'universiteiten', 'hogescholen', 'education', 'schools']),
-  c('customer_sector', 'municipalities', 'gemeenten', ['gemeente', 'overheid', 'overheden', 'overheidsinstellingen', 'publieke sector', 'public sector', 'municipalities']),
+  c('customer_sector', 'care_institutions', 'zorginstellingen', ['zorginstelling', 'zorgorganisaties', 'zorgorganisatie', 'verpleeghuizen', 'verpleeghuis', 'care homes'], undefined, ['zorgsector', 'gezondheidszorg', 'zorg en welzijn', 'healthcare']),
+  c('customer_sector', 'schools', 'scholen', ['school', 'onderwijsinstellingen', 'onderwijsinstelling', 'basisscholen', 'universiteiten', 'hogescholen', 'schools'], undefined, ['onderwijs', 'education']),
+  c('customer_sector', 'municipalities', 'gemeenten', ['gemeente', 'municipalities'], undefined, ['overheid', 'overheden', 'overheidsinstellingen', 'publieke sector', 'public sector']),
   c('customer_sector', 'data_centers', 'datacenters', ['datacentra', 'datacenter', 'data centers', 'data centres']),
-  c('customer_sector', 'hotels', 'hotels', ['hotel', 'hotellerie', 'hotelbranche', 'hospitality']),
+  c('customer_sector', 'hotels', 'hotels', ['hotel', 'hotellerie', 'hotelbranche'], undefined, ['hospitality']),
   c('customer_sector', 'distribution_centers', 'distributiecentra', ['distributiecentrum', 'logistieke centra', 'magazijnen', 'warehouses', 'distribution centers', 'distribution centres']),
   c('customer_sector', 'installers', 'installateurs', ['installatiebedrijven', 'installers']),
   c('customer_sector', 'industry', 'industrie', ['industriele bedrijven', 'productiebedrijven', 'maakindustrie', 'industrial companies', 'manufacturers']),
@@ -108,6 +114,17 @@ export const CONCEPTS: readonly Concept[] = [
   c('role', 'service_provider', 'dienstverlener', ['dienstverleners', 'service provider', 'service providers']),
   c('role', 'consultancy', 'adviesbureau', ['adviesbureaus', 'ingenieursbureau', 'consultancybureau', 'consultant', 'consultants', 'consultancy firm']),
 ];
+
+/**
+ * How a company does business, derived from its own site: selling to businesses, selling to consumers through a web shop,
+ * making, distributing, or providing services. A company can be several. A web shop is a type like any other: it is
+ * shown and filterable, never excluded by default.
+ */
+export type BusinessType = 'b2b_supplier' | 'consumer_webshop' | 'manufacturer' | 'distributor' | 'service_provider';
+export const BUSINESS_TYPES: readonly BusinessType[] = ['b2b_supplier', 'consumer_webshop', 'manufacturer', 'distributor', 'service_provider'];
+export const BUSINESS_TYPE_LABELS: Record<BusinessType, string> = {
+  b2b_supplier: 'Zakelijke leverancier', consumer_webshop: 'Consumentenwebwinkel', manufacturer: 'Fabrikant', distributor: 'Distributeur / groothandel', service_provider: 'Dienstverlener',
+};
 
 export const ROLE_LABELS: Record<CompanyRole, string> = {
   manufacturer: 'Fabrikant', wholesaler: 'Groothandel', distributor: 'Distributeur', supplier: 'Leverancier',

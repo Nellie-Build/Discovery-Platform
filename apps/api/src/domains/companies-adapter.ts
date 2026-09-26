@@ -78,6 +78,9 @@ export function createCompaniesAdapter(options: CompaniesAdapterOptions = {}): D
       else { route = COMPANY_SEARCH_SOURCE_ID; filters = branchFilters(input); }
       const baseStats: Record<string, unknown> = { searchMode: input.mode, sourceId: route, targetRecords: config.targetRecords, maxDurationMs: config.maxDurationMs };
       if (route !== COMPANY_SEARCH_SOURCE_ID && route !== COMPANY_WEBSITE_SOURCE_ID) return failure(`Onbekende bron "${route}". Kies zoeken of een bedrijfswebsite.`, baseStats);
+      // A follow-up batch continues a search with the candidates it left (see routes/runs.ts); a website analysis has none.
+      const cursor = input.continuation?.cursor ?? null;
+      if (cursor !== null && route !== COMPANY_SEARCH_SOURCE_ID) return failure('Alleen een zoekopdracht kan in batches worden voortgezet.', baseStats);
 
       let criteria: CompanySearchCriteria;
       try { criteria = criteriaFrom({ ...filters, url: undefined }); } catch (error) { return failure(describe(error), baseStats); }
@@ -93,8 +96,11 @@ export function createCompaniesAdapter(options: CompaniesAdapterOptions = {}): D
       };
       Object.assign(baseStats, { maxCompanies, pagesPerCompany: sourceFilters.pagesPerCompany });
       let items;
+      let nextCursor: string | null = null;
       try {
-        items = (await source.fetchBatch({ cursor: null, limit: maxCompanies, filters: sourceFilters })).items;
+        const batch = await source.fetchBatch({ cursor, limit: maxCompanies, filters: sourceFilters });
+        items = batch.items;
+        nextCursor = batch.nextCursor;
       } catch (error) {
         return failure(describe(error), { ...baseStats, ...source.stats(), durationMs: Date.now() - start });
       }
@@ -147,7 +153,7 @@ export function createCompaniesAdapter(options: CompaniesAdapterOptions = {}): D
       const incompleteReasons = [
         ...(sourceStats.sitesFailed.length ? [`${sourceStats.sitesFailed.length} website(s) konden niet worden gelezen`] : []),
         ...(sourceStats.sitesIncomplete.length ? [`${sourceStats.sitesIncomplete.length} website(s) niet volledig doorlopen`] : []),
-        ...(sourceStats.candidatesNotResearched ? [`${sourceStats.candidatesNotResearched} kandidaat-bedrijven niet onderzocht (budget)`] : []),
+        ...(sourceStats.candidatesNotResearched ? [`${sourceStats.candidatesNotResearched} kandidaat-bedrijven wachten op een vervolgbatch`] : []),
         ...(sourceStats.timeLimitReached ? ['tijdslimiet bereikt'] : []),
         ...(queryErrors ? [`${queryErrors} zoekopdracht(en) mislukt`] : []),
       ];
@@ -155,6 +161,7 @@ export function createCompaniesAdapter(options: CompaniesAdapterOptions = {}): D
         records,
         updatedRecords: updated,
         observedRecords: unchanged,
+        continuation: nextCursor ? { cursor: nextCursor, remaining: sourceStats.candidatesNotResearched } : null,
         ...(incompleteReasons.length ? { status: 'partial' as const } : {}),
         stats: {
           ...baseStats,

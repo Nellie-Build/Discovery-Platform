@@ -1,4 +1,4 @@
-import type { CompanyRole, ConceptKind } from './vocabulary.js';
+import type { BusinessType, CompanyRole, ConceptKind } from './vocabulary.js';
 
 /**
  * A company profile as stored in `discovery_records.domain_data` (domain 'companies'). Everything is what a source
@@ -24,7 +24,17 @@ export interface Activity {
   label: string;
   strength: EvidenceStrength;
   evidence: EvidenceQuote[];
+  /**
+   * Found only through broader terms of the concept (e.g. "onderwijshuisvesting" for school renovation): shown, never
+   * proof of the concept itself; always weak.
+   */
+  related?: boolean;
+  /** The terms as they appear on the site. */
+  matchedTerms?: string[];
 }
+
+/** One way the company does business, with the signals that show it (see profile.ts's businessTypesOf). */
+export interface BusinessTypeEvidence { type: BusinessType; strength: EvidenceStrength; signals: string[]; sourceUrl: string | null; quote: string | null }
 
 export type PageType = 'home' | 'about' | 'products' | 'services' | 'sectors' | 'projects' | 'contact' | 'locations' | 'other';
 
@@ -52,7 +62,7 @@ export interface CompanySource { url: string; type: SourceType; pageType: PageTy
 
 /** One search criterion and how this company met it. */
 export interface CriterionMatch {
-  kind: ConceptKind | 'query' | 'country' | 'province' | 'place';
+  kind: ConceptKind | 'business_type' | 'query' | 'country' | 'province' | 'place';
   criterion: string;
   status: MatchStatus;
   /** What was found for it (the product, service, sector, location...), or null. */
@@ -92,6 +102,8 @@ export interface CompanyFacts {
   specialisations: Activity[];
   customerSectors: Activity[];
   roles: Array<Activity & { role: CompanyRole }>;
+  /** How the company does business: selling to businesses, a consumer web shop, manufacturer, distributor, service provider. */
+  businessTypes: BusinessTypeEvidence[];
   locations: CompanyLocation[];
   serviceAreas: ServiceArea[];
   /** General business contact channels only (no personal addresses or mobile numbers of people). */

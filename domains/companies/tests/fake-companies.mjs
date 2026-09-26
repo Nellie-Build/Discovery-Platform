@@ -28,7 +28,9 @@ export const VEILIG_ZUID = {
 export const CAMERA_SHOP = {
   '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nAllow: /' },
   '/': { body: html('Camerashop | Beveiligingscamera kopen', `<h1>Beveiligingscamera's voor thuis</h1>
-    <p>Bestel eenvoudig een beveiligingscamera. Wij leveren in heel Nederland.</p><p>Het ziekenhuis bij ons om de hoek heeft ook camera's.</p>`, { site: 'Camerashop', footer: 'Camerashop, Stationsplein 1, 3511 AB Utrecht' }) },
+    <p>Bestel eenvoudig een beveiligingscamera. Wij leveren in heel Nederland.</p><p>Het ziekenhuis bij ons om de hoek heeft ook camera's.</p>
+    <ul><li>Dome camera € 89,95 <a href="/winkelwagen?add=1">In winkelwagen</a></li><li>Bullet camera € 129,- <a href="/winkelwagen?add=2">In winkelwagen</a></li><li>Deurbelcamera € 59,95</li></ul>
+    <p>Voor thuis en kleine ondernemers. Vandaag besteld, morgen in huis. Gratis verzending vanaf € 50.</p>`, { site: 'Camerashop', footer: 'Camerashop, Stationsplein 1, 3511 AB Utrecht' }) },
   '/contact': { body: html('Contact | Camerashop', '<h1>Contact</h1><p>Stationsplein 1, 3511 AB Utrecht</p><p>Mail: klantenservice@camerashop.example</p>') },
 };
 
@@ -47,6 +49,23 @@ export const NEWS_SITE = {
   '/': { body: '<!doctype html><html><head><title>Beveiligingsnieuws</title></head><body><h1>Nieuws over camerabewaking</h1><p>Steeds meer ziekenhuizen gebruiken camerabewaking.</p></body></html>' },
 };
 
+/** A construction company that only mentions "onderwijshuisvesting" (a broader term), never school renovation itself; address with the place before the postcode. */
+export const ONDERWIJSBOUW = {
+  '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nAllow: /' },
+  '/': { body: html('Bouwgroep Maas | Onderwijshuisvesting en utiliteit', `<h1>Onderwijshuisvesting</h1>
+    <p>Bouwgroep Maas is een aannemer voor onderwijshuisvesting, zorgvastgoed en kantoren.</p>
+    <p>Wij werken voor woningcorporaties en gemeenten.</p>`, { footer: '© Copyright - Bouwgroep Maas B.V. · Achterdijk 46 Vierpolders 3237LA · Openingstijden ma-vr' }) },
+  '/contact': { body: html('Contact | Bouwgroep Maas', '<h1>Contact</h1><p>Achterdijk 46 | Vierpolders | 3237LA</p><p>Openingstijden: maandag t/m vrijdag</p>') },
+};
+
+/** A wholesaler selling security products to installers only: business wording, prices excl. btw, no cart. The menu names fire detection, the content never does. */
+export const GROOTHANDEL = {
+  '/robots.txt': { contentType: 'text/plain', body: 'User-agent: *\nAllow: /' },
+  '/': { body: html('Secu Groothandel | Beveiligingsproducten voor installateurs', `<h1>Groothandel in beveiligingsproducten</h1>
+    <p>Secu Groothandel levert beveiligingsproducten voor installateurs. Alleen voor zakelijke klanten; alle prijzen excl. btw.</p>
+    <p>Vraag een offerte aan of word dealer.</p>`, { footer: 'Secu Groothandel B.V., Industrieweg 3, 5611 AB Eindhoven' }).replace('<a href="/nieuws">Nieuws</a>', '<a href="/branddetectie">Branddetectie</a>') },
+};
+
 export const DOWN = { '/robots.txt': { status: 500, body: 'down' }, '/': { status: 500, body: 'down' } };
 
 export const SITES = {
@@ -55,6 +74,8 @@ export const SITES = {
   'www.delftse-bouw.example': BOUW_DELFT,
   'beveiligingsnieuws.example': NEWS_SITE,
   'kapot.example': DOWN,
+  'www.onderwijsbouw.example': ONDERWIJSBOUW,
+  'secu-groothandel.example': GROOTHANDEL,
 };
 
 /** A transport over `{ host: { path: { body, status?, contentType? } } }`; records every request. */

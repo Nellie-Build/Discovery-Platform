@@ -68,6 +68,8 @@ export function createApiClient({ baseUrl }: ApiClientOptions) {
       startBranchSearch: (projectId: string, input: BranchSearchInput) => req<DiscoveryRun>('POST', `/projects/${projectId}/runs`, input),
       /** A run against a named source (an API or feed) — no website, no branch. */
       startSourceRun: (projectId: string, input: SourceRunInput) => req<DiscoveryRun>('POST', `/projects/${projectId}/runs`, input),
+      /** A follow-up batch of an earlier run that left work (run.stats.continuation); the server reuses that run's own request. */
+      continueRun: (projectId: string, runId: string) => req<DiscoveryRun>('POST', `/projects/${projectId}/runs`, { continueFromRunId: runId }),
       listByProject: (projectId: string) => req<DiscoveryRun[]>('GET', `/projects/${projectId}/runs`),
       get: (id: string) => req<DiscoveryRun>('GET', `/runs/${id}`),
     },

@@ -3,24 +3,36 @@ import type { CompanyLocation, PageType, ServiceArea } from './company-facts.js'
 import type { CompanySearchCriteria } from './criteria.js';
 import { NL_POSTCODE, findPlace, findProvince, geographyNames } from './geography.js';
 import { CONCEPTS, findConcept, type CompanyRole, type ConceptKind } from './vocabulary.js';
-import { normalizeText, quoteAround, sentences, termPattern } from './text.js';
+import { normalizeText, sentences, termPattern } from './text.js';
 
 /**
  * What one page of a company's own website shows: which activities it names and in what context, the addresses the
  * company publishes, the area it says it serves, general contact channels and a stated Chamber of Commerce number.
  * Only facts the page itself states; the profile (profile.ts) combines pages.
  */
-export interface TermSpec { key: string; kind: ConceptKind; conceptId: string | null; label: string; terms: string[] }
+/** A concept's terms, or (`related: true`) only its broader terms, which never prove the concept. */
+export interface TermSpec { key: string; kind: ConceptKind; conceptId: string | null; label: string; terms: string[]; related?: boolean }
 
 export interface TermHit {
   key: string; kind: ConceptKind; conceptId: string | null; label: string;
-  /** In the title, a heading or the site navigation. */
+  /** Specific: in this page's own title or a heading of its content, or in its address (URL slug). Never the menu. */
   structural: boolean;
-  /** Customer sectors: named in a sentence that says the company supplies/serves it, or on a sector/project page. */
+  /** Only in the site navigation/header (the menu shown on every page): weak by itself. */
+  inNav: boolean;
+  /** Distinct sentences of the page's own content (not menu, header or footer) that name it. */
+  sentences: number;
+  /** Customer sectors: named in a sentence that says the company supplies/serves it, or in a heading of a sector/project page. */
   supplyContext: boolean;
+  /** Found only through a broader, related term of the concept (see Concept.related). */
+  related: boolean;
+  /** The term as found. */
+  term: string;
   count: number;
   quote: string;
 }
+
+/** How the page sells: web-shop signals (cart, prices, consumer wording, product data) versus business wording. */
+export interface CommerceSignals { cart: boolean; prices: number; productSchema: boolean; consumerCues: string[]; businessCues: string[]; quote: string | null }
 
 export interface OrganizationData {
   name: string | null; legalName: string | null; alternateNames: string[]; description: string | null;
@@ -40,6 +52,7 @@ export interface PageAnalysis {
   statedKvk: string | null;
   serviceAreas: ServiceArea[];
   hits: TermHit[];
+  commerce: CommerceSignals;
   email: string | null;
   phone: string | null;
   textLength: number;
@@ -47,7 +60,10 @@ export interface PageAnalysis {
 
 /** Every vocabulary concept, plus the criteria's own free values and query as literal terms. */
 export function termSpecs(criteria: CompanySearchCriteria | null): TermSpec[] {
-  const specs: TermSpec[] = CONCEPTS.map(concept => ({ key: `${concept.kind}:${concept.id}`, kind: concept.kind, conceptId: concept.id, label: concept.label, terms: concept.terms }));
+  const specs: TermSpec[] = CONCEPTS.flatMap(concept => [
+    { key: `${concept.kind}:${concept.id}`, kind: concept.kind, conceptId: concept.id, label: concept.label, terms: concept.terms },
+    ...(concept.related?.length ? [{ key: `${concept.kind}:${concept.id}:related`, kind: concept.kind, conceptId: concept.id, label: concept.label, terms: concept.related, related: true }] : []),
+  ]);
   if (!criteria) return specs;
   const free = (kind: ConceptKind, values: string[]) => {
     for (const value of values) {
@@ -116,11 +132,17 @@ const KVK = /\b(?:kvk|k\.v\.k\.?|kamer van koophandel|chamber of commerce|coc)(?
 const LEGAL_FORM = /(?:©|[Cc]opyright|\([Cc]\))\s*(?:[Cc]opyright\s*)?(?:[-–|:]\s*)?(?:\d{4}(?:\s*[-–]\s*\d{4})?\s*[-–|]?\s*)?([A-Z0-9][\p{L}\p{N}&'.\- ]{1,60}?\s(?:B\.?V\.?|N\.?V\.?|V\.?O\.?F\.?|C\.?V\.?|Holding B\.?V\.?))(?![\p{L}])/u;
 const MOBILE = /^(?:\+316|00316|06)\d{8}$/;
 const NOT_A_PLACE = /^(?:telefoon|tel|telephone|phone|openingstijden|email|e-mail|mail|fax|kvk|btw|route|contact|nederland|netherlands|postbus|bezoekadres|postadres|adres|the|en|of|www|info|maandag|dinsdag|woensdag|donderdag|vrijdag|zaterdag|zondag)$/i;
+const CART = /(?:in (?:de |het |mijn )?winkel(?:wagen|mand)|winkelwagen|winkelmand|winkelwagentje|add to cart|shopping cart|afrekenen|(?:^|\/)(?:cart|checkout|winkelwagen|afrekenen)(?:\/|$))/i;
+const PRICE = /€\s?\d{1,5}(?:[.,]\d{2}|,-)?/g;
+const CONSUMER_CUE = /\b(?:voor thuis|voor particulieren|particulieren|consumenten|thuisgebruik|gratis verzending|gratis bezorging|vandaag besteld|morgen (?:in huis|geleverd|bezorgd)|op voorraad|incl(?:\.|usief) btw|gratis retour|retourneren)\b/g;
+const BUSINESS_CUE = /\b(?:zakelijke klanten|zakelijke markt|zakelijke gebruikers|voor bedrijven|voor ondernemers|b2b|business-to-business|excl(?:\.|usief) btw|offerte aanvragen|vraag (?:een |vrijblijvend (?:een )?)?offerte|dealers?|dealernetwerk|vakhandel|voor installateurs|zakelijk account|groothandel|projectmatig|bedrijfsleven|opdrachtgevers|business customers)\b/g;
 const ORG_TYPE = /Organization|Organisation|Business|Corporation|Company|Store|Contractor|Service|Electrician|Plumber|HVAC|Locksmith|MedicalOrganization|GeneralContractor/;
 
+/** Entities some sites leave in structured data or meta tags ("Goetheer &amp; Huissoon"). */
+const decodeEntities = (value: string) => value.replace(/&(amp|quot|apos|#39|nbsp|lt|gt);/g, (_, name: string) => ({ amp: '&', quot: '"', apos: "'", '#39': "'", nbsp: ' ', lt: '<', gt: '>' } as Record<string, string>)[name]);
 const text = (value: unknown, max = 500): string | null => {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
-  const clean = String(value).replace(/\s+/g, ' ').trim();
+  const clean = decodeEntities(String(value)).replace(/\s+/g, ' ').trim();
   return clean ? clean.slice(0, max) : null;
 };
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value : value === undefined || value === null ? [] : [value])
@@ -180,9 +202,13 @@ function textAddresses(body: string, url: string): CompanyLocation[] {
     let place = null;
     for (let n = Math.min(4, words.length); n >= 1 && !place; n--) place = findPlace(words.slice(0, n).join(' '));
     const raw = words[0].replace(/[.,:]+$/, '');
+    const before = body.slice(Math.max(0, (match.index ?? 0) - 70), match.index ?? 0);
+    // A known place right before the postcode ("Achterdijk 46 Vierpolders 3237LA") wins over a word after it.
+    // Separators between address parts ("Achterdijk 46 | Vierpolders | 3237LA") are not part of a place name.
+    const preceding = before.split(/[\s|,·•;/]+/).filter(Boolean).slice(-3);
+    if (!place) for (let n = Math.min(3, preceding.length); n >= 1 && !place; n--) place = findPlace(preceding.slice(-n).join(' ').replace(/[.,:]+$/, ''));
     // An unknown place is kept as written, unless it is a page word that happened to follow the postcode.
     const city = place?.name ?? (/^[A-Z][\p{L}'-]{2,30}$/u.test(raw) && !NOT_A_PLACE.test(raw) ? raw : null);
-    const before = body.slice(Math.max(0, (match.index ?? 0) - 70), match.index ?? 0);
     const street = /([A-Z][\p{L}.' -]{2,50}\s\d{1,5}\s?[a-zA-Z]?(?:[-/]\d{1,4})?|Postbus\s\d{1,6})\s*[,|]?\s*$/u.exec(before)?.[1] ?? null;
     const postcode = `${match[1]} ${match[2]}`;
     if (out.some(existing => existing.postcode === postcode)) continue;
@@ -238,34 +264,62 @@ export function analyzeCompanyPage(page: Pick<CrawlPage, '$' | 'url' | 'isHomepa
   // Adjacent elements must not run together ("Den Haag</span><span>Openingstijden" -> "Den HaagOpeningstijden").
   root.find('*').append(' ');
   const body = root.text().replace(/\s+/g, ' ').trim().slice(0, 60_000);
-  const structural = normalizeText([title ?? '', ...root.find('h1,h2,h3').toArray().map((el: any) => $(el).text()), ...root.find('nav a, header a').toArray().slice(0, 150).map((el: any) => $(el).text())].join(' | '));
   const normBody = normalizeText(body);
   const footer = root.find('footer').text().replace(/\s+/g, ' ');
+  // The page's own content: without the menu, header, footer and side bars, which repeat on every page.
+  const content = root.clone();
+  content.find('nav,header,footer,aside,[role="navigation"],[role="banner"],[role="contentinfo"]').remove();
+  const contentSentences = sentences(content.text().replace(/\s+/g, ' ')).map(normalizeText);
+  const headings = normalizeText([title ?? '', ...content.find('h1,h2,h3').toArray().map((el: any) => $(el).text())].join(' | '));
+  const nav = normalizeText(root.find('nav a, header a, [role="navigation"] a').toArray().slice(0, 150).map((el: any) => $(el).text()).join(' | '));
+  let slug = '';
+  try { slug = normalizeText(decodeURI(new URL(url).pathname).replace(/[-_/.]+/g, ' ')); } catch { /* no slug evidence */ }
+  const notOtherParty = (text: string, term: string) => { const at = text.search(termPattern(term)); return at >= 0 && !OTHER_PARTY.test(text.slice(Math.max(0, at - 60), at)); };
 
   const hits: TermHit[] = [];
   for (const spec of specs) {
-    let count = 0; let quote = ''; let supply = false; let inStructure = false;
+    let count = 0; let quote = ''; let supply = false; let structural = false; let inNav = false; let found = '';
+    const counted = new Set<number>();
     for (const term of spec.terms) {
-      const pattern = termPattern(term);
-      if (!inStructure && pattern.test(structural)) inStructure = spec.kind !== 'role' || !OTHER_PARTY.test(structural.slice(0, structural.search(termPattern(term))));
-      for (const match of normBody.matchAll(termPattern(term))) {
-        const index = match.index ?? 0;
-        const before = normBody.slice(Math.max(0, index - 60), index);
-        if (spec.kind === 'role' && OTHER_PARTY.test(before)) continue;
-        count++;
-        const cue = SUPPLY_CUE.test(before);
-        if (!quote || (spec.kind === 'customer_sector' && cue && !supply)) quote = quoteAround(normBody, index, match[0].length);
-        if (cue) supply = true;
-        if (count > 50) break;
-      }
+      const role = spec.kind === 'role';
+      if (!structural && termPattern(term).test(headings) && (!role || notOtherParty(headings, term))) { structural = true; found ||= term; }
+      if (!structural && termPattern(term).test(slug) && !role) { structural = true; found ||= term; }
+      if (!inNav && termPattern(term).test(nav) && (!role || notOtherParty(nav, term))) { inNav = true; found ||= term; }
+      contentSentences.forEach((sentence, index) => {
+        for (const match of sentence.matchAll(termPattern(term))) {
+          const before = sentence.slice(Math.max(0, (match.index ?? 0) - 60), match.index ?? 0);
+          if (role && OTHER_PARTY.test(before)) continue;
+          count++;
+          counted.add(index);
+          found ||= term;
+          const cue = SUPPLY_CUE.test(before);
+          if (!quote || (spec.kind === 'customer_sector' && cue && !supply)) quote = sentence.slice(0, 280);
+          if (cue) supply = true;
+        }
+      });
     }
-    if (count === 0 && !inStructure) continue;
+    if (count === 0 && !structural && !inNav) continue;
     hits.push({
-      key: spec.key, kind: spec.kind, conceptId: spec.conceptId, label: spec.label, structural: inStructure, count,
-      supplyContext: spec.kind === 'customer_sector' && (supply || pageType === 'sectors' || pageType === 'projects'),
+      key: spec.key, kind: spec.kind, conceptId: spec.conceptId, label: spec.label, structural, inNav, sentences: counted.size, count,
+      supplyContext: spec.kind === 'customer_sector' && (supply || ((pageType === 'sectors' || pageType === 'projects') && structural)),
+      related: spec.related === true, term: found,
       quote: quote || (title ?? '').slice(0, 200),
     });
   }
+
+  // How the page sells.
+  const contentText = normalizeText(content.text());
+  const links = root.find('a,button').toArray().slice(0, 400).map((el: any) => `${$(el).attr('href') ?? ''} ${$(el).text()}`.toLowerCase());
+  const consumerCues = [...new Set([...contentText.matchAll(CONSUMER_CUE)].map(m => m[0]))].slice(0, 8);
+  const businessCues = [...new Set([...contentText.matchAll(BUSINESS_CUE)].map(m => m[0]))].slice(0, 8);
+  const isCue = (sentence: string) => new RegExp(CONSUMER_CUE.source).test(sentence) || new RegExp(BUSINESS_CUE.source).test(sentence);
+  const cueSentence = contentSentences.find(isCue) ?? null;
+  const commerce: CommerceSignals = {
+    cart: links.some(link => CART.test(link)),
+    prices: Math.min(50, (content.text().match(PRICE) ?? []).length),
+    productSchema: nodes.some(node => /\b(?:Product|Offer|AggregateOffer)\b/.test(String(node['@type'] ?? ''))),
+    consumerCues, businessCues, quote: cueSentence ? cueSentence.slice(0, 240) : null,
+  };
 
   const allowAddresses = pageType !== 'projects' && pageType !== 'sectors';
   const addresses = [...structuredAddresses, ...(allowAddresses ? textAddresses(footer ? `${body} ${footer}` : body, url) : [])]
@@ -277,6 +331,7 @@ export function analyzeCompanyPage(page: Pick<CrawlPage, '$' | 'url' | 'isHomepa
     statedKvk: KVK.exec(body)?.[1] ?? null,
     serviceAreas: serviceAreasOf(body, organization?.areaServed ?? [], url),
     hits,
+    commerce,
     email: generalEmail(organization?.email) ?? generalEmail(page.contacts?.email),
     phone: businessPhone(organization?.telephone, true) ?? businessPhone(page.contacts?.phone, false),
     textLength: body.length,
