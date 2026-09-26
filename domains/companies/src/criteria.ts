@@ -1,4 +1,4 @@
-import { CONCEPTS, COMPANY_ROLES, ROLE_LABELS, KIND_LABELS, CONCEPT_KINDS, conceptsOf, expandValue, findConcept, type CompanyRole, type Concept, type ConceptKind } from './vocabulary.js';
+import { CONCEPTS, COMPANY_ROLES, ROLE_LABELS, KIND_LABELS, CONCEPT_KINDS, BUSINESS_TYPES, BUSINESS_TYPE_LABELS, conceptsOf, expandValue, findConcept, type BusinessType, type CompanyRole, type Concept, type ConceptKind } from './vocabulary.js';
 import { NETHERLANDS, findPlace, findProvince, geographyNames, provinceLabel, COUNTRIES } from './geography.js';
 import { normalizeText, termPattern, uniqueStrings } from './text.js';
 
@@ -8,8 +8,8 @@ import { normalizeText, termPattern, uniqueStrings } from './text.js';
  * validates whatever comes back. No AI and no paid service: vocabulary terms, place names and a few context rules.
  * A later LLM-based interpreter can produce the same `CompanySearchCriteria` shape.
  */
-export { CONCEPTS, COMPANY_ROLES, ROLE_LABELS, KIND_LABELS, CONCEPT_KINDS, conceptsOf, expandValue, findConcept, NETHERLANDS, provinceLabel, findProvince, findPlace };
-export type { CompanyRole, Concept, ConceptKind };
+export { CONCEPTS, COMPANY_ROLES, ROLE_LABELS, KIND_LABELS, CONCEPT_KINDS, BUSINESS_TYPES, BUSINESS_TYPE_LABELS, conceptsOf, expandValue, findConcept, NETHERLANDS, provinceLabel, findProvince, findPlace };
+export type { BusinessType, CompanyRole, Concept, ConceptKind };
 
 export interface CompanySearchCriteria {
   /** A company name or general search term. */
@@ -20,6 +20,8 @@ export interface CompanySearchCriteria {
   specialisations: string[];
   customerSectors: string[];
   roles: CompanyRole[];
+  /** How the company does business (business supplier, consumer web shop, ...): alternatives; empty = any, web shops included. */
+  businessTypes: BusinessType[];
   /** ISO country code; the first version supports NL. */
   country: string;
   /** Province ids (NL-ZH). */
@@ -35,7 +37,7 @@ export interface CompanySearchCriteria {
 }
 
 export const EMPTY_CRITERIA: CompanySearchCriteria = {
-  query: null, industries: [], products: [], services: [], specialisations: [], customerSectors: [], roles: [],
+  query: null, industries: [], products: [], services: [], specialisations: [], customerSectors: [], roles: [], businessTypes: [],
   country: 'NL', provinces: [], places: [], extra: null, exclusions: [], description: null,
 };
 
@@ -73,6 +75,11 @@ export function parseCriteria(input: Record<string, unknown>): CompanySearchCrit
     if (!known) throw new CriteriaError(`Onbekende bedrijfsrol "${role.slice(0, 40)}".`);
     return known;
   });
+  const businessTypes = list(input.businessTypes, 'Type bedrijf').map(value => {
+    const known = BUSINESS_TYPES.find(id => id === value) ?? (Object.entries(BUSINESS_TYPE_LABELS).find(([, label]) => normalizeText(label) === normalizeText(value))?.[0] as BusinessType | undefined);
+    if (!known) throw new CriteriaError(`Onbekend type bedrijf "${value.slice(0, 40)}".`);
+    return known;
+  });
   const provinces = list(input.provinces, 'Provincie').map(value => {
     const province = findProvince(value) ?? findProvince(`provincie ${value}`);
     if (!province) throw new CriteriaError(`Onbekende provincie "${value.slice(0, 40)}".`);
@@ -86,6 +93,7 @@ export function parseCriteria(input: Record<string, unknown>): CompanySearchCrit
     specialisations: list(input.specialisations, 'Specialisaties'),
     customerSectors: list(input.customerSectors, 'Afnemerssector'),
     roles: [...new Set(roles)],
+    businessTypes: [...new Set(businessTypes)],
     country: countryCode,
     provinces: [...new Set(provinces)],
     places: list(input.places, 'Plaats').map(place => findPlace(place)?.name ?? place),
@@ -105,7 +113,7 @@ export function summarizeCriteria(c: CompanySearchCriteria): string {
   if (c.query) parts.push(`Zoekterm: ${c.query}`);
   const add = (label: string, values: string[]) => { if (values.length) parts.push(`${label}: ${values.join(', ')}`); };
   add('Branche', c.industries); add('Product', c.products); add('Dienst', c.services); add('Specialisatie', c.specialisations);
-  add('Afnemer', c.customerSectors); add('Rol', c.roles.map(role => ROLE_LABELS[role]));
+  add('Afnemer', c.customerSectors); add('Rol', c.roles.map(role => ROLE_LABELS[role])); add('Type', (c.businessTypes ?? []).map(type => BUSINESS_TYPE_LABELS[type]));
   const where = [...c.places, ...c.provinces.map(id => provinceLabel(id) ?? id)];
   parts.push(where.length ? where.join(', ') : 'Nederland');
   if (c.exclusions.length) parts.push(`Niet: ${c.exclusions.join(', ')}`);
@@ -116,7 +124,7 @@ export function summarizeCriteria(c: CompanySearchCriteria): string {
 
 export interface RecognizedPhrase {
   phrase: string;
-  kind: ConceptKind | 'country' | 'province' | 'place' | 'exclusion';
+  kind: ConceptKind | 'business_type' | 'country' | 'province' | 'place' | 'exclusion';
   value: string;
   /** Not named by the user but derived (the usual branch of a named product/service). */
   inferred?: boolean;
@@ -126,6 +134,10 @@ export interface Interpretation { criteria: CompanySearchCriteria; recognized: R
 /** Words before a sector that make it a customer sector ("levert AAN ziekenhuizen", "ervaring MET scholen", "VOOR hotels"). */
 const SUPPLY_CUE = /(?:^|\s)(?:aan|voor|bij|met|ervaring met|klanten|klanten in|klanten uit|opdrachtgevers|leveren aan|levert aan|werken voor|werkt voor|gericht op|to|for|serving)\s+(?:de\s+|het\s+|onder andere\s+|o\.a\.\s+|the\s+)?(?:[\p{L}'-]+\s+){0,2}$/u;
 const EXCLUSION = /(?:^|[\s,;])(?:geen|niet|zonder|behalve|uitgezonderd|exclusief|excluding|except|no)\s+([^,.;]+?)(?=$|[,.;]|\s(?:en|maar|die|met|in)\s)/gu;
+const BUSINESS_TYPE_PHRASES: Array<[RegExp, BusinessType]> = [
+  [/\b(?:zakelijke (?:leveranciers?|markt|klanten|afnemers)|b2b(?:-leveranciers?)?|voor bedrijven|business-to-business)\b/gu, 'b2b_supplier'],
+  [/\b(?:consumentenwebwinkels?|webwinkels?|webshops?|online (?:winkels?|shops?))\b/gu, 'consumer_webshop'],
+];
 const PLACE_CUE = /(?:^|\s)(?:in|uit|rond|rondom|regio|omgeving|nabij|bij|around|near)\s+(?:de\s+|het\s+)?(?:regio\s+|omgeving\s+|gemeente\s+|stad\s+)?$/u;
 const STOPWORDS = new Set(('ik we wij zoek zoeken zoekt gezocht welke wat wie bedrijven bedrijf ondernemingen onderneming organisaties organisatie firma firmas partijen partij die dat deze de het een en of in met voor aan van op te zijn is hebben heeft ervaring '
   + 'gespecialiseerd specialiseren gespecialiseerde actief actieve leveren levert leverancier maken maakt inclusief ook alle graag vind vinden '
@@ -141,7 +153,7 @@ export function interpretDescription(description: string): Interpretation {
   const original = description.slice(0, 600);
   let norm = normalizeText(original);
   const recognized: RecognizedPhrase[] = [];
-  const criteria: CompanySearchCriteria = { ...EMPTY_CRITERIA, industries: [], products: [], services: [], specialisations: [], customerSectors: [], roles: [], provinces: [], places: [], exclusions: [], description: original.trim() || null };
+  const criteria: CompanySearchCriteria = { ...EMPTY_CRITERIA, industries: [], products: [], services: [], specialisations: [], customerSectors: [], roles: [], businessTypes: [], provinces: [], places: [], exclusions: [], description: original.trim() || null };
 
   // 1. Exclusions first, so "geen alarmsystemen" never becomes a product to look for.
   for (const match of norm.matchAll(EXCLUSION)) {
@@ -174,6 +186,17 @@ export function interpretDescription(description: string): Interpretation {
       if (!free(index, match[0].length) || (alias === 'NL' && match[0] !== 'nl')) continue;
       consume(index, match[0].length);
       if (!recognized.some(r => r.kind === 'country')) recognized.push({ phrase: match[0], kind: 'country', value: 'Nederland' });
+    }
+  }
+
+  // 2b. How the companies should do business ("zakelijke leveranciers", "webwinkels"): a criterion only when asked for.
+  for (const [pattern, type] of BUSINESS_TYPE_PHRASES) {
+    for (const match of norm.matchAll(pattern)) {
+      const index = match.index ?? 0;
+      if (!free(index, match[0].length)) continue;
+      consume(index, match[0].length);
+      if (!criteria.businessTypes.includes(type)) criteria.businessTypes.push(type);
+      recognized.push({ phrase: match[0], kind: 'business_type', value: BUSINESS_TYPE_LABELS[type] });
     }
   }
 

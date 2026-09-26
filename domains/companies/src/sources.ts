@@ -158,22 +158,59 @@ export function createCompanyWebsiteSource(deps: CompanyWebDeps): CompanySource 
 
 interface Candidate { domain: string; url: string; title: string | null; snippet: string | null; query: string; provider: string; results: number; termHits: number }
 
+/**
+ * The continuation of a search: the candidate companies it found but did not research yet. A later batch researches the
+ * next ones without searching again (no extra search-provider calls). Produced by this source only and kept by the
+ * server with the run; validated again when read, so a damaged or foreign cursor is refused, never trusted.
+ */
+export const MAX_CONTINUATION_CANDIDATES = 100;
+const text = (value: unknown, max: number): string | null => (typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : null);
+export function continuationCursor(candidates: Candidate[]): string {
+  return JSON.stringify({ v: 1, candidates: candidates.slice(0, MAX_CONTINUATION_CANDIDATES) });
+}
+export function parseContinuationCursor(cursor: string): Candidate[] {
+  let parsed: unknown;
+  try { parsed = JSON.parse(cursor); } catch { throw new SourceError('De vervolgbatch is ongeldig.', 'invalid_filters'); }
+  const list = (parsed as { v?: unknown; candidates?: unknown })?.candidates;
+  if ((parsed as { v?: unknown })?.v !== 1 || !Array.isArray(list) || list.length > MAX_CONTINUATION_CANDIDATES) throw new SourceError('De vervolgbatch is ongeldig.', 'invalid_filters');
+  const out: Candidate[] = [];
+  for (const entry of list as Array<Record<string, unknown>>) {
+    const url = text(entry?.url, 2000);
+    let parsedUrl: URL | null = null;
+    try { parsedUrl = url ? new URL(url) : null; } catch { parsedUrl = null; }
+    if (!parsedUrl || !['http:', 'https:'].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password || excludedHostKind(parsedUrl.hostname)) continue;
+    const domain = registrableDomain(parsedUrl.hostname);
+    if (out.some(candidate => candidate.domain === domain)) continue;
+    out.push({
+      domain, url: parsedUrl.href, title: text(entry.title, 300), snippet: text(entry.snippet, 600), query: text(entry.query, 200) ?? '', provider: text(entry.provider, 40) ?? 'onbekend',
+      results: typeof entry.results === 'number' ? entry.results : 1, termHits: typeof entry.termHits === 'number' ? entry.termHits : 0,
+    });
+  }
+  return out;
+}
+
 export function createCompanySearchSource(deps: CompanyWebDeps): CompanySource {
   const stats = emptyStats();
   return {
     id: COMPANY_SEARCH_SOURCE_ID, kind: 'api',
     stats: () => stats,
     async fetchBatch({ cursor, filters, limit }) {
-      if (cursor !== null) return { items: [], nextCursor: null, exhausted: true };
       const criteria = criteriaFrom(filters);
       if (!hasSubject(criteria)) throw new SourceError('Geef aan wat voor bedrijven je zoekt: een branche, product, dienst, specialisatie, afnemerssector, rol of zoekterm.', 'invalid_filters');
-      if (!deps.searchProvider) throw new SourceError('Zoeken op het web is niet beschikbaar: er is geen zoekprovider geconfigureerd. Analyseer een bedrijfswebsite direct.', 'invalid_filters');
+      if (cursor === null && !deps.searchProvider) throw new SourceError('Zoeken op het web is niet beschikbaar: er is geen zoekprovider geconfigureerd. Analyseer een bedrijfswebsite direct.', 'invalid_filters');
       const maxDurationMs = clampInt(filters.maxDurationMs, 180_000, 10_000, 300_000);
       const maxCompanies = Math.min(clampInt(filters.maxCompanies, 8, 1, 25), Math.max(1, limit));
       const pagesPerCompany = clampInt(filters.pagesPerCompany, 5, 1, 12);
       const started = Date.now();
       const timeLeft = () => maxDurationMs - (Date.now() - started);
 
+      // A continuation researches the candidates an earlier batch left, without searching again.
+      let candidates: Candidate[];
+      if (cursor !== null) {
+        candidates = parseContinuationCursor(cursor);
+        stats.continued = true;
+        stats.companyCandidates = candidates.length;
+      } else {
       // 1. Search.
       const planned = buildCompanySearchQueries(criteria, clampInt(filters.maxQueries, 4, 1, 8));
       const found: Array<{ url: string; title: string | null; snippet: string | null; source: string; query: string }> = [];
@@ -181,7 +218,7 @@ export function createCompanySearchSource(deps: CompanyWebDeps): CompanySource {
       for (const { query, angle } of planned) {
         if (timeLeft() <= 0) { stats.timeLimitReached = true; break; }
         try {
-          const results = await deps.searchProvider.search({ query, country: criteria.country, language: 'nl', count: 10 });
+          const results = await deps.searchProvider!.search({ query, country: criteria.country, language: 'nl', count: 10 });
           stats.queries.push({ query, angle, results: results.length });
           for (const result of results) found.push({ ...result, query });
         } catch (error) {
@@ -210,17 +247,20 @@ export function createCompanySearchSource(deps: CompanyWebDeps): CompanySource {
         if (existing) { existing.results++; existing.termHits = Math.max(existing.termHits, hits); continue; }
         byDomain.set(domain, { domain, url: clean.url, title: result.title, snippet: result.snippet, query: result.query, provider: result.source, results: 1, termHits: hits });
       }
-      const candidates = [...byDomain.values()].sort((a, b) => b.termHits - a.termHits || b.results - a.results);
+      candidates = [...byDomain.values()].sort((a, b) => b.termHits - a.termHits || b.results - a.results);
       stats.companyCandidates = candidates.length;
+      }
 
       // 3. Read each candidate's own site, best candidates first, within the time budget.
       const specs = termSpecs(criteria);
       const items: SourceItem<CompanyRaw>[] = [];
+      let attempted = 0;
       for (const candidate of candidates) {
         if (items.length >= maxCompanies) break;
         // The time left is shared by the companies still to research, so the first site cannot use it all.
         const budget = Math.min(45_000, Math.max(8_000, Math.floor(timeLeft() / Math.max(1, maxCompanies - items.length))), timeLeft());
         if (budget < 5_000) { stats.timeLimitReached = true; break; }
+        attempted++;
         try {
           const { pages, incomplete } = await researchCompany(deps, candidate.url, specs, { pages: pagesPerCompany, maxDurationMs: budget }, stats);
           stats.companiesResearched++;
@@ -233,8 +273,11 @@ export function createCompanySearchSource(deps: CompanyWebDeps): CompanySource {
           stats.sitesFailed.push({ domain: candidate.domain, reason: error instanceof Error ? error.message.slice(0, 200) : 'onbekende fout' });
         }
       }
-      stats.candidatesNotResearched = Math.max(0, candidates.length - stats.companiesResearched - stats.sitesFailed.length);
-      return { items, nextCursor: null, exhausted: true };
+      // What was not attempted (budget or time) is the next batch's work.
+      const remaining = candidates.slice(attempted);
+      stats.candidatesNotResearched = remaining.length;
+      const nextCursor = remaining.length ? continuationCursor(remaining) : null;
+      return { items, nextCursor, exhausted: nextCursor === null };
     },
   };
 }

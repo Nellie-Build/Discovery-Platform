@@ -51,9 +51,14 @@ function canonical(value: unknown): string {
 function mergeActivities<T extends Activity>(stored: T[], incoming: T[]): T[] {
   const out = stored.map(activity => ({ ...activity, evidence: [...activity.evidence] }));
   for (const activity of incoming) {
-    const existing = out.find(other => other.kind === activity.kind && (activity.conceptId ? other.conceptId === activity.conceptId : other.label === activity.label));
+    // An activity proven by the concept's own terms and one seen only through related terms stay apart.
+    const existing = out.find(other => other.kind === activity.kind && Boolean(other.related) === Boolean(activity.related)
+      && (activity.conceptId ? other.conceptId === activity.conceptId : other.label === activity.label));
     if (!existing) { out.push({ ...activity }); continue; }
-    if (activity.strength === 'strong') existing.strength = 'strong';
+    // Stronger evidence always counts. Weaker only replaces the stored judgement when this run read the same pages that
+    // judgement rested on (re-assessed under the current rules); evidence on pages not read again is never discounted.
+    const reassessed = existing.evidence.every(stored => activity.evidence.some(quote => quote.url === stored.url));
+    if (activity.strength === 'strong' || reassessed) existing.strength = activity.strength;
     for (const quote of activity.evidence) if (!existing.evidence.some(e => e.url === quote.url) && existing.evidence.length < 5) existing.evidence.push(quote);
   }
   return out;
@@ -79,6 +84,14 @@ export function updateStoredCompany(stored: CompanyFacts, incoming: CompanyFacts
   }
   for (const field of LIST_FIELDS) (facts as unknown as Record<string, unknown>)[field] = mergeActivities(stored[field] as Activity[], incoming[field] as Activity[]);
   facts.tradeNames = [...new Set([...stored.tradeNames, ...incoming.tradeNames])].slice(0, 8);
+  // Business types: union; a type only ever becomes stronger (profiles stored before this field existed have none).
+  const types = (stored.businessTypes ?? []).map(entry => ({ ...entry }));
+  for (const entry of incoming.businessTypes ?? []) {
+    const existing = types.find(other => other.type === entry.type);
+    if (!existing) types.push(entry);
+    else if (existing.strength === 'weak' && entry.strength === 'strong') Object.assign(existing, entry);
+  }
+  facts.businessTypes = types;
   // The same address read better (a known place where the stored reading had none) replaces the stored reading;
   // otherwise addresses are only added.
   const sameAddress = (a: CompanyFacts['locations'][number], b: CompanyFacts['locations'][number]) => (a.postcode ?? a.city) === (b.postcode ?? b.city);

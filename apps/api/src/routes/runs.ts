@@ -1,9 +1,11 @@
 import { Router } from 'express';
 import { ProjectsRepository, DiscoveryRunsRepository, DiscoveryRecordsRepository, withTransaction, type TransactionCapable } from '@discovery-platform/db';
-import { asyncHandler, badRequest, notFound } from '../http-errors.js';
+import { asyncHandler, badRequest, notFound, HttpError } from '../http-errors.js';
 import { assertWorkspaceAccess } from '../workspace-access.js';
 import { assertModuleEnabled } from '../module-registry.js';
-import { defaultDomainRegistry, resolveDiscoveryRunConfig, type DomainRegistry, type DiscoveryRunConfig } from '../domain-registry.js';
+import { defaultDomainRegistry, resolveDiscoveryRunConfig, type DomainRegistry, type DiscoveryRunConfig, type RunContinuation } from '../domain-registry.js';
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * The one route that actually exercises the whole chain this phase exists to prove:
@@ -23,7 +25,27 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
     if (!project) throw notFound('Project not found.');
     await assertWorkspaceAccess(pool, req, project.workspace_id);
     res.locals.projectId = project.id;
-    const body = req.body ?? {};
+    let body = req.body ?? {};
+    // A follow-up batch: { continueFromRunId } alone. The earlier run's own request and the cursor it left are read from
+    // the database, so a client can neither change the criteria nor hand in candidates; budgets and module access are
+    // checked exactly as for a new run, and a run can be continued only once.
+    let continuation: (RunContinuation & { batch: number }) | undefined;
+    if (body.continueFromRunId !== undefined) {
+      if (typeof body.continueFromRunId !== 'string' || !UUID.test(body.continueFromRunId)) throw badRequest('invalid_continuation', 'continueFromRunId must be a run id.');
+      const previous = await runs.getRunById(body.continueFromRunId);
+      if (!previous || previous.project_id !== project.id) throw notFound('Run not found.');
+      const stats = (previous.stats ?? {}) as Record<string, unknown>;
+      const state = stats.continuation as { cursor?: unknown } | null | undefined;
+      const original = stats.criteria as Record<string, unknown> | undefined;
+      if (!state || typeof state.cursor !== 'string' || !original) throw badRequest('nothing_to_continue', 'Deze run heeft geen vervolgbatch.');
+      // A follow-up that failed (an error, or the loser of a simultaneous request) does not use up the continuation.
+      if ((await runs.listRunsByProject(project.id)).some(other => other.status !== 'failed' && (other.stats as Record<string, unknown> | null)?.continuesRunId === previous.id)) {
+        throw new HttpError(409, 'already_continued', 'Deze run is al voortgezet.');
+      }
+      const { mode: _mode, ...request } = original;
+      body = request;
+      continuation = { fromRunId: previous.id, cursor: state.cursor, batch: (typeof stats.batch === 'number' ? stats.batch : 1) + 1 };
+    }
     // `runConfig` is never trusted as given — every field is clamped to its own absolute ceiling
     // here, before the domain adapter ever sees it, regardless of what the frontend itself allows
     // a user to type (see resolveDiscoveryRunConfig's own doc comment). `filters` is opaque,
@@ -62,15 +84,28 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
     await assertModuleEnabled(pool, project.domain, project.workspace_id);
 
     const { runConfig: resolvedConfig, filters: resolvedFilters, ...criteria } = discoveryInput;
-    const initialStats = { criteria: { ...criteria, runConfig: resolvedConfig, filters: resolvedFilters } };
+    const initialStats = {
+      criteria: { ...criteria, runConfig: resolvedConfig, filters: resolvedFilters },
+      ...(continuation ? { continuesRunId: continuation.fromRunId, batch: continuation.batch } : {}),
+    };
     const run = await runs.createRun(project.id, initialStats);
     res.locals.runId = run.id;
+    if (continuation) {
+      // Two simultaneous continuation requests: only the first-created run continues, the other stops at once.
+      const siblings = (await runs.listRunsByProject(project.id)).filter(other => other.status !== 'failed' && (other.stats as Record<string, unknown> | null)?.continuesRunId === continuation!.fromRunId);
+      const first = siblings.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime() || a.id.localeCompare(b.id))[0];
+      if (first && first.id !== run.id) {
+        const failed = await runs.markFailed(run.id, 'Deze run is al voortgezet.', initialStats);
+        res.status(201).json({ ...failed, recordsCreated: 0 });
+        return;
+      }
+    }
 
     let outcome;
     try {
       const existing = await records.listRecordsByProject(project.id, { domain: project.domain });
       const existingRecords = existing.map(record => ({ id: record.id, domainData: record.domain_data }));
-      outcome = await adapter.runDiscovery({ ...discoveryInput, existingRecords });
+      outcome = await adapter.runDiscovery({ ...discoveryInput, existingRecords, ...(continuation ? { continuation: { fromRunId: continuation.fromRunId, cursor: continuation.cursor } } : {}) });
     } catch (error) {
       const failed = await runs.markFailed(run.id, 'Discovery kon niet worden uitgevoerd.', initialStats);
       res.status(201).json({ ...failed, recordsCreated: 0 });
@@ -128,7 +163,10 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
       res.status(201).json({ ...failed, recordsCreated, recordsUpdated });
       return;
     }
-    const succeeded = await runs.finish(run.id, outcome.status ?? 'succeeded', { ...outcome.stats, ...initialStats, recordsCreated, recordsUpdated });
+    const succeeded = await runs.finish(run.id, outcome.status ?? 'succeeded', {
+      ...outcome.stats, ...initialStats, recordsCreated, recordsUpdated,
+      ...(outcome.continuation !== undefined ? { continuation: outcome.continuation } : {}),
+    });
     res.status(201).json({ ...succeeded, recordsCreated, recordsUpdated });
   }));
 

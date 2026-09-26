@@ -38,7 +38,16 @@ export interface DiscoveryRunOutcome {
   updatedRecords?: DiscoveredRecord[];
   records: DiscoveredRecord[];
   stats: Record<string, unknown>;
+  /**
+   * Work this run left for a follow-up batch (e.g. candidates not researched within the budget): an opaque cursor the
+   * adapter understands, kept by the server with the run (stats.continuation) and handed back on
+   * `{ continueFromRunId }`. Null or absent: nothing left.
+   */
+  continuation?: { cursor: string; remaining: number } | null;
 }
+
+/** A follow-up batch of an earlier run: the cursor that run left (read from the database, never from the client). */
+export interface RunContinuation { fromRunId: string; cursor: string }
 
 /**
  * How one discovery pass should find its candidate pages: either a website to crawl (the
@@ -51,7 +60,7 @@ export interface DiscoveryRunOutcome {
  * trust its numbers outright. Module-specific filters (e.g. vacancies' own postedWithinDays/
  * sources) travel as a separate, domain-owned `filters` object apps/api never inspects.
  */
-export type DiscoveryRunInput =
+export type DiscoveryRunInput = ({ continuation?: RunContinuation }) & (
   | {
       /** Pull from a named DiscoverySource (an API or feed) instead of crawling: no website, no branch. `filters` are the source's own. */
       mode: 'source'; sourceId: string; runConfig: DiscoveryRunConfig;
@@ -76,7 +85,7 @@ export type DiscoveryRunInput =
        * `{ postedWithinDays?: number; sources?: string[] }`. */
       filters: Record<string, unknown>;
       existingRecords: ExistingRecordSnapshot[];
-    };
+    });
 
 export interface DomainAdapter {
   id: string;

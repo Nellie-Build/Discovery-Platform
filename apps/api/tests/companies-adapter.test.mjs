@@ -129,3 +129,90 @@ test('module access: a workspace without Companies gets 403 on project creation 
     assert.notEqual((await outsider.request('GET', `/projects/${t.project.id}/records`)).status, 200);
   } finally { await t.close(); }
 });
+
+test('batches: a search that left candidates is continued from the run itself, without searching again, once, until nothing is left', async () => {
+  const t = await app();
+  try {
+    const first = await t.start({ sourceId: 'search', filters: { ...CRITERIA, maxCompanies: 1 }, runConfig: runConfig() });
+    assert.equal(first.status, 'partial');
+    assert.ok(first.stats.continuation.remaining >= 2);
+    assert.match(first.stats.incompleteReasons.join(' '), /wachten op een vervolgbatch/);
+    const searches = t.provider.queries.length;
+    const researched = [first.stats.companiesResearched];
+
+    // The client sends only the run id; other criteria it sends are ignored (the earlier run's own request is used).
+    const second = await t.request('POST', `/projects/${t.project.id}/runs`, { body: { continueFromRunId: first.id, filters: { products: ['zonnepanelen'] } } });
+    assert.equal(second.status, 201);
+    assert.equal(second.body.stats.continuesRunId, first.id);
+    assert.equal(second.body.stats.batch, 2);
+    assert.equal(second.body.stats.continued, true);
+    assert.deepEqual(second.body.stats.criteria.filters.products, ['camerasystemen']);
+    assert.equal(t.provider.queries.length, searches, 'a continuation never searches again');
+    researched.push(second.body.stats.companiesResearched + second.body.stats.sitesFailed.length);
+
+    const again = await t.request('POST', `/projects/${t.project.id}/runs`, { body: { continueFromRunId: first.id } });
+    assert.deepEqual([again.status, again.body.error], [409, 'already_continued']);
+
+    // Continue until the candidates run out; then there is nothing to continue.
+    let last = second.body;
+    for (let i = 0; i < 6 && last.stats.continuation; i++) {
+      last = (await t.request('POST', `/projects/${t.project.id}/runs`, { body: { continueFromRunId: last.id } })).body;
+    }
+    assert.equal(last.stats.continuation, null);
+    const done = await t.request('POST', `/projects/${t.project.id}/runs`, { body: { continueFromRunId: last.id } });
+    assert.deepEqual([done.status, done.body.error], [400, 'nothing_to_continue']);
+    const records = await t.records();
+    assert.equal(new Set(records.map(r => r.domain_data.identity)).size, records.length, 'batches never create duplicates');
+    assert.ok(records.some(r => r.domain_data.identity === 'veilig-zuid.example'));
+  } finally { await t.close(); }
+});
+
+test('batches are safe: an invalid id, another project\'s run and a switched-off module are refused', async () => {
+  const t = await app();
+  try {
+    const first = await t.start({ sourceId: 'search', filters: { ...CRITERIA, maxCompanies: 1 }, runConfig: runConfig() });
+    assert.equal((await t.request('POST', `/projects/${t.project.id}/runs`, { body: { continueFromRunId: 'x' } })).status, 400);
+    const other = (await t.request('POST', '/projects', { body: { workspaceId: t.workspace.id, name: 'Ander project', domain: 'companies' } })).body;
+    assert.equal((await t.request('POST', `/projects/${other.id}/runs`, { body: { continueFromRunId: first.id } })).status, 404);
+    await t.db.query("UPDATE workspace_modules SET enabled = false WHERE workspace_id = $1 AND module_id = 'companies'", [t.workspace.id]);
+    const blocked = await t.request('POST', `/projects/${t.project.id}/runs`, { body: { continueFromRunId: first.id } });
+    assert.deepEqual([blocked.status, blocked.body.error], [403, 'module_not_enabled_for_workspace']);
+  } finally { await t.close(); }
+});
+
+test('budgets per batch: every batch keeps the original run configuration and its own company and page limits', async () => {
+  const t = await app();
+  try {
+    const first = await t.start({ sourceId: 'search', filters: { ...CRITERIA, maxCompanies: 1, pagesPerCompany: 2 }, runConfig: runConfig({ maxDurationMs: 60_000 }) });
+    const batches = [first];
+    for (let i = 0; i < 6 && batches.at(-1).stats.continuation; i++) {
+      batches.push((await t.request('POST', `/projects/${t.project.id}/runs`, { body: { continueFromRunId: batches.at(-1).id, runConfig: { targetRecords: 200, maxDurationMs: 999_999 } } })).body);
+    }
+    assert.ok(batches.length >= 3, 'several batches ran');
+    for (const batch of batches) {
+      assert.deepEqual(batch.stats.criteria.runConfig, first.stats.criteria.runConfig, 'a client cannot raise the budget of a batch');
+      assert.equal(batch.stats.maxDurationMs, 60_000);
+      assert.equal(batch.stats.maxCompanies, 1);
+      assert.ok(batch.stats.companiesResearched + batch.stats.sitesFailed.length <= 1, `batch ${batch.stats.batch ?? 1} researched at most one company`);
+      assert.ok(batch.stats.pagesVisited <= 2, `batch ${batch.stats.batch ?? 1} read at most two pages`);
+    }
+    const records = await t.records();
+    assert.ok(records.every(r => r.domain_data.sources.length <= 2), 'no company profile was read beyond the page budget');
+  } finally { await t.close(); }
+});
+
+test('batches: a follow-up that failed does not use up the continuation; it can be started again', async () => {
+  const t = await app();
+  try {
+    const first = await t.start({ sourceId: 'search', filters: { ...CRITERIA, maxCompanies: 1 }, runConfig: runConfig() });
+    const failedAttempt = (await t.request('POST', `/projects/${t.project.id}/runs`, { body: { continueFromRunId: first.id } })).body;
+    // Simulate that this follow-up failed (e.g. the adapter or the database gave an error).
+    await t.db.query("UPDATE discovery_runs SET status = 'failed', stats = stats - 'continuation' WHERE id = $1", [failedAttempt.id]);
+    const retry = await t.request('POST', `/projects/${t.project.id}/runs`, { body: { continueFromRunId: first.id } });
+    assert.equal(retry.status, 201);
+    assert.equal(retry.body.stats.batch, 2);
+    assert.notEqual(retry.body.status, 'failed');
+    const again = await t.request('POST', `/projects/${t.project.id}/runs`, { body: { continueFromRunId: first.id } });
+    assert.deepEqual([again.status, again.body.error], [409, 'already_continued'], 'a successful follow-up still uses it up');
+  } finally { await t.close(); }
+});
