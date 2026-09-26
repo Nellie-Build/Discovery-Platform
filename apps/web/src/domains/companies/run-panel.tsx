@@ -1,8 +1,9 @@
 import {
-  BUSINESS_TYPES, BUSINESS_TYPE_LABELS, COMPANY_ROLES, CriteriaError, KIND_LABELS, NETHERLANDS, ROLE_LABELS, conceptsOf, interpretDescription, parseCriteria, provinceLabel,
-  type BusinessType, type CompanyRole, type Interpretation,
+  BUSINESS_TYPES, BUSINESS_TYPE_LABELS, COMPANY_ROLES, CriteriaError, KIND_LABELS, NETHERLANDS, ROLE_LABELS, conceptsOf, criteriaWarnings, interpretDescription, parseCriteria, provinceLabel,
+  type BusinessType, type CompanyRole, type Interpretation, type LogicList,
 } from '@discovery-platform/domain-companies/criteria';
 import { useState, type FormEvent } from 'react';
+import { CompanyJobProgress, JobLimitsFields, buildJobLimits, defaultJobLimits, type JobLimitFields } from './job-panel';
 import { ApiError, type DiscoveryRun, type SourceRunInput } from '@discovery-platform/client';
 import { api } from '../../lib/api';
 import { useAsync } from '../../hooks/use-async';
@@ -33,18 +34,29 @@ export interface CompanyRunFields {
   customerSectors: string;
   roles: CompanyRole[];
   businessTypes: BusinessType[];
+  /** Kinds of company that must not be found (e.g. consumer web shops). */
+  excludedBusinessTypes: BusinessType[];
+  /** Lists whose values must ALL apply; any other list needs one of its values. */
+  allOf: LogicList[];
   provinces: string;
   places: string;
   extra: string;
   exclusions: string;
   url: string;
   target: string;
+  /** Extended processing: the search runs in the background in batches, within these limits. */
+  extended: boolean;
+  jobLimits: JobLimitFields;
 }
 
 export const defaultCompanyRunFields = (): CompanyRunFields => ({
   mode: 'search', description: '', query: '', industries: '', products: '', services: '', specialisations: '', customerSectors: '', roles: [], businessTypes: [],
-  provinces: '', places: '', extra: '', exclusions: '', url: '', target: '10',
+  excludedBusinessTypes: [], allOf: [], provinces: '', places: '', extra: '', exclusions: '', url: '', target: '10', extended: false, jobLimits: defaultJobLimits(),
 });
+/** The lists with an AND/OR choice in the form (the choice matters once a list has two or more values). */
+const LOGIC_FIELDS: Array<[LogicList & keyof CompanyRunFields, string]> = [
+  ['industries', 'Branche'], ['products', 'Producten'], ['services', 'Diensten'], ['specialisations', 'Specialisaties'], ['customerSectors', 'Afnemerssector'],
+];
 
 const MODE_OPTIONS: SegmentedControlOption<CompanyRunMode>[] = [{ value: 'search', label: 'Zoeken' }, { value: 'website', label: 'Website analyseren' }];
 const split = (value: string) => value.split(/[,;\n]/).map(item => item.trim()).filter(Boolean);
@@ -55,7 +67,9 @@ export function applyInterpretation(fields: CompanyRunFields, interpretation: In
   const c = interpretation.criteria;
   return {
     ...fields, industries: join(c.industries), products: join(c.products), services: join(c.services), specialisations: join(c.specialisations),
-    customerSectors: join(c.customerSectors), roles: c.roles, businessTypes: c.businessTypes ?? [], provinces: join(c.provinces.map(id => provinceLabel(id) ?? id)), places: join(c.places), exclusions: join(c.exclusions),
+    customerSectors: join(c.customerSectors), roles: c.roles, businessTypes: c.businessTypes ?? [], excludedBusinessTypes: c.excludedBusinessTypes ?? [],
+    allOf: Object.entries(c.logic ?? {}).filter(([, logic]) => logic === 'all').map(([list]) => list as LogicList),
+    provinces: join(c.provinces.map(id => provinceLabel(id) ?? id)), places: join(c.places), exclusions: join(c.exclusions),
   };
 }
 
@@ -67,10 +81,13 @@ export function buildCompanyRunRequest(fields: CompanyRunFields): { request: Sou
     query: fields.query.trim() || undefined, industries: split(fields.industries), products: split(fields.products), services: split(fields.services),
     specialisations: split(fields.specialisations), customerSectors: split(fields.customerSectors), roles: fields.roles, businessTypes: fields.businessTypes, country: 'NL',
     provinces: split(fields.provinces), places: split(fields.places), extra: fields.extra.trim() || undefined, exclusions: split(fields.exclusions),
-    description: fields.description.trim() || undefined,
+    description: fields.description.trim() || undefined, excludedBusinessTypes: fields.excludedBusinessTypes,
+    // Only lists that really have two or more values carry a choice; OR (one of them) is the default and is not sent.
+    logic: Object.fromEntries(fields.allOf.filter(list => list === 'roles' || list === 'businessTypes' ? fields[list].length > 1 : split(String(fields[list as keyof CompanyRunFields] ?? '')).length > 1).map(list => [list, 'all'])),
   };
   try { parseCriteria(raw); } catch (error) { return { error: error instanceof CriteriaError ? error.message : 'Ongeldige zoekcriteria.' }; }
-  const filters: Record<string, unknown> = Object.fromEntries(Object.entries(raw).filter(([, value]) => value !== undefined && !(Array.isArray(value) && value.length === 0)));
+  const filters: Record<string, unknown> = Object.fromEntries(Object.entries(raw).filter(([, value]) => value !== undefined && !(Array.isArray(value) && value.length === 0)
+    && !(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0)));
   if (fields.mode === 'website') {
     if (!fields.url.trim()) return { error: 'Geef de website van het bedrijf op.' };
     return { request: { sourceId: 'website', filters: { ...filters, url: fields.url.trim() }, runConfig: { targetRecords: 1 } } };
@@ -80,7 +97,14 @@ export function buildCompanyRunRequest(fields: CompanyRunFields): { request: Sou
   return { request: { sourceId: 'search', filters, runConfig: { targetRecords: target } } };
 }
 
-const RECOGNIZED_KIND: Record<string, string> = { ...KIND_LABELS, business_type: 'Type bedrijf', country: 'Land', province: 'Provincie', place: 'Plaats', exclusion: 'Uitsluiting' };
+/** Contradictions in the criteria as they are now (the same checks the interpretation applies). */
+export function liveWarnings(fields: CompanyRunFields): string[] {
+  const built = buildCompanyRunRequest(fields);
+  if ('error' in built) return [];
+  try { return criteriaWarnings(parseCriteria(built.request.filters ?? {})); } catch { return []; }
+}
+
+const RECOGNIZED_KIND: Record<string, string> = { ...KIND_LABELS, business_type: 'Type bedrijf', excluded_business_type: 'Geen type', logic: 'Combinatie', country: 'Land', province: 'Provincie', place: 'Plaats', exclusion: 'Uitsluiting' };
 const selectClass = 'block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-400';
 
 export function CompanyRunPanel({ projectId, onStarted }: { projectId: string; onStarted: (run: DiscoveryRun) => void }) {
@@ -88,11 +112,14 @@ export function CompanyRunPanel({ projectId, onStarted }: { projectId: string; o
   const [interpretation, setInterpretation] = useState<Interpretation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [jobKey, setJobKey] = useState(0);
   const set = (key: keyof CompanyRunFields) => (event: { target: { value: string } }) => setFields(current => ({ ...current, [key]: event.target.value }));
   // The latest search of this project that left candidates for a follow-up batch (and was not continued yet).
   const { data: runs, refetch: refetchRuns } = useAsync(() => Promise.resolve(api.runs.listByProject(projectId)).catch(() => []), [projectId]);
   const runList = Array.isArray(runs) ? runs : [];
+  // A batch of extended processing is continued by its job, not by this button.
   const continuable = runList.find(run => {
+    if (typeof (run.stats ?? {}).jobId === 'string') return false;
     const state = (run.stats ?? {}).continuation as { remaining?: number } | null | undefined;
     return Boolean(state?.remaining) && !runList.some(other => (other.stats ?? {}).continuesRunId === run.id);
   });
@@ -112,6 +139,9 @@ export function CompanyRunPanel({ projectId, onStarted }: { projectId: string; o
     }
   }
 
+  const warnings = [...new Set([...(interpretation?.warnings ?? []), ...liveWarnings(fields)])];
+  const logicLists = LOGIC_FIELDS.filter(([list]) => split(fields[list] as string).length > 1);
+
   function interpret() {
     if (!fields.description.trim()) return;
     const result = interpretDescription(fields.description);
@@ -123,10 +153,18 @@ export function CompanyRunPanel({ projectId, onStarted }: { projectId: string; o
     event.preventDefault();
     const built = buildCompanyRunRequest(fields);
     if ('error' in built) { setError(built.error); return; }
+    const limits = fields.mode === 'search' && fields.extended ? buildJobLimits(fields.jobLimits) : null;
+    if (limits && 'error' in limits) { setError(limits.error); return; }
     setSubmitting(true);
     setError(null);
     try {
-      onStarted(await api.runs.startSourceRun(projectId, built.request));
+      if (limits) {
+        // Extended processing: the API answers at once; the batches run in the background (progress below).
+        await api.jobs.start(projectId, built.request, limits.limits);
+        setJobKey(key => key + 1);
+      } else {
+        onStarted(await api.runs.startSourceRun(projectId, built.request));
+      }
       await refetchRuns();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Kon de zoekopdracht niet starten.');
@@ -182,6 +220,11 @@ export function CompanyRunPanel({ projectId, onStarted }: { projectId: string; o
               {interpretation.unrecognized.length > 0 && <p className="mt-2 text-xs text-slate-600">Niet herkend (niet gebruikt): {interpretation.unrecognized.join(', ')}. Voeg ze zo nodig zelf toe als product, dienst of zoekterm.</p>}
             </div>
           )}
+          {warnings.length > 0 && (
+            <ul aria-label="Controleer je zoekcriteria" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              {warnings.map(warning => <li key={warning}>{warning}</li>)}
+            </ul>
+          )}
 
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {listField('query', 'Bedrijfsnaam of zoekterm', 'bijv. Voorbeeld Security')}
@@ -205,6 +248,24 @@ export function CompanyRunPanel({ projectId, onStarted }: { projectId: string; o
               </div>
             )}
           </div>
+
+          {logicLists.length > 0 && (
+            <fieldset>
+              <legend className="mb-1 text-sm font-medium text-slate-700">Combinatie van waarden</legend>
+              <div className="flex flex-wrap gap-4">
+                {logicLists.map(([list, label]) => (
+                  <label key={list} className="flex flex-col text-xs font-medium text-slate-500">
+                    {label}
+                    <select aria-label={`Combinatie ${label}`} value={fields.allOf.includes(list) ? 'all' : 'any'} className={selectClass}
+                      onChange={e => setFields(current => ({ ...current, allOf: e.target.value === 'all' ? [...current.allOf.filter(l => l !== list), list] : current.allOf.filter(l => l !== list) }))}>
+                      <option value="any">Eén van deze volstaat (of)</option>
+                      <option value="all">Allemaal vereist (en)</option>
+                    </select>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
 
           <fieldset>
             <legend className="mb-1 text-sm font-medium text-slate-700">Bedrijfsrol</legend>
@@ -233,13 +294,42 @@ export function CompanyRunPanel({ projectId, onStarted }: { projectId: string; o
             <p className="mt-1 text-xs text-slate-500">Niets aangevinkt: alle typen, ook webwinkels. Aangevinkt: minstens één van deze typen.</p>
           </fieldset>
 
+          <fieldset>
+            <legend className="mb-1 text-sm font-medium text-slate-700">Niet zoeken naar</legend>
+            <div className="flex flex-wrap gap-3">
+              {BUSINESS_TYPES.map(type => (
+                <label key={type} className="flex items-center gap-1.5 text-sm">
+                  <input type="checkbox" aria-label={`Uitsluiten: ${BUSINESS_TYPE_LABELS[type]}`} checked={fields.excludedBusinessTypes.includes(type)}
+                    onChange={e => setFields(current => ({ ...current, excludedBusinessTypes: e.target.checked ? [...current.excludedBusinessTypes, type] : current.excludedBusinessTypes.filter(t => t !== type) }))} />
+                  {BUSINESS_TYPE_LABELS[type]}
+                </label>
+              ))}
+            </div>
+            <p className="mt-1 text-xs text-slate-500">Een bedrijf dat duidelijk zo’n type is, wordt niet getoond; bij een enkele aanwijzing staat het erbij met een waarschuwing.</p>
+          </fieldset>
+
+          {fields.mode === 'search' && (
+            <fieldset className="flex flex-col gap-3">
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                <input type="checkbox" checked={fields.extended} onChange={e => setFields(current => ({ ...current, extended: e.target.checked }))} />
+                Uitgebreide verwerking op de achtergrond
+              </label>
+              {fields.extended && (
+                <>
+                  <JobLimitsFields fields={fields.jobLimits} onChange={jobLimits => setFields(current => ({ ...current, jobLimits }))} />
+                  <p className="text-xs text-slate-500">De zoekopdracht loopt in batches op de achtergrond binnen deze harde limieten. Alleen de eerste batch zoekt op het web; je kunt pauzeren, hervatten en stoppen.</p>
+                </>
+              )}
+            </fieldset>
+          )}
+
           <p className="text-xs text-slate-500">
             Een bedrijf dat actief is <strong>in</strong> een sector (branche) is iets anders dan een bedrijf dat <strong>levert aan</strong> een sector (afnemerssector).
             Vestigingsplaats en werkgebied worden apart beoordeeld; een .nl-adres alleen is geen bewijs.
           </p>
           <FieldError>{error}</FieldError>
           <div className="flex flex-wrap items-center gap-3">
-            <Button type="submit" disabled={submitting}>{submitting ? 'Bezig…' : fields.mode === 'website' ? 'Analyseer website' : 'Zoek bedrijven'}</Button>
+            <Button type="submit" disabled={submitting}>{submitting ? 'Bezig…' : fields.mode === 'website' ? 'Analyseer website' : fields.extended ? 'Start uitgebreide verwerking' : 'Zoek bedrijven'}</Button>
             {continuable && (
               <Button type="button" variant="secondary" onClick={handleContinue} disabled={submitting}>
                 Volgende batch onderzoeken ({remaining} kandidaten)
@@ -248,6 +338,9 @@ export function CompanyRunPanel({ projectId, onStarted }: { projectId: string; o
           </div>
           {continuable && <p className="text-xs text-slate-500">De vorige zoekopdracht vond meer kandidaat-bedrijven dan binnen het budget pasten. Een volgende batch onderzoekt de volgende, zonder opnieuw te zoeken.</p>}
         </form>
+        <div className="mt-4">
+          <CompanyJobProgress projectId={projectId} refreshKey={jobKey} onBatchFinished={run => { onStarted(run); void refetchRuns(); }} />
+        </div>
       </CardContent>
     </Card>
   );

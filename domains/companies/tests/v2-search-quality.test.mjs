@@ -202,3 +202,26 @@ test('route A stops searching when enough candidates were found and three querie
   assert.equal(provider.queries.length, 4, 'one query with the candidate, then three without anything new');
   assert.ok(source.stats().queriesNotExecuted.every(q => q.reason === 'geen nieuwe kandidaten meer'));
 });
+
+// ─── CSV export ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('CSV export: every cell quoted, formulas neutralised, no personal data, explanation per company', async () => {
+  const { companiesCsv, csvCell } = await import('../dist/index.js');
+  assert.equal(csvCell('=HYPERLINK("http://x")'), `"'=HYPERLINK(""http://x"")"`);
+  for (const start of ['=', '+', '-', '@', '\t', '\r']) assert.ok(csvCell(`${start}1`).startsWith(`"'`), JSON.stringify(start));
+  assert.equal(csvCell('regel 1\nregel 2'), '"regel 1 regel 2"');
+  assert.equal(csvCell(null), '""');
+  const installer = await profileOf('https://www.veilig-zuid.example/');
+  const evaluated = { ...installer, name: '=cmd|calc', search: { criteria: 'Product: camerasystemen', status: 'confirmed', checkedAt: CHECKED, matches: evaluateCompany(installer, criteria({ products: ['camerasystemen'], provinces: ['NL-ZH'] }), CHECKED).matches } };
+  const csv = companiesCsv([evaluated]);
+  assert.ok(csv.startsWith('﻿"Naam";"Website"'));
+  const [header, row] = csv.slice(1).trim().split('\r\n');
+  assert.equal(header.split(';').length, row.split(';').length);
+  assert.match(row, /^"'=cmd\|calc"/, 'a company name cannot run as a formula');
+  assert.match(row, /Volledig onderbouwd/);
+  assert.match(row, /Bevestigd: levert camerasystemen\. Bevestigd: werkgebied Zuid-Holland\./);
+  assert.match(row, /zorginstellingen \(aanbod\)/);
+  assert.doesNotMatch(csv, /@veilig-zuid|0101234567|06 12345678|jan\.jansen/, 'no e-mail addresses or phone numbers');
+  assert.match(row, /12345678/, 'the stated KvK number, labelled as not verified in the header');
+  assert.match(header, /niet geverifieerd/);
+});

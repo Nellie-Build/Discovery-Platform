@@ -10,7 +10,7 @@ import {
   type DiscoveryCrawler, type HttpTransport, type SourceSearchProvider,
 } from '@discovery-platform/core';
 import {
-  buildCompanyProfile, companyProfileSignals, createCompanySearchSource, createCompanyWebsiteSource, criteriaFrom, evaluateCompany, findPlace, findProvince,
+  buildCompanyProfile, companiesCsv, companyProfileSignals, hasSubject, MAX_EXPORT_ROWS, createCompanySearchSource, createCompanyWebsiteSource, criteriaFrom, evaluateCompany, findPlace, findProvince,
   isPublicAuthority, looksLikeCompanySite, storedCompanyFacts, storedCompanyIdentityKey, summarizeCriteria, updateStoredCompany, withSearch,
   COMPANY_SEARCH_SOURCE_ID, COMPANY_WEBSITE_SOURCE_ID, type CompanyFacts, type CompanySearchCriteria, type CompanySource, type MatchStatus,
 } from '@discovery-platform/domain-companies';
@@ -68,6 +68,25 @@ export function createCompaniesAdapter(options: CompaniesAdapterOptions = {}): D
 
   return {
     id: 'companies',
+    exportCsv: {
+      maxRows: MAX_EXPORT_ROWS,
+      build(records) {
+        const companies = records.map(record => storedCompanyFacts(record.domainData)).filter((facts): facts is CompanyFacts => facts !== null);
+        return { csv: companiesCsv(companies), filename: `bedrijven-${new Date().toISOString().slice(0, 10)}.csv` };
+      },
+    },
+    // Only a search continues in batches (the candidates it found); one website is one batch.
+    backgroundJobs: {
+      validateRequest(input) {
+        const route = input.mode === 'source' ? input.sourceId : input.mode === 'website' ? COMPANY_WEBSITE_SOURCE_ID : COMPANY_SEARCH_SOURCE_ID;
+        if (route !== COMPANY_SEARCH_SOURCE_ID) return 'Uitgebreide verwerking is alleen mogelijk voor een zoekopdracht, niet voor één website.';
+        try {
+          const criteria = criteriaFrom(input.mode === 'branch' ? branchFilters(input) : input.filters);
+          if (!hasSubject(criteria)) return 'Geef aan wat voor bedrijven je zoekt: een branche, product, dienst, specialisatie, afnemerssector, rol of zoekterm.';
+        } catch (error) { return describe(error); }
+        return null;
+      },
+    },
     async runDiscovery(input: DiscoveryRunInput): Promise<DiscoveryRunOutcome> {
       const start = Date.now();
       const config = input.runConfig;

@@ -8,7 +8,8 @@ export const api = {
   workspaces: { listMine: vi.fn(), get: vi.fn(), create: vi.fn(), modules: vi.fn() },
   projects: { listByWorkspace: vi.fn(), get: vi.fn(), create: vi.fn(), delete: vi.fn() },
   runs: { start: vi.fn(), startBranchSearch: vi.fn(), startSourceRun: vi.fn(), continueRun: vi.fn(), listByProject: vi.fn(), get: vi.fn() },
-  records: { listByProject: vi.fn(), get: vi.fn() },
+  records: { listByProject: vi.fn(), get: vi.fn(), exportCsv: vi.fn() },
+  jobs: { start: vi.fn(), listByProject: vi.fn(), get: vi.fn(), pause: vi.fn(), resume: vi.fn(), stop: vi.fn() },
   admin: {
     modules: { list: vi.fn(), setEnabled: vi.fn() },
     modulePackages: { list: vi.fn() },

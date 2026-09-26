@@ -106,5 +106,5 @@ export async function startTestApp({ pages, apiKey, devAuthEmail, searchProvider
   // workspace-access.ts), the default client sends it automatically, matching how those
   // pre-existing tests were written before per-workspace auth existed.
   const anonymous = createClient(apiKey ? { 'x-api-key': apiKey } : {});
-  return { request: anonymous.request, registerAndLogin: anonymous.registerAndLogin, createClient, close, db };
+  return { request: anonymous.request, registerAndLogin: anonymous.registerAndLogin, createClient, close, db, baseUrl };
 }

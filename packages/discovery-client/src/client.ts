@@ -1,7 +1,7 @@
 import {
   ApiError,
   type PublicUser, type Workspace, type WorkspaceMembership, type Project, type AdminProject,
-  type DiscoveryRun, type DiscoveryRecord, type RecordWithDetails, type BranchSearchInput, type SourceRunInput,
+  type DiscoveryRun, type DiscoveryJob, type DiscoveryJobLimits, type DiscoveryRecord, type RecordWithDetails, type BranchSearchInput, type SourceRunInput,
   type DiscoveryModuleDefinition, type DiscoveryRunConfig, type VacancySearchFilters,
   type WorkspaceModule, type WorkspaceModuleAccess, type AdminWorkspaceModules, type ModulePackage,
 } from './types.js';
@@ -25,6 +25,20 @@ async function request<T>(baseUrl: string, method: string, path: string, body?: 
     throw new ApiError(response.status, json?.error ?? 'unknown_error', json?.message ?? `Request failed with status ${response.status}.`);
   }
   return json as T;
+}
+
+/** A file download (e.g. a CSV export): the body as a Blob and the file name the server suggests. */
+async function download(baseUrl: string, path: string, body: unknown): Promise<{ blob: Blob; filename: string | null }> {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    const json = text ? (() => { try { return JSON.parse(text); } catch { return null; } })() : null;
+    throw new ApiError(response.status, json?.error ?? 'unknown_error', json?.message ?? `Request failed with status ${response.status}.`);
+  }
+  const disposition = response.headers.get('content-disposition') ?? '';
+  return { blob: await response.blob(), filename: /filename="([^"]+)"/.exec(disposition)?.[1] ?? null };
 }
 
 /**
@@ -82,6 +96,17 @@ export function createApiClient({ baseUrl }: ApiClientOptions) {
         return req<DiscoveryRecord[]>('GET', `/projects/${projectId}/records${query}`);
       },
       get: (id: string) => req<RecordWithDetails>('GET', `/records/${id}`),
+      /** CSV export of the project's records: the listed ids only (e.g. the filtered view), or all when omitted. */
+      exportCsv: (projectId: string, recordIds?: string[]) => download(baseUrl, `/projects/${projectId}/export`, recordIds ? { recordIds } : {}),
+    },
+    /** Extended processing: a search in the background, in batches, within the user's own limits. Never started by itself. */
+    jobs: {
+      start: (projectId: string, request: SourceRunInput, limits: Partial<DiscoveryJobLimits>) => req<DiscoveryJob>('POST', `/projects/${projectId}/jobs`, { request, limits }),
+      listByProject: (projectId: string) => req<DiscoveryJob[]>('GET', `/projects/${projectId}/jobs`),
+      get: (id: string) => req<DiscoveryJob>('GET', `/jobs/${id}`),
+      pause: (id: string) => req<DiscoveryJob>('POST', `/jobs/${id}/pause`),
+      resume: (id: string) => req<DiscoveryJob>('POST', `/jobs/${id}/resume`),
+      stop: (id: string) => req<DiscoveryJob>('POST', `/jobs/${id}/stop`),
     },
     /** Admin-only — every method 403s for a non-admin user (see apps/api/src/admin-access.ts). */
     admin: {

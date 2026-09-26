@@ -12,6 +12,7 @@ export { NETHERLANDS, COUNTRIES, findPlace, findProvince, provinceLabel, provinc
 export { analyzeCompanyPage, termSpecs, pageTypeOf, rankCompanyCandidate, COMPANY_LINK_TIER, CONTACT_NORMALIZERS, type PageAnalysis, type TermHit, type TermSpec, type OrganizationData, type CommerceSignals } from './page-analysis.js';
 export { buildCompanyProfile, businessTypesOf, evaluateCompany, withSearch, looksLikeCompanySite, isPublicAuthority, type Evaluation, type ProfileContext } from './profile.js';
 export { registrableDomain, companyIdentity, companyIdentityKey, storedCompanyIdentityKey, storedCompanyFacts, updateStoredCompany, companyProfileSignals, type CompanyUpdate } from './identity.js';
+export { companiesCsv, csvCell, MAX_EXPORT_ROWS } from './export.js';
 export { DEFAULT_SEARCH_QUERIES, MAX_SEARCH_QUERIES, buildCompanySearchQueries, excludedHostKind, type PlannedQuery, type ExcludedHostKind } from './search-plan.js';
 export {
   createCompanySearchSource, createCompanyWebsiteSource, criteriaFrom, parseWebsiteUrl, continuationCursor, parseContinuationCursor, MAX_CONTINUATION_CANDIDATES, COMPANY_SEARCH_SOURCE_ID, COMPANY_WEBSITE_SOURCE_ID,

@@ -15,3 +15,4 @@ export { UsersRepository, toPublicUser, type User, type PublicUser } from './rep
 export { WorkspaceMembersRepository, type WorkspaceMember } from './repositories/workspace-members.js';
 export { ModulesRepository, type DiscoveryModuleDefinition, type WorkspaceModuleAccess, type ModulePackage } from './repositories/modules.js';
 export { SourcesRepository, type SourceDefinition } from './repositories/sources.js';
+export { DiscoveryJobsRepository, ActiveJobExistsError, ACTIVE_JOB_STATUSES, type DiscoveryJob, type DiscoveryJobStatus } from './repositories/jobs.js';

@@ -57,7 +57,7 @@ describe('companies quality in the web app', () => {
 
   it('the list shows each company\'s business types and filters on them', async () => {
     render(<MemoryRouter><RecordsTable records={[record('shop', [{ type: 'consumer_webshop', strength: 'strong' }]), record('groothandel', [{ type: 'b2b_supplier', strength: 'strong' }, { type: 'distributor', strength: 'strong' }])]} emptyTitle="unused" /></MemoryRouter>);
-    expect(within(screen.getByRole('row', { name: /groothandel/ })).getByText('Zakelijke leverancier · Distributeur / groothandel')).toBeInTheDocument();
+    expect(within(screen.getByRole('row', { name: /groothandel/ })).getByText('Zakelijke leverancier · Distributeur')).toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText('Type bedrijf'), 'consumer_webshop');
     expect(screen.getByText('1 van 2 bedrijven')).toBeInTheDocument();
     expect(screen.queryByRole('row', { name: /groothandel/ })).not.toBeInTheDocument();

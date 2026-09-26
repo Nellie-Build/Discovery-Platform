@@ -14,6 +14,8 @@ import { createWorkspacesRouter } from './routes/workspaces.js';
 import { createProjectsRouter } from './routes/projects.js';
 import { createRunsRouter } from './routes/runs.js';
 import { createRecordsRouter } from './routes/records.js';
+import { createJobsRouter } from './routes/jobs.js';
+import { createJobRunner } from './jobs/job-runner.js';
 import { createAdminRouter } from './routes/admin.js';
 import { defaultDomainRegistry, type DomainRegistry } from './domain-registry.js';
 
@@ -84,11 +86,12 @@ export function createApp(pool: TransactionCapable, options: CreateAppOptions): 
   // Every route below this line requires either a logged-in session or the dev API key (see
   // workspace-access.ts) — health and /auth/* above stay reachable either way.
   app.use(API_PREFIX, authenticate(options.apiKey));
-  if (options.rateLimiting) app.use(`${API_PREFIX}/projects/:id/runs`, runsRateLimiter);
+  if (options.rateLimiting) app.use([`${API_PREFIX}/projects/:id/runs`, `${API_PREFIX}/projects/:id/jobs`], runsRateLimiter);
   app.use(API_PREFIX, createWorkspacesRouter(pool));
   app.use(API_PREFIX, createProjectsRouter(pool, domainRegistry));
   app.use(API_PREFIX, createRunsRouter(pool, domainRegistry));
-  app.use(API_PREFIX, createRecordsRouter(pool));
+  app.use(API_PREFIX, createJobsRouter(pool, domainRegistry));
+  app.use(API_PREFIX, createRecordsRouter(pool, domainRegistry));
   app.use(API_PREFIX, createAdminRouter(pool));
   // Nothing under /api/v1 matched — a clean JSON 404, never the SPA fallback below.
   app.use(API_PREFIX, (_req, res) => { res.status(404).json({ error: 'not_found', message: 'Route not found.' }); });
@@ -150,6 +153,15 @@ async function main() {
     rateLimiting: isProduction,
     webDistDir: process.env.WEB_DIST_DIR || undefined,
   });
+  // Background batches of jobs a user started (extended processing). The runner only continues jobs that exist; it never
+  // creates one. DISCOVERY_JOBS_WORKER=0 turns it off for this process (e.g. a second API instance without a worker).
+  if (process.env.DISCOVERY_JOBS_WORKER !== '0') {
+    const concurrency = Number.parseInt(process.env.DISCOVERY_JOBS_CONCURRENCY ?? '1', 10);
+    createJobRunner(pool, defaultDomainRegistry, {
+      concurrency: Number.isFinite(concurrency) ? concurrency : 1,
+      log: (message, fields) => console.log(JSON.stringify({ message, ...fields })),
+    }).start();
+  }
   const port = Number(process.env.PORT ?? process.env.API_PORT ?? '3000');
   app.listen(port, bypass ? '127.0.0.1' : '::', () => {
     console.log(`Discovery Platform API listening on http://127.0.0.1:${port}${API_PREFIX}`);

@@ -6,13 +6,13 @@ import { runMigrations } from '../dist/migrate.js';
 test('runMigrations applies every migration on a clean database and creates every table', async () => {
   const db = new PGlite();
   const { applied } = await runMigrations(db);
-  assert.deepEqual(applied, ['001_init', '002_auth', '003_projects_soft_delete', '004_admin_modules', '005_source_registry', '006_run_records', '007_tenders_module', '008_workspace_modules', '009_module_packages', '010_companies_module']);
+  assert.deepEqual(applied, ['001_init', '002_auth', '003_projects_soft_delete', '004_admin_modules', '005_source_registry', '006_run_records', '007_tenders_module', '008_workspace_modules', '009_module_packages', '010_companies_module', '011_discovery_jobs']);
 
   const { rows } = await db.query(
     "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
   );
   assert.deepEqual(rows.map(r => r.table_name), [
-    'discovery_records', 'discovery_run_records', 'discovery_runs', 'module_package_modules', 'module_packages', 'modules', 'projects',
+    'discovery_jobs', 'discovery_records', 'discovery_run_records', 'discovery_runs', 'module_package_modules', 'module_packages', 'modules', 'projects',
     'record_contacts', 'record_sources', 'schema_migrations', 'session', 'sources', 'users', 'workspace_members', 'workspace_module_access',
     'workspace_modules', 'workspaces',
   ]);

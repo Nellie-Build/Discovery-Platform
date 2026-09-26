@@ -95,6 +95,17 @@ export interface DomainAdapter {
    * adapter decided is new.
    */
   runDiscovery(input: DiscoveryRunInput): Promise<DiscoveryRunOutcome>;
+  /**
+   * Extended processing (background jobs, jobs/job-runner.ts): only an adapter that can continue a search in batches
+   * without searching again declares this. `validateRequest` checks a job's request up front and returns a user-facing
+   * reason when it cannot run as a job (null when it can), so a user never waits for a batch that is bound to fail.
+   */
+  backgroundJobs?: { validateRequest(input: DiscoveryRunInput): string | null };
+  /**
+   * CSV export of a project's records (routes/records.ts): the domain decides the columns and leaves out personal data;
+   * apps/api only checks access and the row limit and serves the file.
+   */
+  exportCsv?: { maxRows: number; build(records: Array<{ id: string; displayName: string | null; domainData: Record<string, unknown> }>): { csv: string; filename: string } };
 }
 
 /** The registry a real deployment uses — real HTTP fetches. Tests build their own registry
