@@ -18,7 +18,11 @@ interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
 export function Badge({ className, tone = 'neutral', ...props }: BadgeProps) {
   return (
     <span
-      className={clsx('inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold', toneClasses[tone], className)}
+      className={clsx(
+        'inline-flex shrink-0 items-center whitespace-nowrap rounded-md px-2 py-0.5 text-xs font-medium',
+        toneClasses[tone],
+        className,
+      )}
       {...props}
     />
   );
@@ -28,10 +32,19 @@ export function Badge({ className, tone = 'neutral', ...props }: BadgeProps) {
  * the one place that mapping lives, so a status color is never invented ad hoc per screen. */
 export function statusBadgeTone(status: string): BadgeTone {
   switch (status) {
-    case 'succeeded': case 'active': case 'ready': return 'success';
-    case 'running': case 'pending': case 'queued': return 'info';
-    case 'failed': return 'danger';
-    case 'partial': return 'warning';
-    default: return 'neutral';
+    case 'succeeded':
+    case 'active':
+    case 'ready':
+      return 'success';
+    case 'running':
+    case 'pending':
+    case 'queued':
+      return 'info';
+    case 'failed':
+      return 'danger';
+    case 'partial':
+      return 'warning';
+    default:
+      return 'neutral';
   }
 }

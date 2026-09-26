@@ -28,8 +28,9 @@ function OneDomainTable({ domain, records }: { domain: string; records: Discover
 
 function Table({ renderer, records }: { renderer: DomainRenderer; records: DiscoveryRecord[] }) {
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-      <table className="w-full min-w-[640px] divide-y divide-slate-200 text-sm">
+    <div className="relative overflow-x-auto rounded-xl border border-slate-200 bg-white" role="region" aria-label={`${renderer.recordLabelPlural}: resultatentabel`} tabIndex={0}>
+      {renderer.tableClassName && <p className="sticky left-0 px-4 py-2 text-xs text-slate-500 xl:hidden">Scroll horizontaal om alle kolommen en bronlinks te bekijken.</p>}
+      <table className={`w-full min-w-[640px] divide-y divide-slate-200 text-sm ${renderer.tableClassName ?? ''}`}>
         <thead className="bg-slate-50">
           <tr>
             {renderer.columns.map(column => (

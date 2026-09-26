@@ -168,6 +168,7 @@ function PublicationHistory({ record }: { record: RecordWithDetails }) {
 
 const tendersRenderer: DomainRenderer = {
   recordLabelPlural: 'Tenders',
+  tableClassName: 'tender-results-table',
   columns: [
     { key: 'title', label: 'Aanbesteding' },
     { key: 'authority', label: 'Aanbestedende dienst' },
