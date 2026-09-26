@@ -38,7 +38,8 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
       const state = stats.continuation as { cursor?: unknown } | null | undefined;
       const original = stats.criteria as Record<string, unknown> | undefined;
       if (!state || typeof state.cursor !== 'string' || !original) throw badRequest('nothing_to_continue', 'Deze run heeft geen vervolgbatch.');
-      if ((await runs.listRunsByProject(project.id)).some(other => (other.stats as Record<string, unknown> | null)?.continuesRunId === previous.id)) {
+      // A follow-up that failed (an error, or the loser of a simultaneous request) does not use up the continuation.
+      if ((await runs.listRunsByProject(project.id)).some(other => other.status !== 'failed' && (other.stats as Record<string, unknown> | null)?.continuesRunId === previous.id)) {
         throw new HttpError(409, 'already_continued', 'Deze run is al voortgezet.');
       }
       const { mode: _mode, ...request } = original;
@@ -91,7 +92,7 @@ export function createRunsRouter(pool: TransactionCapable, domainRegistry: Domai
     res.locals.runId = run.id;
     if (continuation) {
       // Two simultaneous continuation requests: only the first-created run continues, the other stops at once.
-      const siblings = (await runs.listRunsByProject(project.id)).filter(other => (other.stats as Record<string, unknown> | null)?.continuesRunId === continuation!.fromRunId);
+      const siblings = (await runs.listRunsByProject(project.id)).filter(other => other.status !== 'failed' && (other.stats as Record<string, unknown> | null)?.continuesRunId === continuation!.fromRunId);
       const first = siblings.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime() || a.id.localeCompare(b.id))[0];
       if (first && first.id !== run.id) {
         const failed = await runs.markFailed(run.id, 'Deze run is al voortgezet.', initialStats);

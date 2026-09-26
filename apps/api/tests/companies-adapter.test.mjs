@@ -200,3 +200,19 @@ test('budgets per batch: every batch keeps the original run configuration and it
     assert.ok(records.every(r => r.domain_data.sources.length <= 2), 'no company profile was read beyond the page budget');
   } finally { await t.close(); }
 });
+
+test('batches: a follow-up that failed does not use up the continuation; it can be started again', async () => {
+  const t = await app();
+  try {
+    const first = await t.start({ sourceId: 'search', filters: { ...CRITERIA, maxCompanies: 1 }, runConfig: runConfig() });
+    const failedAttempt = (await t.request('POST', `/projects/${t.project.id}/runs`, { body: { continueFromRunId: first.id } })).body;
+    // Simulate that this follow-up failed (e.g. the adapter or the database gave an error).
+    await t.db.query("UPDATE discovery_runs SET status = 'failed', stats = stats - 'continuation' WHERE id = $1", [failedAttempt.id]);
+    const retry = await t.request('POST', `/projects/${t.project.id}/runs`, { body: { continueFromRunId: first.id } });
+    assert.equal(retry.status, 201);
+    assert.equal(retry.body.stats.batch, 2);
+    assert.notEqual(retry.body.status, 'failed');
+    const again = await t.request('POST', `/projects/${t.project.id}/runs`, { body: { continueFromRunId: first.id } });
+    assert.deepEqual([again.status, again.body.error], [409, 'already_continued'], 'a successful follow-up still uses it up');
+  } finally { await t.close(); }
+});
