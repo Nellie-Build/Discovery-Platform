@@ -1,10 +1,11 @@
 import {
-  COMPANY_ROLES, CriteriaError, KIND_LABELS, NETHERLANDS, ROLE_LABELS, conceptsOf, interpretDescription, parseCriteria, provinceLabel,
-  type CompanyRole, type Interpretation,
+  BUSINESS_TYPES, BUSINESS_TYPE_LABELS, COMPANY_ROLES, CriteriaError, KIND_LABELS, NETHERLANDS, ROLE_LABELS, conceptsOf, interpretDescription, parseCriteria, provinceLabel,
+  type BusinessType, type CompanyRole, type Interpretation,
 } from '@discovery-platform/domain-companies/criteria';
 import { useState, type FormEvent } from 'react';
 import { ApiError, type DiscoveryRun, type SourceRunInput } from '@discovery-platform/client';
 import { api } from '../../lib/api';
+import { useAsync } from '../../hooks/use-async';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Input, Label, FieldError } from '../../components/ui/input';
@@ -31,6 +32,7 @@ export interface CompanyRunFields {
   specialisations: string;
   customerSectors: string;
   roles: CompanyRole[];
+  businessTypes: BusinessType[];
   provinces: string;
   places: string;
   extra: string;
@@ -40,7 +42,7 @@ export interface CompanyRunFields {
 }
 
 export const defaultCompanyRunFields = (): CompanyRunFields => ({
-  mode: 'search', description: '', query: '', industries: '', products: '', services: '', specialisations: '', customerSectors: '', roles: [],
+  mode: 'search', description: '', query: '', industries: '', products: '', services: '', specialisations: '', customerSectors: '', roles: [], businessTypes: [],
   provinces: '', places: '', extra: '', exclusions: '', url: '', target: '10',
 });
 
@@ -53,7 +55,7 @@ export function applyInterpretation(fields: CompanyRunFields, interpretation: In
   const c = interpretation.criteria;
   return {
     ...fields, industries: join(c.industries), products: join(c.products), services: join(c.services), specialisations: join(c.specialisations),
-    customerSectors: join(c.customerSectors), roles: c.roles, provinces: join(c.provinces.map(id => provinceLabel(id) ?? id)), places: join(c.places), exclusions: join(c.exclusions),
+    customerSectors: join(c.customerSectors), roles: c.roles, businessTypes: c.businessTypes ?? [], provinces: join(c.provinces.map(id => provinceLabel(id) ?? id)), places: join(c.places), exclusions: join(c.exclusions),
   };
 }
 
@@ -63,7 +65,7 @@ export function buildCompanyRunRequest(fields: CompanyRunFields): { request: Sou
   if (!Number.isInteger(target) || target < 1 || target > MAX_TARGET) return { error: `Het gewenste aantal is een getal van 1 tot ${MAX_TARGET}.` };
   const raw = {
     query: fields.query.trim() || undefined, industries: split(fields.industries), products: split(fields.products), services: split(fields.services),
-    specialisations: split(fields.specialisations), customerSectors: split(fields.customerSectors), roles: fields.roles, country: 'NL',
+    specialisations: split(fields.specialisations), customerSectors: split(fields.customerSectors), roles: fields.roles, businessTypes: fields.businessTypes, country: 'NL',
     provinces: split(fields.provinces), places: split(fields.places), extra: fields.extra.trim() || undefined, exclusions: split(fields.exclusions),
     description: fields.description.trim() || undefined,
   };
@@ -78,7 +80,7 @@ export function buildCompanyRunRequest(fields: CompanyRunFields): { request: Sou
   return { request: { sourceId: 'search', filters, runConfig: { targetRecords: target } } };
 }
 
-const RECOGNIZED_KIND: Record<string, string> = { ...KIND_LABELS, country: 'Land', province: 'Provincie', place: 'Plaats', exclusion: 'Uitsluiting' };
+const RECOGNIZED_KIND: Record<string, string> = { ...KIND_LABELS, business_type: 'Type bedrijf', country: 'Land', province: 'Provincie', place: 'Plaats', exclusion: 'Uitsluiting' };
 const selectClass = 'block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-400';
 
 export function CompanyRunPanel({ projectId, onStarted }: { projectId: string; onStarted: (run: DiscoveryRun) => void }) {
@@ -87,6 +89,28 @@ export function CompanyRunPanel({ projectId, onStarted }: { projectId: string; o
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const set = (key: keyof CompanyRunFields) => (event: { target: { value: string } }) => setFields(current => ({ ...current, [key]: event.target.value }));
+  // The latest search of this project that left candidates for a follow-up batch (and was not continued yet).
+  const { data: runs, refetch: refetchRuns } = useAsync(() => Promise.resolve(api.runs.listByProject(projectId)).catch(() => []), [projectId]);
+  const runList = Array.isArray(runs) ? runs : [];
+  const continuable = runList.find(run => {
+    const state = (run.stats ?? {}).continuation as { remaining?: number } | null | undefined;
+    return Boolean(state?.remaining) && !runList.some(other => (other.stats ?? {}).continuesRunId === run.id);
+  });
+  const remaining = Number(((continuable?.stats ?? {}).continuation as { remaining?: number } | undefined)?.remaining ?? 0);
+
+  async function handleContinue() {
+    if (!continuable) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      onStarted(await api.runs.continueRun(projectId, continuable.id));
+      await refetchRuns();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Kon de volgende batch niet starten.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   function interpret() {
     if (!fields.description.trim()) return;
@@ -103,6 +127,7 @@ export function CompanyRunPanel({ projectId, onStarted }: { projectId: string; o
     setError(null);
     try {
       onStarted(await api.runs.startSourceRun(projectId, built.request));
+      await refetchRuns();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Kon de zoekopdracht niet starten.');
     } finally {
@@ -194,14 +219,34 @@ export function CompanyRunPanel({ projectId, onStarted }: { projectId: string; o
             </div>
           </fieldset>
 
+          <fieldset>
+            <legend className="mb-1 text-sm font-medium text-slate-700">Type bedrijf</legend>
+            <div className="flex flex-wrap gap-3">
+              {BUSINESS_TYPES.map(type => (
+                <label key={type} className="flex items-center gap-1.5 text-sm">
+                  <input type="checkbox" checked={fields.businessTypes.includes(type)}
+                    onChange={e => setFields(current => ({ ...current, businessTypes: e.target.checked ? [...current.businessTypes, type] : current.businessTypes.filter(t => t !== type) }))} />
+                  {BUSINESS_TYPE_LABELS[type]}
+                </label>
+              ))}
+            </div>
+            <p className="mt-1 text-xs text-slate-500">Niets aangevinkt: alle typen, ook webwinkels. Aangevinkt: minstens één van deze typen.</p>
+          </fieldset>
+
           <p className="text-xs text-slate-500">
             Een bedrijf dat actief is <strong>in</strong> een sector (branche) is iets anders dan een bedrijf dat <strong>levert aan</strong> een sector (afnemerssector).
             Vestigingsplaats en werkgebied worden apart beoordeeld; een .nl-adres alleen is geen bewijs.
           </p>
           <FieldError>{error}</FieldError>
-          <div>
+          <div className="flex flex-wrap items-center gap-3">
             <Button type="submit" disabled={submitting}>{submitting ? 'Bezig…' : fields.mode === 'website' ? 'Analyseer website' : 'Zoek bedrijven'}</Button>
+            {continuable && (
+              <Button type="button" variant="secondary" onClick={handleContinue} disabled={submitting}>
+                Volgende batch onderzoeken ({remaining} kandidaten)
+              </Button>
+            )}
           </div>
+          {continuable && <p className="text-xs text-slate-500">De vorige zoekopdracht vond meer kandidaat-bedrijven dan binnen het budget pasten. Een volgende batch onderzoekt de volgende, zonder opnieuw te zoeken.</p>}
         </form>
       </CardContent>
     </Card>
@@ -227,7 +272,8 @@ export function CompanyRunSummary({ run }: { run: DiscoveryRun }) {
   if (typeof stats.criteriaSummary === 'string') rows.push(['Zoekcriteria', stats.criteriaSummary]);
   if (isSearch) rows.push(
     ['Zoekopdrachten', Array.isArray(stats.queries) ? stats.queries.length : 0], ['Zoekresultaten', num(stats.searchResults)],
-    ['Kandidaat-bedrijven', num(stats.companyCandidates)], ['Onderzocht', num(stats.companiesResearched)], ['Niet onderzocht (budget)', num(stats.candidatesNotResearched)],
+    ['Kandidaat-bedrijven', num(stats.companyCandidates)], ['Onderzocht', num(stats.companiesResearched)], ['Wacht op vervolgbatch', num(stats.candidatesNotResearched)],
+    ...(num(stats.batch) > 1 ? [['Batch', num(stats.batch)] as [string, number]] : []),
   );
   rows.push(
     ['Pagina’s gelezen', num(stats.pagesVisited)], ['Bevestigde match', num(byStatus.confirmed)], ['Mogelijke match', num(byStatus.possible)],

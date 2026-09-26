@@ -28,6 +28,21 @@ An activity is **strong** when its own site states it specifically (a heading, t
 
 Per criterion: **confirmed** = strong evidence on the company's own site; **possible** = weak evidence, or only the search result snippet; **insufficient** = nothing found. Several values of one kind are alternatives ("CCTV of toegangscontrole": either product will do); different kinds all apply (product AND customer sector AND region). Overall: confirmed when every kind is confirmed by at least one of its values; insufficient when no subject kind (what the company does) is at least possible; otherwise possible. An exclusion that the site shows strongly removes the company. Public authorities (gemeente, provincie, ministerie, ...) are not companies and are skipped by the search route.
 
+## Stricter evidence
+
+- **Related terms** (`Concept.related`): broader or neighbouring terms ("onderwijshuisvesting", "scholenbouw" and "schoolgebouwen" for school renovation; "software" for business software; "overheid" for municipalities; "gezondheidszorg" for care institutions). A page that only uses these gives a *related* activity: shown as a lead, always weak, at most a possible match with the note that it does not prove the criterion, and never used to expand a search or to interpret a description.
+- **Menu is not content**: the navigation, header, footer and side bars (repeated on every page) are separated from a page's own content. A term only in the menu is weak. Strong needs the page's own title or a content heading, its URL slug, or at least two content sentences across the site.
+- **Customer sectors**: strong only with a sentence saying the company supplies or serves the sector, or a heading on its sector/project pages.
+- **Re-assessment**: when a later run reads the same pages again, the current judgement replaces the stored one (also downwards); evidence on pages not read again is kept.
+
+## Business types
+
+Every profile has `businessTypes`: *zakelijke leverancier* (business wording: zakelijke klanten, excl. btw, offerte aanvragen, dealers, voor installateurs, ...), *consumentenwebwinkel* (a shopping cart with prices or product data, or many prices with consumer wording), *fabrikant*, *distributeur/groothandel* and *dienstverlener* (from the roles and services found), each with strength and the signals behind it. A company can be several. `businessTypes` is also an optional criterion (alternatives, e.g. "zakelijke leveranciers" or "webwinkels" in a description) and a list filter. **Web shops are never excluded by default.**
+
+## Batches (continuing a search)
+
+A search that finds more candidates than fit in one run (budget, time) stores the not-yet-researched candidates as the run's continuation (`stats.continuation`, at most 100). `POST /projects/:id/runs { continueFromRunId }` starts the next batch: the server reads the earlier run's own request and cursor from the database (the client cannot change criteria or hand in candidates), checks project, module access and that the run was not continued before (409 `already_continued`; of two simultaneous requests only the first continues), and runs a normal bounded run (its own time limit, company budget, dedupe against existing records) **without searching again**. Each batch reports `batch`, `continuesRunId` and how many candidates are still waiting; the Companies form shows "Volgende batch onderzoeken". Other modules are unaffected (an adapter only continues when it returned a continuation).
+
 ## Geography
 
 A place of establishment is an address the company publishes (structured data or its contact/about/home pages); a project or reference address is never one. The service area comes from explicit statements ("werkgebied", "landelijk", "actief in ..."). A province criterion is confirmed by an establishment in that province or an explicit service area there; a national service area is only possible; a .nl domain is never evidence. A place criterion is confirmed by an establishment or explicit service area in that place; the same province or a national area is only possible.

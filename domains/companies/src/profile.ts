@@ -1,11 +1,11 @@
 import type {
-  Activity, CompanyFacts, CompanyLocation, CompanySource, CriterionMatch, EvidenceQuote, MatchStatus, ServiceArea, SourceType,
+  Activity, BusinessTypeEvidence, CompanyFacts, CompanyLocation, CompanySource, CriterionMatch, EvidenceQuote, MatchStatus, ServiceArea, SourceType,
 } from './company-facts.js';
 import { LIST_OF, summarizeCriteria, type CompanySearchCriteria } from './criteria.js';
 import { findPlace, provinceLabel } from './geography.js';
 import type { PageAnalysis, TermHit } from './page-analysis.js';
 import { companyIdentity } from './identity.js';
-import { COMPANY_ROLES, ROLE_LABELS, expandValue, findConcept, type CompanyRole, type ConceptKind } from './vocabulary.js';
+import { BUSINESS_TYPES, BUSINESS_TYPE_LABELS, COMPANY_ROLES, ROLE_LABELS, expandValue, findConcept, type BusinessType, type CompanyRole, type ConceptKind } from './vocabulary.js';
 import { normalizeText, termPattern, uniqueStrings } from './text.js';
 
 /**
@@ -36,11 +36,60 @@ function brandFromTitle(title: string | null, domainLabel: string): string | nul
   return segments.find(segment => normalizeText(segment).replace(/[^a-z0-9]/g, '').includes(label.slice(0, 6))) ?? null;
 }
 
-function strengthOf(hit: TermHit[], kind: ConceptKind): Activity['strength'] {
-  const pages = hit.length;
-  const count = hit.reduce((sum, h) => sum + h.count, 0);
-  if (kind === 'customer_sector') return hit.some(h => h.supplyContext) ? 'strong' : 'weak';
-  return hit.some(h => h.structural) || pages >= 2 || count >= 3 ? 'strong' : 'weak';
+/**
+ * Strong evidence is specific: the activity is the subject of a page (its title, a content heading or its address) or the
+ * site's own content says it in at least two sentences. A menu item alone, one passing sentence, or a broader related
+ * term ("onderwijshuisvesting" for school renovation) is weak. A customer sector needs a sentence saying the company
+ * supplies it, or a heading of its sector/project pages.
+ */
+function strengthOf(hits: TermHit[], kind: ConceptKind): Activity['strength'] {
+  if (hits.some(h => h.related)) return 'weak';
+  if (kind === 'customer_sector') return hits.some(h => h.supplyContext) ? 'strong' : 'weak';
+  const sentenceCount = hits.reduce((sum, h) => sum + h.sentences, 0);
+  return hits.some(h => h.structural) || sentenceCount >= 2 ? 'strong' : 'weak';
+}
+
+const ROLE_TYPES: Partial<Record<CompanyRole, BusinessType>> = {
+  manufacturer: 'manufacturer', wholesaler: 'distributor', distributor: 'distributor',
+  service_provider: 'service_provider', installer: 'service_provider', contractor: 'service_provider', consultancy: 'service_provider',
+};
+
+/**
+ * How the company does business, from its own pages. A consumer web shop shows a shopping cart with prices or product
+ * data (or many prices with consumer wording); a business supplier uses business wording (zakelijke klanten, offerte
+ * aanvragen, excl. btw, dealers, ...). Manufacturer, distributor and service provider follow from the roles and services
+ * found. A company can be several at once (a web shop that also serves businesses).
+ */
+export function businessTypesOf(pages: PageAnalysis[], lists: Pick<CompanyFacts, 'services' | 'roles'>): BusinessTypeEvidence[] {
+  const out = new Map<BusinessType, BusinessTypeEvidence>();
+  const add = (evidence: BusinessTypeEvidence) => {
+    const existing = out.get(evidence.type);
+    if (!existing || (existing.strength === 'weak' && evidence.strength === 'strong')) out.set(evidence.type, evidence);
+  };
+  const cartPage = pages.find(page => page.commerce?.cart);
+  const prices = pages.reduce((sum, page) => sum + (page.commerce?.prices ?? 0), 0);
+  const productData = pages.some(page => page.commerce?.productSchema);
+  const consumer = [...new Set(pages.flatMap(page => page.commerce?.consumerCues ?? []))];
+  const business = [...new Set(pages.flatMap(page => page.commerce?.businessCues ?? []))];
+  if ((cartPage && (prices >= 3 || productData)) || (prices >= 5 && consumer.length > 0)) {
+    const page = cartPage ?? pages.find(p => (p.commerce?.prices ?? 0) > 0) ?? null;
+    add({
+      type: 'consumer_webshop', strength: cartPage && (prices >= 3 || productData) ? 'strong' : 'weak',
+      signals: [...(cartPage ? ['winkelwagen'] : []), ...(prices ? [`${prices} prijzen`] : []), ...(productData ? ['productgegevens'] : []), ...consumer].slice(0, 8),
+      sourceUrl: page?.url ?? null, quote: pages.find(p => p.commerce?.consumerCues.length)?.commerce.quote ?? null,
+    });
+  }
+  if (business.length > 0) {
+    const page = pages.find(p => (p.commerce?.businessCues.length ?? 0) > 0) ?? null;
+    add({ type: 'b2b_supplier', strength: business.length >= 2 ? 'strong' : 'weak', signals: business.slice(0, 8), sourceUrl: page?.url ?? null, quote: page?.commerce.quote ?? null });
+  }
+  for (const role of lists.roles) {
+    const type = ROLE_TYPES[role.role];
+    if (type) add({ type, strength: role.strength, signals: [role.label], sourceUrl: role.evidence[0]?.url ?? null, quote: role.evidence[0]?.quote ?? null });
+  }
+  const service = lists.services.find(activity => activity.strength === 'strong' && !activity.related);
+  if (service) add({ type: 'service_provider', strength: 'strong', signals: [service.label], sourceUrl: service.evidence[0]?.url ?? null, quote: service.evidence[0]?.quote ?? null });
+  return BUSINESS_TYPES.map(type => out.get(type)).filter((value): value is BusinessTypeEvidence => Boolean(value));
 }
 
 export function buildCompanyProfile(pages: PageAnalysis[], context: ProfileContext): CompanyFacts {
@@ -60,7 +109,11 @@ export function buildCompanyProfile(pages: PageAnalysis[], context: ProfileConte
     const { hit } = entries[0];
     const ordered = [...entries].sort((a, b) => Number(b.hit.supplyContext) - Number(a.hit.supplyContext) || Number(b.hit.structural) - Number(a.hit.structural) || b.hit.count - a.hit.count);
     const evidence: EvidenceQuote[] = ordered.slice(0, 3).map(({ hit: h, page }) => ({ url: page.url, pageType: page.pageType, quote: h.quote.slice(0, 280) }));
-    const activity: Activity = { kind: hit.kind, conceptId: hit.conceptId, label: hit.label, strength: strengthOf(entries.map(e => e.hit), hit.kind), evidence };
+    const terms = uniqueStrings(entries.map(e => e.hit.term).filter(Boolean), 5);
+    const activity: Activity = {
+      kind: hit.kind, conceptId: hit.conceptId, label: hit.label, strength: strengthOf(entries.map(e => e.hit), hit.kind), evidence,
+      ...(hit.related ? { related: true } : {}), ...(terms.length ? { matchedTerms: terms } : {}),
+    };
     if (hit.kind === 'role') {
       const role = COMPANY_ROLES.find(id => id === hit.conceptId);
       if (role) lists.roles.push({ ...activity, role, label: ROLE_LABELS[role] });
@@ -68,7 +121,7 @@ export function buildCompanyProfile(pages: PageAnalysis[], context: ProfileConte
       (lists[KIND_LIST[hit.kind]] as Activity[]).push(activity);
     }
   }
-  for (const key of Object.keys(lists) as Array<keyof typeof lists>) (lists[key] as Activity[]).sort((a, b) => Number(b.strength === 'strong') - Number(a.strength === 'strong'));
+  for (const key of Object.keys(lists) as Array<keyof typeof lists>) (lists[key] as Activity[]).sort((a, b) => Number(!b.related) - Number(!a.related) || Number(b.strength === 'strong') - Number(a.strength === 'strong'));
 
   const locations: CompanyLocation[] = [];
   for (const address of pages.flatMap(page => page.addresses)) {
@@ -87,6 +140,7 @@ export function buildCompanyProfile(pages: PageAnalysis[], context: ProfileConte
     identity: domain, name, tradeNames, website, domain,
     description: home?.metaDescription ?? org?.description ?? pages.find(page => page.pageType === 'about')?.metaDescription ?? null,
     ...lists,
+    businessTypes: businessTypesOf(pages, lists),
     locations, serviceAreas,
     phone: byContactFirst.map(page => page.phone).find(Boolean) ?? null,
     email: byContactFirst.map(page => page.email).find(Boolean) ?? null,
@@ -119,10 +173,20 @@ const statusRank: Record<MatchStatus, number> = { confirmed: 2, possible: 1, ins
 function activityMatch(facts: CompanyFacts, kind: ConceptKind, value: string, checkedAt: string, snippet: string | null): CriterionMatch {
   const concept = findConcept(kind, value);
   const list = facts[KIND_LIST[kind]] as Activity[];
-  const found = list.find(activity => (concept ? activity.conceptId === concept.id : normalizeText(activity.label) === normalizeText(value)))
+  const matchesValue = (activity: Activity) => (concept ? activity.conceptId === concept.id : normalizeText(activity.label) === normalizeText(value))
     // A free value can also be a literal term of an activity found for another concept.
-    ?? list.find(activity => expandValue(kind, value).some(term => normalizeText(activity.label) === normalizeText(term)));
+    || expandValue(kind, value).some(term => normalizeText(activity.label) === normalizeText(term));
+  const found = list.find(activity => !activity.related && matchesValue(activity));
+  const related = found ? undefined : list.find(activity => activity.related && matchesValue(activity));
   const base = { kind, criterion: kind === 'role' ? ROLE_LABELS[value as CompanyRole] ?? value : value, checkedAt };
+  if (related) {
+    // A broader term is a lead, not proof: "onderwijshuisvesting" does not prove school renovation.
+    const evidence = related.evidence[0];
+    return {
+      ...base, status: 'possible', found: (related.matchedTerms ?? [related.label]).join(', '), sourceUrl: evidence?.url ?? null, sourceType: 'official_website', quote: evidence?.quote ?? null,
+      note: `Alleen een verwant begrip gevonden (${(related.matchedTerms ?? []).join(', ') || related.label}); dat bewijst “${base.criterion}” niet.`,
+    };
+  }
   if (found) {
     const evidence = found.evidence[0];
     const strong = found.strength === 'strong';
@@ -198,6 +262,12 @@ export function evaluateCompany(facts: CompanyFacts, criteria: CompanySearchCrit
     for (const value of criteria[list] as string[]) matches.push(activityMatch(facts, kind, value, checkedAt, snippet));
   }
   for (const role of criteria.roles) matches.push(activityMatch(facts, 'role', role, checkedAt, snippet));
+  for (const type of criteria.businessTypes ?? []) {
+    const evidence = (facts.businessTypes ?? []).find(entry => entry.type === type);
+    matches.push(evidence
+      ? { kind: 'business_type', criterion: BUSINESS_TYPE_LABELS[type], status: evidence.strength === 'strong' ? 'confirmed' : 'possible', found: evidence.signals.join(', '), sourceUrl: evidence.sourceUrl, sourceType: 'official_website', quote: evidence.quote, note: evidence.strength === 'strong' ? null : 'Enkele aanwijzing op de eigen website.', checkedAt }
+      : { kind: 'business_type', criterion: BUSINESS_TYPE_LABELS[type], status: 'insufficient', found: null, sourceUrl: null, sourceType: null, quote: null, note: 'Geen aanwijzingen gevonden op de onderzochte pagina’s.', checkedAt });
+  }
   const subject = matches.length;
   if (criteria.places.length === 0 && criteria.provinces.length === 0) matches.push(countryMatch(facts, criteria.country, checkedAt));
   for (const province of criteria.provinces) matches.push(provinceMatch(facts, province, checkedAt));
@@ -207,7 +277,7 @@ export function evaluateCompany(facts: CompanyFacts, criteria: CompanySearchCrit
   for (const exclusion of criteria.exclusions) {
     const concept = (['product', 'service', 'specialisation', 'industry', 'customer_sector', 'role'] as ConceptKind[]).map(kind => findConcept(kind, exclusion)).find(Boolean);
     const all = [...facts.industries, ...facts.products, ...facts.services, ...facts.specialisations, ...facts.customerSectors, ...facts.roles];
-    const hit = all.find(activity => activity.strength === 'strong' && (concept ? activity.conceptId === concept.id : normalizeText(activity.label) === normalizeText(exclusion)));
+    const hit = all.find(activity => activity.strength === 'strong' && !activity.related && (concept ? activity.conceptId === concept.id : normalizeText(activity.label) === normalizeText(exclusion)));
     if (hit) { excludedBy = exclusion; break; }
   }
 

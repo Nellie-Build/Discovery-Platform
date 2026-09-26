@@ -1,4 +1,4 @@
-import { MATCH_STATUS_LABELS, KIND_LABELS, provinceLabel } from '@discovery-platform/domain-companies/criteria';
+import { BUSINESS_TYPE_LABELS, MATCH_STATUS_LABELS, KIND_LABELS, provinceLabel, type BusinessType } from '@discovery-platform/domain-companies/criteria';
 import { useMemo, useState, type ReactNode } from 'react';
 import type { DiscoveryRecord, RecordWithDetails } from '@discovery-platform/client';
 import { registerDomainRenderer, EmptyValue, type DomainRenderer } from '../registry';
@@ -12,12 +12,14 @@ import { CompanyRunPanel, CompanyRunSummary } from './run-panel';
  */
 type MatchStatus = 'confirmed' | 'possible' | 'insufficient';
 interface Quote { url: string; pageType?: string; quote: string }
-interface Activity { kind: string; conceptId: string | null; label: string; strength: 'strong' | 'weak'; evidence: Quote[]; role?: string }
+interface Activity { kind: string; conceptId: string | null; label: string; strength: 'strong' | 'weak'; evidence: Quote[]; role?: string; related?: boolean; matchedTerms?: string[] }
+interface BusinessTypeEvidence { type: BusinessType; strength: 'strong' | 'weak'; signals: string[]; sourceUrl: string | null; quote: string | null }
 interface Location { address: string | null; postcode: string | null; city: string | null; province: string | null; country: string | null; sourceUrl: string }
 interface ServiceArea { scope: 'national' | 'province' | 'place'; value: string; quote: string; sourceUrl: string }
 interface Match { kind: string; criterion: string; status: MatchStatus; found: string | null; sourceUrl: string | null; sourceType: string | null; quote: string | null; note: string | null; checkedAt: string }
 export interface CompanyFacts {
   identity?: string; name?: string | null; tradeNames?: string[]; website?: string; domain?: string; description?: string | null;
+  businessTypes?: BusinessTypeEvidence[];
   industries?: Activity[]; products?: Activity[]; services?: Activity[]; specialisations?: Activity[]; customerSectors?: Activity[]; roles?: Activity[];
   locations?: Location[]; serviceAreas?: ServiceArea[]; phone?: string | null; email?: string | null; contactUrl?: string | null;
   registration?: { kvkNumber: string | null; statedKvkNumber: string | null; statedOn: string | null };
@@ -31,14 +33,15 @@ export const companyData = (record: DiscoveryRecord): CompanyFacts => record.dom
 const STATUS_TONE: Record<MatchStatus, BadgeTone> = { confirmed: 'success', possible: 'warning', insufficient: 'neutral' };
 const SOURCE_TYPE_LABELS: Record<string, string> = { official_website: 'Eigen website', directory: 'Bedrijvengids', search_result: 'Zoekresultaat' };
 const PAGE_TYPE_LABELS: Record<string, string> = { home: 'Homepage', about: 'Over ons', products: 'Producten', services: 'Diensten', sectors: 'Sectoren', projects: 'Projecten/referenties', contact: 'Contact', locations: 'Vestigingen', other: 'Overig' };
-const MATCH_KIND_LABELS: Record<string, string> = { ...KIND_LABELS, query: 'Zoekterm', country: 'Land', province: 'Provincie', place: 'Plaats' };
+const MATCH_KIND_LABELS: Record<string, string> = { ...KIND_LABELS, business_type: 'Type bedrijf', query: 'Zoekterm', country: 'Land', province: 'Provincie', place: 'Plaats' };
 
 export function formatDate(value: string | null | undefined): string | null {
   if (!value) return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toLocaleDateString('nl-NL', { day: 'numeric', month: 'short', year: 'numeric' });
 }
-const labels = (items: Activity[] | undefined, onlyStrong = false) => (items ?? []).filter(a => !onlyStrong || a.strength === 'strong').map(a => a.label);
+const labels = (items: Activity[] | undefined, onlyStrong = false) => [...new Set((items ?? []).filter(a => !a.related && (!onlyStrong || a.strength === 'strong')).map(a => a.label))];
+const typeLabels = (f: CompanyFacts) => (f.businessTypes ?? []).map(entry => BUSINESS_TYPE_LABELS[entry.type]);
 const short = (values: string[], max = 3) => (values.length === 0 ? null : `${values.slice(0, max).join(', ')}${values.length > max ? ` (+${values.length - max})` : ''}`);
 export const locationText = (l: Location) => [l.address, [l.postcode, l.city].filter(Boolean).join(' ')].filter(Boolean).join(', ') || null;
 function areaText(area: ServiceArea): string {
@@ -57,8 +60,8 @@ export function MatchBadge({ status }: { status: MatchStatus | undefined }) {
 
 // ─── Filters ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-interface Filters { industry: string; product: string; service: string; role: string; customer: string; region: string; status: string }
-const NO_FILTERS: Filters = { industry: '', product: '', service: '', role: '', customer: '', region: '', status: '' };
+interface Filters { industry: string; product: string; service: string; role: string; customer: string; region: string; status: string; type: string }
+const NO_FILTERS: Filters = { industry: '', product: '', service: '', role: '', customer: '', region: '', status: '', type: '' };
 const regionsOf = (f: CompanyFacts) => [
   ...(f.locations ?? []).flatMap(l => [l.city, l.province ? provinceLabel(l.province) : null]),
   ...(f.serviceAreas ?? []).map(areaText),
@@ -70,7 +73,8 @@ export function filterCompanies(records: DiscoveryRecord[], filters: Filters): D
     const has = (items: Activity[] | undefined, value: string, onlyStrong = false) => !value || labels(items, onlyStrong).includes(value);
     return has(f.industries, filters.industry) && has([...(f.products ?? []), ...(f.specialisations ?? [])], filters.product) && has(f.services, filters.service)
       && has(f.roles, filters.role) && has(f.customerSectors, filters.customer, true)
-      && (!filters.region || regionsOf(f).includes(filters.region)) && (!filters.status || f.search?.status === filters.status);
+      && (!filters.region || regionsOf(f).includes(filters.region)) && (!filters.status || f.search?.status === filters.status)
+      && (!filters.type || (f.businessTypes ?? []).some(entry => entry.type === filters.type));
   });
 }
 
@@ -98,6 +102,7 @@ function CompanyFilters({ records, children }: { records: DiscoveryRecord[]; chi
     <div className="flex flex-col gap-3">
       <div role="group" aria-label="Filters" className="flex flex-wrap items-end gap-3">
         {select('status', 'Verificatiestatus', Object.entries(MATCH_STATUS_LABELS))}
+        {select('type', 'Type bedrijf', Object.entries(BUSINESS_TYPE_LABELS))}
         {select('industry', 'Branche', options.industry)}
         {select('product', 'Product / specialisatie', options.product)}
         {select('service', 'Dienst', options.service)}
@@ -164,7 +169,7 @@ function ActivitiesSection({ facts }: { facts: CompanyFacts }) {
               {items!.map(activity => (
                 <li key={`${activity.kind}:${activity.label}`}>
                   <span className="font-medium">{activity.label}</span>{' '}
-                  <Badge tone={activity.strength === 'strong' ? 'success' : 'neutral'}>{activity.strength === 'strong' ? 'Specifiek onderbouwd' : 'Terloops genoemd'}</Badge>
+                  <Badge tone={activity.related ? 'warning' : activity.strength === 'strong' ? 'success' : 'neutral'}>{activity.related ? `Alleen verwant begrip: ${(activity.matchedTerms ?? []).join(', ')}` : activity.strength === 'strong' ? 'Specifiek onderbouwd' : 'Terloops genoemd'}</Badge>
                   {activity.evidence.slice(0, 2).map(quote => (
                     <span key={quote.url} className="mt-0.5 block text-xs text-slate-500">
                       <q>{quote.quote}</q> — <SourceLink url={quote.url}>{PAGE_TYPE_LABELS[quote.pageType ?? ''] ?? 'pagina'}</SourceLink>
@@ -226,7 +231,12 @@ const companiesRenderer: DomainRenderer = {
   renderCell(record, columnKey) {
     const f = companyData(record);
     switch (columnKey) {
-      case 'name': return record.display_name ?? f.name ?? f.domain ?? EmptyValue;
+      case 'name': return (
+        <span>
+          {record.display_name ?? f.name ?? f.domain}
+          {typeLabels(f).length > 0 && <span className="block text-xs font-normal text-slate-500">{typeLabels(f).join(' · ')}</span>}
+        </span>
+      );
       case 'industry': return short(labels(f.industries)) ?? EmptyValue;
       case 'location': {
         const first = f.locations?.[0];
@@ -247,6 +257,7 @@ const companiesRenderer: DomainRenderer = {
       { label: 'Handelsnamen', value: list(f.tradeNames ?? []) },
       { label: 'Website', value: <SourceLink url={f.website} /> },
       { label: 'Omschrijving (eigen website)', value: f.description ?? EmptyValue },
+      { label: 'Type bedrijf', value: (f.businessTypes ?? []).length ? <ul>{f.businessTypes!.map(entry => <li key={entry.type}>{BUSINESS_TYPE_LABELS[entry.type]} <span className="text-xs text-slate-500">({entry.strength === 'strong' ? 'duidelijk' : 'enkele aanwijzing'}: {entry.signals.join(', ')})</span> {entry.sourceUrl && <SourceLink url={entry.sourceUrl}>bron</SourceLink>}</li>)}</ul> : 'Onbekend' },
       { label: 'Branches', value: list(labels(f.industries)) },
       { label: 'Producten', value: list(labels(f.products)) },
       { label: 'Diensten', value: list(labels(f.services)) },
