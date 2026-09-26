@@ -179,3 +179,24 @@ test('batches are safe: an invalid id, another project\'s run and a switched-off
     assert.deepEqual([blocked.status, blocked.body.error], [403, 'module_not_enabled_for_workspace']);
   } finally { await t.close(); }
 });
+
+test('budgets per batch: every batch keeps the original run configuration and its own company and page limits', async () => {
+  const t = await app();
+  try {
+    const first = await t.start({ sourceId: 'search', filters: { ...CRITERIA, maxCompanies: 1, pagesPerCompany: 2 }, runConfig: runConfig({ maxDurationMs: 60_000 }) });
+    const batches = [first];
+    for (let i = 0; i < 6 && batches.at(-1).stats.continuation; i++) {
+      batches.push((await t.request('POST', `/projects/${t.project.id}/runs`, { body: { continueFromRunId: batches.at(-1).id, runConfig: { targetRecords: 200, maxDurationMs: 999_999 } } })).body);
+    }
+    assert.ok(batches.length >= 3, 'several batches ran');
+    for (const batch of batches) {
+      assert.deepEqual(batch.stats.criteria.runConfig, first.stats.criteria.runConfig, 'a client cannot raise the budget of a batch');
+      assert.equal(batch.stats.maxDurationMs, 60_000);
+      assert.equal(batch.stats.maxCompanies, 1);
+      assert.ok(batch.stats.companiesResearched + batch.stats.sitesFailed.length <= 1, `batch ${batch.stats.batch ?? 1} researched at most one company`);
+      assert.ok(batch.stats.pagesVisited <= 2, `batch ${batch.stats.batch ?? 1} read at most two pages`);
+    }
+    const records = await t.records();
+    assert.ok(records.every(r => r.domain_data.sources.length <= 2), 'no company profile was read beyond the page budget');
+  } finally { await t.close(); }
+});
